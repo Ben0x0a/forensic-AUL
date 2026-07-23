@@ -1,0 +1,33 @@
+# Continuous integration — run the unit test suite on every supported Python.
+#
+# Third-party actions are pinned to a full commit SHA (with a trailing version
+# comment) per the project's CI rules; Dependabot (.github/dependabot.yml) bumps
+# them. Builds are reproducible: `uv run --frozen` resolves from the committed
+# uv.lock and fails if the lock is stale.
+#
+# Integration tests are intentionally excluded — they need the large sample
+# acquisitions in tests/data/ (not in the repo) and take ~40 min.
+name: tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: unit (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
+        with:
+          enable-cache: true
+      - name: Run unit tests
+        run: uv run --frozen --python ${{ matrix.python-version }} --extra dev pytest tests/unit -q
