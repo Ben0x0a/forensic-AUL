@@ -256,30 +256,24 @@ def _run_compare(
     ref_path: Path,
     args: argparse.Namespace,
 ) -> int:
-    """Load both sides, run the comparator, render the report, decide exit code."""
-    from forensic_aul.testing.comparator import compare, load_db_records, render_report
-    from forensic_aul.testing.ndjson_loader import load_ndjson
-
-    # ── Load reference ────────────────────────────────────────────────────────
-    log.info(f"Loading reference ndjson: {ref_path}")
-    ref = load_ndjson(ref_path)
-    log.info(f"Reference loaded : {ref.count} records  (skipped: {dict(ref.skipped_event_types)}  user_action: {ref.user_action_count}  collisions: {ref.collisions})")
-
-    # ── Load DB ───────────────────────────────────────────────────────────────
-    log.info(f"Loading database: {db_path}")
-    db_records = load_db_records(db_path)
+    """Stream both sides through the sort-merge comparator, render, decide exit code."""
+    from forensic_aul.testing.comparator import render_report
+    from forensic_aul.testing.merge_compare import merge_compare
 
     # ── Optional ndjson export ────────────────────────────────────────────────
+    # Opt-in only: the exporter needs the DB rows in a dict, so this is the one
+    # path that loads the DB into RAM. The comparison itself stays streaming.
     if args.ndjson_output:
+        from forensic_aul.testing.comparator import load_db_records
         from forensic_aul.testing.ndjson_exporter import export_db_to_ndjson
         ndjson_out: Path = args.ndjson_output
         ndjson_out.parent.mkdir(parents=True, exist_ok=True)
-        n = export_db_to_ndjson(db_records, ndjson_out)
+        n = export_db_to_ndjson(load_db_records(db_path), ndjson_out)
         log.info(f"ndjson export: {n} records → {ndjson_out}")
 
-    # ── Compare ───────────────────────────────────────────────────────────────
-    log.info("Running comparison…")
-    report = compare(ref, db_records, max_samples=args.samples)
+    # ── Compare (flat-memory sort-merge on disk) ──────────────────────────────
+    log.info(f"Comparing (streaming sort-merge): DB={db_path}  ref={ref_path}")
+    report = merge_compare(db_path, ref_path, max_samples=args.samples)
 
     text = render_report(report)
     if args.report:

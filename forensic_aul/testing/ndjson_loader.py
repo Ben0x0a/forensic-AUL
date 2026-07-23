@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -208,47 +209,26 @@ def load_ndjson(path: Path | str) -> LoadResult:
     return result
 
 
-def _consume_obj(obj: dict, result: LoadResult) -> None:
-    """Convert one parsed JSON object and record it into *result*."""
+def build_record(obj: dict) -> RefRecord | None:
+    """Convert one parsed JSON object into a :class:`RefRecord`, or ``None`` for a
+    non-entry event type (timesync/state). Pure — no counting, no dedup — so both
+    the dict loader and the streaming :func:`iter_ndjson` share it."""
     et = obj.get("eventType", "")
-
-    # Skip non-entry event types
     if et in _SKIP_EVENT_TYPES:
-        result.skipped_event_types[et] = result.skipped_event_types.get(et, 0) + 1
-        return
-
-    if et and et not in _EVENT_TYPE_MAP:
-        result.unknown_event_types[et] = result.unknown_event_types.get(et, 0) + 1
-
-    event_type = _EVENT_TYPE_MAP.get(et, "Log")
-    is_user_action = (et == "userActionEvent")
-    if is_user_action:
-        result.user_action_count += 1
+        return None
 
     boot_uuid_raw: str = obj.get("bootUUID", "")
     mach_ts = _coerce_int(obj.get("machTimestamp"))
     thread_id = _coerce_int(obj.get("threadID"))
-
-    key = RefKey(
-        boot_uuid=_normalise_uuid(boot_uuid_raw),
-        mach_timestamp=mach_ts,
-        thread_id=thread_id,
-    )
-
-    if key in result.records:
-        result.collisions += 1
-        log.debug(
-            "ndjson_loader: duplicate key boot=%s mach=%d tid=%d",
-            key.boot_uuid, key.mach_timestamp, key.thread_id,
-        )
-        return
-
     timestamp_str = obj.get("timestamp", "") or ""
-    timestamp_unix_us = _parse_apple_timestamp_us(timestamp_str)
 
-    result.records[key] = RefRecord(
-        key=key,
-        event_type=event_type,
+    return RefRecord(
+        key=RefKey(
+            boot_uuid=_normalise_uuid(boot_uuid_raw),
+            mach_timestamp=mach_ts,
+            thread_id=thread_id,
+        ),
+        event_type=_EVENT_TYPE_MAP.get(et, "Log"),
         log_level=_MSG_TYPE_MAP.get(obj.get("messageType", ""), ""),
         pid=_coerce_int(obj.get("processID")),
         tid=thread_id,
@@ -260,12 +240,56 @@ def _consume_obj(obj: dict, result: LoadResult) -> None:
         boot_uuid=boot_uuid_raw,
         mach_timestamp=mach_ts,
         timestamp_str=timestamp_str,
-        timestamp_unix_us=timestamp_unix_us,
+        timestamp_unix_us=_parse_apple_timestamp_us(timestamp_str),
         event_message=obj.get("eventMessage", ""),
         format_string=obj.get("formatString", ""),
         process_image_path=obj.get("processImagePath", ""),
         process_image_uuid=obj.get("processImageUUID", ""),
         sender_image_path=obj.get("senderImagePath", ""),
         sender_image_uuid=obj.get("senderImageUUID", ""),
-        is_user_action=is_user_action,
+        is_user_action=(et == "userActionEvent"),
     )
+
+
+def _consume_obj(obj: dict, result: LoadResult) -> None:
+    """Convert one parsed JSON object and record it into *result* (dict path)."""
+    et = obj.get("eventType", "")
+    if et in _SKIP_EVENT_TYPES:
+        result.skipped_event_types[et] = result.skipped_event_types.get(et, 0) + 1
+        return
+    if et and et not in _EVENT_TYPE_MAP:
+        result.unknown_event_types[et] = result.unknown_event_types.get(et, 0) + 1
+
+    record = build_record(obj)
+    if record is None:  # unreachable (skip types handled above) — defensive
+        return
+    if record.is_user_action:
+        result.user_action_count += 1
+    if record.key in result.records:
+        result.collisions += 1
+        log.debug(
+            "ndjson_loader: duplicate key boot=%s mach=%d tid=%d",
+            record.key.boot_uuid, record.key.mach_timestamp, record.key.thread_id,
+        )
+        return
+    result.records[record.key] = record
+
+
+def iter_ndjson(path: Path | str) -> Iterator[RefRecord]:
+    """Stream every comparable :class:`RefRecord` from an Apple ndjson file in FILE
+    order (constant memory). Non-entry event types are skipped; duplicates are NOT
+    de-duplicated here (the sort-merge caller collapses adjacent duplicate keys).
+    Used by :mod:`forensic_aul.testing.merge_compare`."""
+    path = Path(path)
+    with path.open("rb") as fh:
+        for raw_line in fh:
+            raw_line = raw_line.strip()
+            if not raw_line or not raw_line.startswith(b"{"):
+                continue
+            try:
+                obj = json.loads(raw_line)
+            except json.JSONDecodeError:
+                continue
+            record = build_record(obj)
+            if record is not None:
+                yield record
