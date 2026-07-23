@@ -15,6 +15,7 @@ can import it directly into your own application instead.
 ```bash
 uv pip install -e .                 # core library only
 uv pip install -e ".[acquire]"      # + USB device acquisition (pymobiledevice3)
+uv sync --extra acquire             # same extra, managing the project venv
 ```
 
 ```python
@@ -292,7 +293,7 @@ never print or build a report themselves).
 |---|---|
 | `config.py` | tuneable constants/defaults |
 | `outcomes.py` | the operation result dataclasses (`ExtractResult`, `DiffResult`, …) |
-| `testing/` | **runtime** validation tooling (device capture + `log show` reference + comparator + the `test` pipeline) used by the `faul test` command — *not* the project's pytest suite (that lives in the repo-root `tests/`) |
+| `testing/` | **runtime** validation tooling (device capture + `log show` reference + comparator + the validate pipeline) used by the `faul validate` command — *not* the project's pytest suite (that lives in the repo-root `tests/`) |
 
 Prefer the top-level re-exports; importing from these sub-modules ties you to
 internal paths that may move between versions.

@@ -27,7 +27,7 @@ log = logging.getLogger(__name__)
 # order is the order they appear in --help.
 _COMMAND_MODULES = (
     "extract_cmd",
-    "test_cmd",
+    "validate_cmd",
     "acquire_cmd",
     "identify_cmd",
     "verify_cmd",
@@ -42,7 +42,7 @@ _COMMAND_MODULES = (
 # the same module as ``identify``.
 _DISPATCH = {
     "extract":       "extract_cmd",
-    "test":          "test_cmd",
+    "validate":      "validate_cmd",
     "acquire":       "acquire_cmd",
     "identify":      "identify_cmd",
     "identify-diff": "identify_cmd",

@@ -1,4 +1,4 @@
-"""AUL Parser — ``test`` subcommand.
+"""AUL Parser — ``validate`` subcommand.
 
 Compares the output of ``forensic-aul extract`` against the ground-truth
 ``log show --style ndjson`` produced by Apple. Designed to operate as
@@ -6,15 +6,18 @@ autonomously as possible: on macOS, a single ``.logarchive`` argument is
 enough; on a Mac with a phone connected, a single ``--from-device``
 flag triggers the whole pipeline (collect → show → extract → diff).
 
+(Named ``validate`` — not ``test`` — so it never reads as the project's pytest
+suite in ``tests/``; the runtime validation tooling lives in ``forensic_aul/testing/``.)
+
 Source forms (auto-detected by file shape):
 
-  forensic-aul test                                 # mac: list devices, refuse otherwise
-  forensic-aul test --from-device                   # mac: 1 device → auto
-  forensic-aul test --from-device <NAME_OR_UDID>    # mac: explicit device
-  forensic-aul test <logarchive>                    # mac: auto-generate ref
-  forensic-aul test <logarchive> <ref.ndjson>       # cross-platform
-  forensic-aul test <db.sqlite>   <ref.ndjson>      # cross-platform
-  forensic-aul test <db.sqlite>   --regen-ref <logarchive>   # mac: re-generate ref
+  forensic-aul validate                                 # mac: list devices, refuse otherwise
+  forensic-aul validate --from-device                   # mac: 1 device → auto
+  forensic-aul validate --from-device <NAME_OR_UDID>    # mac: explicit device
+  forensic-aul validate <logarchive>                    # mac: auto-generate ref
+  forensic-aul validate <logarchive> <ref.ndjson>       # cross-platform
+  forensic-aul validate <db.sqlite>   <ref.ndjson>      # cross-platform
+  forensic-aul validate <db.sqlite>   --regen-ref <logarchive>   # mac: re-generate ref
 
 Pass criterion
 --------------
@@ -30,17 +33,17 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-_TEST_CASE_NUMBER = "TEST"
+_VALIDATE_CASE_NUMBER = "VALIDATE"
 # Synthetic placeholder IMEI — all-zero, NOT a Luhn-valid identifier.
-_TEST_IMEI = "000000000000000"
+_VALIDATE_IMEI = "000000000000000"
 
 
 def add_subcommand(sub) -> None:  # type: ignore[type-arg]
     p = sub.add_parser(
-        "test",
-        help="Compare extract output against an Apple 'log show' ndjson reference.",
+        "validate",
+        help="Validate extract output against an Apple 'log show' ndjson reference.",
         description=(
-            "Compares the output of `forensic-aul extract` against Apple's "
+            "Validates the output of `forensic-aul extract` against Apple's "
             "`log show --style ndjson` ground truth.\n\n"
             "On macOS, the reference can be generated automatically from a "
             "logarchive on disk, or even acquired straight from a connected "
@@ -158,14 +161,14 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
     p.add_argument(
         "--case-number",
         metavar="CASE",
-        default=_TEST_CASE_NUMBER,
-        help=f"Case number used for auto-extract (default: {_TEST_CASE_NUMBER!r}).",
+        default=_VALIDATE_CASE_NUMBER,
+        help=f"Case number used for auto-extract (default: {_VALIDATE_CASE_NUMBER!r}).",
     )
     p.add_argument(
         "--imei",
         metavar="IMEI",
-        default=_TEST_IMEI,
-        help=f"IMEI used for auto-extract (default: {_TEST_IMEI!r}).",
+        default=_VALIDATE_IMEI,
+        help=f"IMEI used for auto-extract (default: {_VALIDATE_IMEI!r}).",
     )
 
 

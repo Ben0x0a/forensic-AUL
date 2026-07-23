@@ -25,6 +25,20 @@ uv pip install -e ".[dev]"
 python faul.py --help
 ```
 
+### Optional extras
+
+The core install is deliberately light. Install extras for the features you need
+(with `uv sync --extra <name>`, or add several at once with `uv sync --all-extras`):
+
+| Extra | Adds | Install |
+|---|---|---|
+| `gui` | the PySide6 desktop GUI | `uv sync --extra gui` |
+| `acquire` | USB iOS-device acquisition — the `acquire` command and `validate --from-device` (via `pymobiledevice3`) | `uv sync --extra acquire` |
+| `dev` | the pytest test suite | `uv sync --extra dev` |
+
+Without the `acquire` extra, `faul.py acquire` exits with a message telling you to
+install it — it is **not** required for parsing an already-collected acquisition.
+
 All commands below assume the virtual environment is **activated** (so `python`
 resolves to the venv). Without activation, prefix them with the interpreter path,
 e.g. `.venv/bin/python faul.py …`.
@@ -341,16 +355,22 @@ on pre-existing archives or databases (auto-extracts `.logarchive` inputs on the
 fly). Both write a `.csv` of retained lines and a `.db` with every post-baseline
 line carrying an `excluded` flag.
 
-### `test` — compare parser output against Apple's `log show`
+### `validate` — verify FAUL against Apple's `log show`
 
 ```bash
-faul.py test SOURCE [REFERENCE_NDJSON] [--from-device] [--samples N]
+faul.py validate <logarchive> [ref.ndjson]   # extract → diff (reference auto-made on macOS)
+faul.py validate --from-device               # macOS: collect → log show → extract → diff, in one
+faul.py validate <db.sqlite> <ref.ndjson>    # diff an existing DB against a reference
 ```
 
-Validates this parser's output against Apple's own `log show --style ndjson`
-reference. Useful as a QA or trust check on a real acquisition. See
-`faul.py test --help` for the full set of options (regen reference, DB output,
-sample limits).
+FAUL's built-in **self-check** (named `validate`, distinct from the pytest suite in
+`tests/`): it runs Apple's own `log show --style ndjson` over the same logarchive
+and proves every reference record is present in FAUL's database, then reports
+timestamp, structural-field and message-content agreement. Use it as a QA / trust
+check on a real acquisition. On macOS the reference is generated automatically;
+`--from-device` runs the whole pipeline from a USB-connected iPhone (needs the
+`acquire` extra — see *Optional extras*). See `faul.py validate --help` for all
+options (regen reference, DB output, sample limits, allowed-missing tolerance).
 
 ### `report` — file a bug from a crash report
 
@@ -433,7 +453,7 @@ real extraction that takes minutes); opt in explicitly with `-m integration`.
 python -m pytest tests/ -q                        # fast suite (integration auto-excluded)
 python -m pytest -q -m integration                # opt-in: full extraction, needs tests/data + samples
 ./scripts/test_matrix.sh                          # fast suite on Python 3.11–3.14 (via uv)
-python faul.py test --help                        # the runtime test feature
+python faul.py validate --help                    # the runtime validation feature
 ```
 
 Supported Python is **3.11–3.14**; `scripts/test_matrix.sh` runs the unit suite on

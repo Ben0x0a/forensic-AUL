@@ -1,6 +1,6 @@
-"""Platform helpers for the ``test`` subcommand.
+"""Platform helpers for the ``validate`` subcommand.
 
-The ``test`` subcommand can run in three modes:
+The ``validate`` subcommand can run in three modes:
 
 * **Mac with iPhone**  — use ``log collect`` + ``log show`` natively.
 * **Mac without iPhone** — use ``log show`` against a logarchive on disk.
@@ -59,7 +59,7 @@ def require_macos_log_tools() -> None:
         raise RuntimeError(
             "This action needs Apple's `log` tool, which only ships with macOS. "
             "On Linux/Windows, supply the reference ndjson explicitly:\n"
-            "    forensic-aul test <logarchive_or_db>  <reference.ndjson>"
+            "    forensic-aul validate <logarchive_or_db>  <reference.ndjson>"
         )
     if not has_log_binary():
         raise RuntimeError(
