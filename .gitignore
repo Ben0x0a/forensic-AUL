@@ -1,0 +1,46 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.python-version
+
+# --- Virtual environments ---
+.venv/
+FAUL.venv/
+venv/
+env/
+
+# --- Tooling caches ---
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# --- Editors / OS ---
+.idea/
+.vscode/
+.DS_Store
+
+# --- Claude Code (machine-specific / personal) ---
+.claude/
+
+# --- Internal working notes (not shipped) ---
+tasks/
+
+# --- Upstream reference source (fetched on demand by scripts/gen_decoders.py) ---
+original/
+
+# --- Test evidence & generated data (real device data / too large for git) ---
+tests/data/
+tests/results/
+
+# --- Benchmark outputs ---
+benchmark/results/
+benchmark/runs/
+
+# --- Local databases / exports ---
+*.db
+*.sqlite
+*.sqlite3

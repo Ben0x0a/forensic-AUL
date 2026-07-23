@@ -1,0 +1,35 @@
+# Controlled vocabulary of allowed extracted-value labels.
+#
+# Labels are the NAMED groups of a signature's `extract-regex` and the keys of
+# its `extract-fields`; each becomes a row in the `extracted_values` table and a
+# column in the export. Keeping the set canonical (one `ssid`, never wifi / WiFi
+# / wifi_name) makes those columns consistent across every signature.
+#
+# `kb validate` warns for any label a signature uses that is NOT listed here, and
+# proposes the closest entry when it looks like a typo. To resolve a warning,
+# either rename the group in the signature, or add the new label below.
+#
+# This file is OPTIONAL: if it is absent or empty, no label warnings are emitted.
+
+labels:
+  # ── Network / Wi-Fi ──
+  ssid:          "Wi-Fi network name (SSID)"
+  bssid:         "Wi-Fi access-point MAC address (BSSID)"
+  ip_address:    "IPv4/IPv6 address"
+  host:          "Hostname or domain"
+  url:           "URL"
+  port:          "Network port"
+
+  # ── App / process ──
+  bundle_id:     "Application bundle identifier"
+  app_name:      "Human-readable application name"
+  process_name:  "Process name"
+  pid:           "Process identifier"
+
+  # ── Identity / account ──
+  account:       "Account or user identifier"
+  device_name:   "Device name"
+
+  # ── Files / errors ──
+  file_path:     "Filesystem path"
+  error_code:    "Error or status code"

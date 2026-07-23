@@ -1,0 +1,38 @@
+# Example signatures — replace with real ones once reverse-engineered.
+# Each top-level item under `signatures` is one detection rule.
+
+signatures:
+  - id: sb.app_foreground
+    action: "Application brought to foreground"
+    description: |
+      SpringBoard reports an app becoming the foreground application.
+      Captures the bundle identifier of the new foreground app.
+    confidence: high
+    platform: ios
+    ios_min: "14.0"
+    match:
+      format_str: "Setting foreground app to %@"
+      process: SpringBoard
+      subsystem: com.apple.FrontBoard
+    extract-fields:
+      bundle_id: '(?P<bundle_id>[\w.\-]+)'
+    references:
+      - "Observed on iOS 17.4 — SpringBoard logs"
+    tags: [ui, launch, user-action]
+
+  - id: net.wifi_associate
+    action: "Wi-Fi association with access point"
+    description: "Device associated with a Wi-Fi BSSID."
+    confidence: medium
+    platform: ios
+    match:
+      format_str_any:
+        - "Associated to %@ with bssid %@"
+        - "Associating with %@ (bssid %@)"
+      subsystem: com.apple.wifi
+    # A single regex with named groups: one rule pulls both values out of the
+    # rendered message in one go (preferred when the fields sit together). Each
+    # named group becomes a (label, value) row in extracted_values and a column
+    # in the export.
+    extract-regex: 'to (?P<ssid>\S+) with bssid (?P<bssid>[0-9a-fA-F:]{17})'
+    tags: [network, wifi]

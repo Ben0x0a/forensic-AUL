@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "forensic-aul"
+version = "0.1.0"
+description = "Forensic Apple Unified Log parser — converts .logarchive to SQLite"
+requires-python = ">=3.11,<3.15"
+license = { file = "LICENSE" }
+classifiers = [
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+]
+dependencies = [
+    "lz4>=4.0",
+    "PyYAML>=6",
+]
+
+# Only the core library ships as the installable distribution. The application
+# layer (launcher/, gui/, faul.py) is clone-&-run and is intentionally excluded.
+[tool.setuptools.packages.find]
+include = ["forensic_aul*"]
+
+# Ship the PEP 561 marker so downstream type-checkers use the library's hints.
+[tool.setuptools.package-data]
+forensic_aul = ["py.typed"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-cov"]
+gui = ["PySide6>=6.6"]
+# Device acquisition over USB (forensic_aul.acquire / the `acquire` CLI command).
+acquire = ["pymobiledevice3>=4.0"]
+
+[tool.pytest.ini_options]
+testpaths  = ["tests"]
+# Repo root on the path so tests can import the library (forensic_aul) and the
+# app layer (launcher, gui) under the flat layout.
+pythonpath = ["."]
+# Default run = the fast unit + parser suites only. The integration tests do a
+# full real extraction (~12 min for ~2M rows on the default incremental-FTS
+# path), so a bare `pytest` must NOT pull them in — that is what made a plain
+# run appear to "hang". Run them deliberately with:  pytest -m integration
+addopts    = "-v --tb=short -m 'not integration'"
+markers    = [
+    "integration: full real extraction; needs test data in tests/data/ and is slow (opt-in via -m integration)",
+    "slow: marks tests as notably slow",
+]
