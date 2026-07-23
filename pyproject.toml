@@ -26,7 +26,7 @@ include = ["forensic_aul*"]
 forensic_aul = ["py.typed"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-cov"]
+dev = ["pytest>=9.1.1", "pytest-cov"]
 gui = ["PySide6>=6.6"]
 # Device acquisition over USB (forensic_aul.acquire / the `acquire` CLI command).
 acquire = ["pymobiledevice3>=4.0"]
