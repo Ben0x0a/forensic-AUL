@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="gui/assets/faul-wordmark.png" alt="forensic_AUL" width="500">
+</p>
+
 # forensic_AUL
 
 A digital-forensics tool that parses **Apple Unified Logs** into a normalised,
@@ -349,6 +353,32 @@ reference. Useful as a QA or trust check on a real acquisition. See
 sample limits).
 
 ---
+
+## Architecture
+
+Dependencies point **one way**: the entry point and both front-ends
+(`launcher/` CLI, `gui/`) depend on the `forensic_aul/` library, never the
+reverse — and inside the library the operations layer (`ops/`) sits on top of the
+`engine/` (parser + database), which sits on shared `config`/`errors`. There are
+no import cycles among the first-party packages.
+
+```mermaid
+flowchart TD
+    faul["faul.py<br/>(entry point)"] --> launcher["launcher/<br/>(CLI)"]
+    launcher -.->|GUI mode| gui["gui/<br/>(PySide6)"]
+    launcher --> lib
+    gui --> lib
+
+    subgraph lib["forensic_aul/ (library)"]
+        direction LR
+        ops["ops/<br/>extract · export · annotate ·<br/>verify · acquire · identify"]
+        engine["engine/<br/>parser · database · models"]
+        base["config · errors · outcomes"]
+        ops --> engine
+        ops --> base
+        engine --> base
+    end
+```
 
 ## Using `forensic_aul` as a library
 
