@@ -29,7 +29,7 @@ forensic_aul = ["py.typed"]
 dev = ["pytest>=8", "pytest-cov"]
 gui = ["PySide6>=6.6"]
 # Device acquisition over USB (forensic_aul.acquire / the `acquire` CLI command).
-acquire = ["pymobiledevice3>=4.0"]
+acquire = ["pymobiledevice3>=10.0.4"]
 
 [tool.pytest.ini_options]
 testpaths  = ["tests"]
