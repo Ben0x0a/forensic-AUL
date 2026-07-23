@@ -2,11 +2,11 @@
 
 Defines : the ``extract`` command's argument parser (``add_subcommand``) and its
           handler (``run``) — source-type pre-flight validation, then delegation
-          to ``launcher.extract_session.run_extract_session`` which owns the
-          logging setup, the pipeline call, and sealing the operational log. The
-          same helper backs ``acquire --extract`` so both produce a sealed log.
+          to ``app.extract_session.run_extract_session`` which owns the logging
+          setup, the pipeline call, and sealing the operational log. The same
+          helper backs ``acquire --extract`` so both produce a sealed log.
 Used by : launcher/cli.py (registers the parser, dispatches to ``run``).
-Uses    : launcher.extract_session, forensic_aul.ops.extraction.source,
+Uses    : app.extract_session, forensic_aul.ops.extraction.source,
           forensic_aul.engine.utils.progress.
 """
 
@@ -278,7 +278,7 @@ def run(args: argparse.Namespace) -> int:
     )
     from forensic_aul.engine.utils.progress import tty_bar_sink
     from forensic_aul.engine.utils.system import resolve_auto_jobs
-    from launcher.extract_session import run_extract_session
+    from app.extract_session import run_extract_session
 
     output: Path = args.output
 

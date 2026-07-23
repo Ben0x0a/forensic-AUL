@@ -303,7 +303,7 @@ def _run_extract(
     # Same sealed-log extraction session as the standalone `extract` command:
     # one shared helper so an acquired-then-extracted DB gets an identically
     # sealed, tamper-evident operational log.
-    from launcher.extract_session import run_extract_session
+    from app.extract_session import run_extract_session
 
     return run_extract_session(
         logarchive=logarchive,
