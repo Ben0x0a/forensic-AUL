@@ -33,6 +33,13 @@ def run_gui() -> int:
     from gui.app import build_main_widget
 
     app = QApplication(sys.argv)
+
+    # Install the crash handler before building the UI or running the event loop,
+    # so a main-thread (Qt slot) exception is captured. Worker-thread crashes are
+    # captured separately in gui.workers.base.Worker.run.
+    from app.diagnostics import install_excepthook
+    install_excepthook({"entrypoint": "gui"})
+
     widget = build_main_widget()
     widget.show()
 

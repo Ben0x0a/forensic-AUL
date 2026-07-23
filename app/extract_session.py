@@ -104,6 +104,11 @@ def run_extract_session(
         _seal(log_path, db_path, metadata_id)
         return 130
     except Exception:
+        # Capture a crash report (all frame locals) before the traceback is lost —
+        # this handler swallows the exception and returns, so sys.excepthook never
+        # sees it. RunContext/options/paths are live on the stack here.
+        from app.diagnostics import capture_exception
+        capture_exception({"entrypoint": "cli", "op": "extract"})
         log.exception("Unhandled exception during extract")
         _seal(log_path, db_path, metadata_id)
         return 1

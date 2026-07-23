@@ -232,6 +232,8 @@ def _run_identify(args: argparse.Namespace) -> int:
         log.error(f"error: {exc}")
         return 1
     except Exception as exc:
+        from app.diagnostics import capture_exception
+        capture_exception({"entrypoint": "cli", "op": "identify"})
         log.exception(f"error: identify workflow failed — {exc}")
         return 1
 
@@ -267,6 +269,8 @@ def _run_identify_diff(args: argparse.Namespace) -> int:
     try:
         res = run_diff(baseline_db, action_db, csv_out, sqlite_out)
     except Exception as exc:
+        from app.diagnostics import capture_exception
+        capture_exception({"entrypoint": "cli", "op": "identify-diff"})
         log.exception(f"error: diff failed — {exc}")
         return 1
 

@@ -200,6 +200,8 @@ def run(args) -> int:  # type: ignore[type-arg]
         log.error(f"error: acquisition failed — {exc}")
         return 1
     except Exception as exc:  # noqa: BLE001 — surface any unexpected failure cleanly
+        from app.diagnostics import capture_exception
+        capture_exception({"entrypoint": "cli", "op": "acquire"})
         log.exception(f"error: acquisition failed — {exc}")
         return 1
 

@@ -352,22 +352,46 @@ reference. Useful as a QA or trust check on a real acquisition. See
 `faul.py test --help` for the full set of options (regen reference, DB output,
 sample limits).
 
+### `report` — file a bug from a crash report
+
+If FAUL hits an unexpected error, it writes a **crash report** to
+`~/.config/faul/crash_reports/` capturing the traceback and the type and value of
+every variable in every stack frame — enough to diagnose the bug without
+reproducing it. Because this is a forensic tool, each captured variable is split
+into a **`safe`** and a **`sensitive`** section (device IDs, log message content,
+extracted values, case identifiers and evidence paths go to `sensitive`). The
+local report keeps the real values; nothing leaves your machine automatically.
+
+To file a bug, turn a report into a redacted, shareable pair:
+
+```bash
+faul.py report                 # list local crash reports
+faul.py report <name>          # write <name>.shared.json + <name>.shared.md
+```
+
+`report` replaces every sensitive value with a type + SHA-256 placeholder and
+anonymises paths. **Review the ⚠ Sensitive sections** in the generated Markdown
+before attaching either file — the Markdown doubles as a fillable bug template
+(steps to reproduce, expected vs actual).
+
 ---
 
 ## Architecture
 
-Dependencies point **one way**: the entry point and both front-ends
-(`launcher/` CLI, `gui/`) depend on the `forensic_aul/` library, never the
-reverse — and inside the library the operations layer (`ops/`) sits on top of the
-`engine/` (parser + database), which sits on shared `config`/`errors`. There are
-no import cycles among the first-party packages.
+Dependencies point **one way**. The entry point and the two thin shells
+(`launcher/` CLI, `gui/`) depend on an `app/` orchestration layer (run-session
+framing and crash reporting); `app/` depends on the `forensic_aul/` library; and
+inside the library the operations layer (`ops/`) sits on top of the `engine/`
+(parser + database), which sits on shared `config`/`errors`. Nothing points back
+the other way, and there are no import cycles among the first-party packages.
 
 ```mermaid
 flowchart TD
-    faul["faul.py<br/>(entry point)"] --> launcher["launcher/<br/>(CLI)"]
-    launcher -.->|GUI mode| gui["gui/<br/>(PySide6)"]
-    launcher --> lib
-    gui --> lib
+    faul["faul.py<br/>(entry point)"] --> launcher["launcher/<br/>(CLI shell)"]
+    launcher -.->|GUI mode| gui["gui/<br/>(PySide6 shell)"]
+    launcher --> app
+    gui --> app
+    app["app/<br/>(orchestration:<br/>extract session · crash reports)"] --> lib
 
     subgraph lib["forensic_aul/ (library)"]
         direction LR

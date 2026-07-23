@@ -35,6 +35,7 @@ _COMMAND_MODULES = (
     "annotate_cmd",
     "export_cmd",
     "summary_cmd",
+    "report_cmd",
 )
 
 # Subcommand name → handler module name. ``identify-diff`` is an alias served by
@@ -50,6 +51,7 @@ _DISPATCH = {
     "annotate":      "annotate_cmd",
     "export":        "export_cmd",
     "summary":       "summary_cmd",
+    "report":        "report_cmd",
 }
 
 
@@ -91,6 +93,12 @@ def main() -> None:
     if args.command is None:
         from launcher.gui import run_gui
         sys.exit(run_gui())
+
+    # Install the crash handler for the CLI now that the command is known. It
+    # catches exceptions that propagate out of a command; the commands that
+    # catch-log-and-return also report directly (see app.diagnostics).
+    from app.diagnostics import install_excepthook
+    install_excepthook({"entrypoint": "cli", "command": args.command})
 
     # Dispatch to the handler module's run(args). The subparser guarantees
     # args.command is one of the registered names.
