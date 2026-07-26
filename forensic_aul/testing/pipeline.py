@@ -79,6 +79,8 @@ class _Resources:
 
 def run(args: argparse.Namespace) -> int:
     """Run the self-check pipeline for the parsed CLI *args*."""
+    from forensic_aul.testing.platform import capabilities
+    log.info(f"validate: environment — {capabilities().summary()}")
     resources = _Resources()
     keep_paths: set[Path] = set()
 
@@ -105,15 +107,10 @@ def _dispatch(
     if args.source is None and args.from_device is None and args.regen_ref is None:
         return _print_devices_or_help()
 
-    # Mode 2: --from-device (acquire fresh logarchive from a phone, then full pipeline)
+    # Mode L3: --from-device → acquire the same device both ways, check acquisition
+    # (L2) + parser (L1). Needs macOS + root (Apple `log collect`).
     if args.from_device is not None:
-        if not is_macos():
-            log.error("error: --from-device requires macOS (Apple `log collect`).")
-            return 1
-        logarchive = _collect_from_device(args.from_device or None, resources)
-        ref_path = _make_reference(logarchive, args, resources, keep_paths)
-        db_path = _extract_logarchive(logarchive, args, resources, keep_paths)
-        return _run_compare(db_path, ref_path, args)
+        return _run_l3_from_device(args, resources, keep_paths)
 
     # Beyond this point, SOURCE is required.
     if args.source is None:
@@ -184,18 +181,78 @@ def _print_devices_or_help() -> int:
 
 
 def _collect_from_device(
-    name_or_udid: str | None,
+    udid: str,
     resources: _Resources,
+    *,
+    last: str | None = None,
 ) -> Path:
-    """Acquire a fresh logarchive from the resolved device."""
+    """Acquire a logarchive from *udid* via Apple ``log collect`` (needs root)."""
     from forensic_aul.testing import log_collect
-    from forensic_aul.testing.platform import resolve_device
-
-    device = resolve_device(name_or_udid)
-    log.info(f"Acquiring from device: {device.display()}")
 
     out_dir = resources.tempdir(prefix="forensic_aul_collect_")
-    return log_collect.run(device.udid, out_dir)
+    return log_collect.run(udid, out_dir, last=last)
+
+
+def _acquire_pymobiledevice3(udid: str, args: argparse.Namespace, resources: _Resources) -> Path:
+    """Acquire a loose logarchive from *udid* via pymobiledevice3 (userspace)."""
+    from forensic_aul.ops.acquisition.acquire import acquire
+
+    out_dir = resources.tempdir(prefix="forensic_aul_pmd3_")
+    result = acquire(
+        case_number="VALIDATE-L3",
+        output_dir=out_dir,
+        udid=udid,
+        start_time=getattr(args, "collect_last", None),
+        pack=False,   # loose .logarchive (no .faul wrapper)
+    )
+    return result.logarchive_path
+
+
+def _run_l3_from_device(
+    args: argparse.Namespace,
+    resources: _Resources,
+    keep_paths: set[Path],
+) -> int:
+    """L3 full-native check: acquire the SAME device both ways, then verify
+    acquisition equivalence (L2, file-level) and parser fidelity (L1) on the
+    metadata-complete ``log collect`` archive. Needs macOS + root."""
+    from forensic_aul.testing.archive_compare import compare_archives, render_archive_report
+    from forensic_aul.testing.platform import capabilities, resolve_device
+
+    caps = capabilities()
+    if not caps.is_macos:
+        log.error("--from-device needs macOS (Apple `log collect`). Elsewhere, run "
+                  "`validate --acquisition <A> <B>` for the acquisition check and supply a "
+                  "reference ndjson for the parser check.")
+        return 1
+    if not caps.is_root:
+        log.error("--from-device needs root for `log collect` — run "
+                  "`sudo faul.py validate --from-device`. (pymobiledevice3 `acquire` is the "
+                  "userspace alternative and needs no root.)")
+        return 1
+
+    device = resolve_device(args.from_device or None)
+    log.info(f"L3 full-pipeline validation on: {device.display()}")
+
+    # Acquire both ways, back-to-back, to minimise live-log drift (the append-check
+    # in L2 absorbs whatever tail grows between the two collections).
+    archive_pmd3 = _acquire_pymobiledevice3(device.udid, args, resources)
+    archive_collect = _collect_from_device(device.udid, resources, last=getattr(args, "collect_last", None))
+
+    # L2 — acquisition fidelity (file-level, parser-free).
+    l2 = compare_archives(archive_pmd3, archive_collect,
+                          label_a="pymobiledevice3", label_b="log-collect")
+    for line in render_archive_report(l2).splitlines():
+        log.info("%s", line)
+
+    # L1 — parser fidelity on the metadata-complete log-collect archive.
+    ref_path = _make_reference(archive_collect, args, resources, keep_paths)
+    db_path = _extract_logarchive(archive_collect, args, resources, keep_paths)
+    l1_code = _run_compare(db_path, ref_path, args)
+
+    log.info(f"L3 result: acquisition (L2) = {'PASS' if l2.passed else 'FAIL'}  ·  "
+             f"parser (L1) = {'PASS' if l1_code == 0 else 'FAIL'}")
+    return 0 if (l2.passed and l1_code == 0) else 1
 
 
 def _make_reference(

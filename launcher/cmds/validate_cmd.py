@@ -146,6 +146,16 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
             "Pass them as a single quoted string."
         ),
     )
+    p.add_argument(
+        "--collect-last",
+        type=str,
+        metavar="DURATION",
+        default=None,
+        help=(
+            "For --from-device (L3): bound both device collections to this window "
+            "(e.g. '1h', '30m') — keeps the capture small/fast and drift minimal."
+        ),
+    )
 
     p.add_argument(
         "--db-output",

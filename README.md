@@ -355,22 +355,38 @@ on pre-existing archives or databases (auto-extracts `.logarchive` inputs on the
 fly). Both write a `.csv` of retained lines and a `.db` with every post-baseline
 line carrying an `excluded` flag.
 
-### `validate` — verify FAUL against Apple's `log show`
-
-```bash
-faul.py validate <logarchive> [ref.ndjson]   # extract → diff (reference auto-made on macOS)
-faul.py validate --from-device               # macOS: collect → log show → extract → diff, in one
-faul.py validate <db.sqlite> <ref.ndjson>    # diff an existing DB against a reference
-```
+### `validate` — verify FAUL against Apple's own tools
 
 FAUL's built-in **self-check** (named `validate`, distinct from the pytest suite in
-`tests/`): it runs Apple's own `log show --style ndjson` over the same logarchive
-and proves every reference record is present in FAUL's database, then reports
-timestamp, structural-field and message-content agreement. Use it as a QA / trust
-check on a real acquisition. On macOS the reference is generated automatically;
-`--from-device` runs the whole pipeline from a USB-connected iPhone (needs the
-`acquire` extra — see *Optional extras*). See `faul.py validate --help` for all
-options (regen reference, DB output, sample limits, allowed-missing tolerance).
+`tests/`). FAUL replaces two Apple tools, so it validates both, on three layers:
+
+```bash
+# L1 — parser: FAUL extract vs Apple `log show`, on one archive
+faul.py validate <logarchive> [ref.ndjson]   # reference auto-made on macOS, else supplied
+faul.py validate <db.sqlite> <ref.ndjson>    # diff an existing DB against a reference
+
+# L2 — acquisition: pymobiledevice3 vs `log collect`, file-by-file (parser-free)
+faul.py validate --acquisition <archive_a> <archive_b>
+
+# L3 — full native pipeline (needs macOS + root): does both, from the device
+sudo faul.py validate --from-device [--collect-last 1h]
+```
+
+- **L1 (parser)** streams both sides through a **flat-memory sort-merge** join, so a
+  whole multi-day store validates without exhausting RAM. Pass = every reference
+  record is present in the DB (`--allow-missing N` to tolerate a few).
+- **L2 (acquisition)** compares two logarchives by **SHA-256 per file**, then
+  byte-checks any that differ: a file is fine if it is identical or an *append*
+  (the live tail grew between collections); a **rewrite** fails it. No extraction,
+  so it does not depend on the parser. Cross-platform, no root.
+- **L3** acquires the same device *both* ways and runs L2 + L1 together — the
+  headline "are we equivalent to Apple end-to-end" check.
+
+Environment rules: `log show` needs macOS (not root); `log collect --device-udid`
+needs macOS **and root** (`sudo`); pymobiledevice3 is cross-platform and userspace.
+Off-macOS, supply an L1 reference ndjson generated earlier on a Mac. `validate`
+logs the capabilities it detected and refuses unavailable modes with guidance. See
+`faul.py validate --help` for all options.
 
 ### `report` — file a bug from a crash report
 

@@ -29,6 +29,8 @@ def run(
     udid: str,
     output_dir: Path,
     *,
+    last: str | None = None,
+    size: str | None = None,
     timeout: int | None = None,
 ) -> Path:
     """Run ``log collect --device-udid <udid> --output <output_dir>``.
@@ -38,6 +40,13 @@ def run(
     *output_dir* must exist and be writable. The resulting archive is
     placed inside *output_dir* (Apple decides the file name, typically
     ``system_logs.logarchive``).
+
+    *last* (e.g. ``"1h"``) and *size* (e.g. ``"500m"``) bound how much of the log
+    store is collected — use them to keep an L2/L3 capture small and fast.
+
+    NOTE: ``log collect --device-udid`` requires **root** (run under ``sudo``);
+    without it Apple's ``log`` exits non-zero with "Must be root …", which is
+    surfaced verbatim below.
     """
     require_macos_log_tools()
 
@@ -52,6 +61,10 @@ def run(
         "--device-udid", udid,
         "--output", str(output_dir),
     ]
+    if last:
+        cmd += ["--last", last]
+    if size:
+        cmd += ["--size", size]
     log.info(f'Running: {" ".join(cmd)}')
 
     try:

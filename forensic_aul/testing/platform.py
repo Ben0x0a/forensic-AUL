@@ -14,6 +14,7 @@ about ``pymobiledevice3`` or ``shutil.which``.
 from __future__ import annotations
 
 import logging
+import os
 import platform as _platform
 import shutil
 from dataclasses import dataclass
@@ -51,6 +52,29 @@ def is_macos() -> bool:
 def has_log_binary() -> bool:
     """True if Apple's ``/usr/bin/log`` is available (only on macOS)."""
     return shutil.which("log") is not None
+
+
+def is_root() -> bool:
+    """True when running as root — required by ``log collect --device-udid`` (L3).
+    Guarded: platforms without ``geteuid`` (Windows) are treated as non-root."""
+    geteuid = getattr(os, "geteuid", None)
+    return geteuid() == 0 if geteuid is not None else False
+
+
+@dataclass(frozen=True)
+class Caps:
+    """What validation the current environment can run (see the scenario matrix)."""
+    is_macos: bool
+    has_log: bool
+    is_root: bool
+
+    def summary(self) -> str:
+        return f"macOS={self.is_macos}  log-tool={self.has_log}  root={self.is_root}"
+
+
+def capabilities() -> Caps:
+    """Probe the host. Cheap — does NOT enumerate devices (that happens on demand)."""
+    return Caps(is_macos=is_macos(), has_log=has_log_binary(), is_root=is_root())
 
 
 def require_macos_log_tools() -> None:
