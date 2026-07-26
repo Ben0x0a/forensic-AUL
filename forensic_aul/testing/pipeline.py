@@ -96,6 +96,11 @@ def _dispatch(
     """Decide what to acquire/generate based on argument shape."""
     from forensic_aul.testing.platform import is_macos
 
+    # Mode L2: --acquisition A B → file-level acquisition-fidelity check (parser-free,
+    # cross-platform, no root). Checked first: it needs neither a device nor `log`.
+    if getattr(args, "acquisition", None):
+        return _run_acquisition_compare(args)
+
     # Mode "no args": list devices on macOS, otherwise help.
     if args.source is None and args.from_device is None and args.regen_ref is None:
         return _print_devices_or_help()
@@ -247,6 +252,37 @@ def _extract_logarchive(
         keep_paths.add(db_path.resolve())
         log.info(f"Database kept at: {db_path}")
     return db_path
+
+
+# ── L2 : acquisition comparison (file-level, parser-free) ─────────────────────
+
+def _run_acquisition_compare(args: argparse.Namespace) -> int:
+    """Compare two logarchives at the file level (SHA-256 + append-check)."""
+    from forensic_aul.testing.archive_compare import compare_archives, render_archive_report
+
+    archive_a, archive_b = args.acquisition
+    for path in (archive_a, archive_b):
+        if not Path(path).is_dir():
+            log.error(f"error: not a logarchive directory: {path}")
+            return 1
+
+    result = compare_archives(archive_a, archive_b, label_a=archive_a.name, label_b=archive_b.name)
+    text = render_archive_report(result)
+    for line in text.splitlines():
+        log.info("%s", line)
+    if args.report:
+        try:
+            args.report.parent.mkdir(parents=True, exist_ok=True)
+            args.report.write_text(text, encoding="utf-8")
+            log.info(f"Report written to: {args.report}")
+        except OSError:
+            log.exception("Could not write report file")
+
+    if result.passed:
+        log.info("PASS: the two acquisitions copied identical device files (append aside).")
+        return 0
+    log.error(f"FAIL: {len(result.diverged)} device file(s) diverged between the acquisitions.")
+    return 1
 
 
 # ── Comparison ────────────────────────────────────────────────────────────────

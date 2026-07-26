@@ -89,6 +89,18 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
             "(macOS only). Useful when SOURCE is an existing DB."
         ),
     )
+    src_group.add_argument(
+        "--acquisition",
+        nargs=2,
+        type=Path,
+        metavar=("ARCHIVE_A", "ARCHIVE_B"),
+        help=(
+            "L2 acquisition check: compare two logarchives file-by-file "
+            "(SHA-256 + append-check), parser-free — proves two acquisition "
+            "methods (e.g. pymobiledevice3 vs `log collect`) copied identical "
+            "device files. Cross-platform; needs no reference and no root."
+        ),
+    )
 
     p.add_argument(
         "--report",
