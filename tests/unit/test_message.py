@@ -139,8 +139,19 @@ class TestEdgeCases:
         assert result == "00007"
 
     def test_float_format(self):
+        # A value already resolved to a decimal string is parsed directly.
         result = format_message("%.2f", data("3.14159"))
         assert result == "3.14"
+
+    def test_float_reinterprets_double_bit_pattern(self):
+        # A double argument is stored as the SIGNED integer of its 8 IEEE-754
+        # bytes; %f must reinterpret those bits, not print the integer itself.
+        assert format_message("%f", data("4651708241678434304")) == "966.000000"
+        assert format_message("%.9f", data("4554571619866423808")) == "0.000321791"
+
+    def test_float_negative_bit_pattern(self):
+        # -2.0's bit-pattern (0xC000…) is a negative signed int64 when stored.
+        assert format_message("%f", data("-4611686018427387904")) == "-2.000000"
 
     def test_octal(self):
         result = format_message("%o", data("8"))

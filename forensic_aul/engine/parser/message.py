@@ -22,6 +22,7 @@ import errno
 import logging
 import os
 import re
+import struct
 from datetime import datetime, timezone
 from functools import lru_cache
 
@@ -217,6 +218,36 @@ def _render_item(
     return f"<decoded:{annotation}:{raw}>"
 
 
+def _reinterpret_double(raw: str) -> float | None:
+    """Decode a floating-point argument from its raw storage.
+
+    WHY: the firehose stores a number argument as its raw little-endian bytes,
+    which the item parser resolves to the SIGNED integer value of those bytes
+    (``_parse_item_number``). A ``%f`` / ``%e`` / ``%g`` argument is a ``double``
+    (C variadic promotion makes it 8 bytes), so its stored integer is the double's
+    IEEE-754 bit-pattern — NOT the number to print. Reinterpret those 8 bytes as
+    the double they encode (e.g. the stored integer 4651708241678434304 is the
+    double 966.0). Without this, ``%f`` printed the bit-pattern as a huge float.
+
+    Falls back to parsing ``raw`` as a decimal float when it is not an integer
+    bit-pattern (a value already resolved to a decimal string). Returns None when
+    it is neither, so the caller can leave the specifier untouched.
+    """
+    try:
+        bits = int(raw)
+    except (ValueError, TypeError):
+        try:
+            return float(raw)
+        except (ValueError, TypeError):
+            return None
+    try:
+        # signed=True mirrors the signed unpack in _parse_item_number, so the
+        # exact original 8 bytes are reconstructed before reinterpretation.
+        return struct.unpack("<d", bits.to_bytes(8, "little", signed=True))[0]
+    except (OverflowError, struct.error):
+        return None
+
+
 def _apply_printf(raw: str, fmt_modifier: str, conv: str) -> str:
     """Apply basic printf conversion to the pre-resolved string *raw*.
 
@@ -246,9 +277,8 @@ def _apply_printf(raw: str, fmt_modifier: str, conv: str) -> str:
 
     # Floating-point conversions
     if conv in ("e", "E", "f", "g", "G", "a", "A"):
-        try:
-            float_val = float(raw)
-        except (ValueError, TypeError):
+        float_val = _reinterpret_double(raw)
+        if float_val is None:
             return raw
         spec = f"%{fmt_modifier}{conv}"
         try:
