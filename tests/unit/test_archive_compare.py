@@ -1,20 +1,25 @@
-"""Unit tests for the file-level acquisition check — forensic_aul/testing/archive_compare.py.
+"""Unit tests for the file-level acquisition check — forensic_aul/validation/archive_compare.py.
 
 Builds two tiny synthetic logarchives exercising every verdict (identical, append,
-diverged, only-a, only-b) plus a differing wrapper file that must be ignored, and
-asserts the classification + pass/fail.
+shrunk, diverged, only-a, only-b) plus a differing wrapper file that must be
+ignored, and asserts the classification + pass/fail.
+
+The append/shrunk pair is the one that must not regress: the comparison is
+order-significant (A collected first, B second), so a file that GREW and a file
+that LOST its tail have to land in different buckets.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from forensic_aul.testing.archive_compare import (
+from forensic_aul.validation.archive_compare import (
     APPEND,
     DIVERGED,
     IDENTICAL,
     ONLY_A,
     ONLY_B,
+    SHRUNK,
     compare_archives,
 )
 
@@ -77,3 +82,26 @@ def test_pass_when_only_identical_and_append(tmp_path):
     cmp = compare_archives(a, b)
     assert cmp.passed is True
     assert cmp.identical == 1 and cmp.append == 1 and len(cmp.only_b) == 1
+
+
+def test_shrunk_is_not_reported_as_append(tmp_path):
+    """B (collected second) lost the tail A had — a purge, not growth."""
+    a, b = tmp_path / "a.logarchive", tmp_path / "b.logarchive"
+    _write(a, "Persist/live.tracev3", b"head" + b"X" * 1000)
+    _write(b, "Persist/live.tracev3", b"head")
+    cmp = compare_archives(a, b, label_a="pmd3", label_b="collect")
+
+    assert [v.status for v in cmp.verdicts] == [SHRUNK]
+    assert cmp.append == 0                       # never counted as growth
+    assert [v.rel_path for v in cmp.shrunk] == ["Persist/live.tracev3"]
+    # A purge is normal live-store behaviour (like rotation): surfaced, not failed.
+    assert cmp.passed is True
+
+
+def test_append_and_shrunk_are_direction_symmetric(tmp_path):
+    """The same two files swapped flip the verdict — the order carries the meaning."""
+    a, b = tmp_path / "a.logarchive", tmp_path / "b.logarchive"
+    _write(a, "Persist/live.tracev3", b"head")
+    _write(b, "Persist/live.tracev3", b"head-and-more")
+    assert [v.status for v in compare_archives(a, b).verdicts] == [APPEND]
+    assert [v.status for v in compare_archives(b, a).verdicts] == [SHRUNK]
