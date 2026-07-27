@@ -212,7 +212,7 @@ def load_ndjson(path: Path | str) -> LoadResult:
 def build_record(obj: dict) -> RefRecord | None:
     """Convert one parsed JSON object into a :class:`RefRecord`, or ``None`` for a
     non-entry event type (timesync/state). Pure — no counting, no dedup — so both
-    the dict loader and the streaming :func:`iter_ndjson` share it."""
+    the dict loader and the streaming sort-merge path share it."""
     et = obj.get("eventType", "")
     if et in _SKIP_EVENT_TYPES:
         return None
@@ -275,11 +275,14 @@ def _consume_obj(obj: dict, result: LoadResult) -> None:
     result.records[record.key] = record
 
 
-def iter_ndjson(path: Path | str) -> Iterator[RefRecord]:
-    """Stream every comparable :class:`RefRecord` from an Apple ndjson file in FILE
-    order (constant memory). Non-entry event types are skipped; duplicates are NOT
-    de-duplicated here (the sort-merge caller collapses adjacent duplicate keys).
-    Used by :mod:`forensic_aul.testing.merge_compare`."""
+def iter_ndjson_objs(path: Path | str) -> Iterator[dict]:
+    """Stream the parsed JSON objects of an Apple ndjson file in FILE order (constant
+    memory), skipping blank/non-JSON lines and unparseable ones.
+
+    Yields the raw ``dict`` rather than a :class:`RefRecord` because the sort-merge
+    caller needs the object itself (it re-serialises it as the sort payload) as well
+    as the record built from it. Pair it with :func:`build_record`.
+    Used by :mod:`forensic_aul.validation.merge_compare`."""
     path = Path(path)
     with path.open("rb") as fh:
         for raw_line in fh:
@@ -287,9 +290,6 @@ def iter_ndjson(path: Path | str) -> Iterator[RefRecord]:
             if not raw_line or not raw_line.startswith(b"{"):
                 continue
             try:
-                obj = json.loads(raw_line)
+                yield json.loads(raw_line)
             except json.JSONDecodeError:
                 continue
-            record = build_record(obj)
-            if record is not None:
-                yield record

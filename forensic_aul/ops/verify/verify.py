@@ -5,7 +5,7 @@ Defines : the *logic* behind the ``verify`` command — ``verify_database``
           file, compares each digest against the value stored at extract time,
           and returns a structured :class:`VerifyResult`. No printing lives here;
           the CLI handler and the GUI render the result.
-Used by : launcher/cmds/verify_cmd.py, forensic_aul.__init__ (public API).
+Used by : launcher/cmds/verify_hash_cmd.py, forensic_aul.__init__ (public API).
 Uses    : forensic_aul.engine.integrity (hash_logarchive, compute_sha256).
 """
 

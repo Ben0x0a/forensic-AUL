@@ -90,7 +90,8 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
 
     # Optional case metadata
     meta = p.add_argument_group("optional case metadata")
-    meta.add_argument("--exhibit",  metavar="EXHIBIT", help="Exhibit / item reference.")
+    meta.add_argument("--exhibit-number", "-e", metavar="EXHIBIT",
+                      help="Exhibit / item reference.")
     meta.add_argument("--analyst",  metavar="NAME",    help="Analyst name.")
     meta.add_argument("--notes",    metavar="TEXT",    help="Free-text notes.")
 
@@ -157,8 +158,7 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
         metavar="N",
         help=(
             f"Number of log entries per DB commit batch (default: {BATCH_SIZE}). "
-            "Higher → fewer commit syncs, more RAM; raise to e.g. 50000 on "
-            "RAM-rich hosts."
+            "Higher → fewer commit syncs, more RAM; lower it on small machines."
         ),
     )
     perf.add_argument(
@@ -245,7 +245,7 @@ def _resolve_case_fields(
     ``(case_number, imei, exhibit, analyst, notes)``.
     """
     case_number, imei = args.case_number, args.imei
-    exhibit, analyst, notes = args.exhibit, args.analyst, args.notes
+    exhibit, analyst, notes = args.exhibit_number, args.analyst, args.notes
     if isinstance(source, dict):
         return case_number, imei, exhibit, analyst, notes
 
@@ -259,7 +259,7 @@ def _resolve_case_fields(
     device = sidecar.get("device") or {}
     case_number = case_number or (case.get("case_number") or None)
     imei = imei or (device.get("imei") or None)
-    exhibit = exhibit or (case.get("exhibit") or None)
+    exhibit = exhibit or (case.get("exhibit_number") or None)
     analyst = analyst or (case.get("analyst") or None)
     notes = notes or (case.get("notes") or None)
     if any((case_number, imei, exhibit, analyst, notes)):

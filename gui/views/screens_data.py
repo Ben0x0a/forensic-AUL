@@ -185,12 +185,12 @@ class ExportScreen(OperationScreen):
         self._process = mono_input("process names, comma-separated")
         self._subsystem = mono_input("subsystems, comma-separated")
         self._level = mono_input("Default,Error,…")
-        self._grep = mono_input("SQL LIKE on message, e.g. %wifi%")
+        self._like = mono_input("SQL LIKE on message, e.g. %wifi%")
         self._last = mono_input("10m / 1h / 24h / 7d")
         filters.add(field_row("Process", self._process))
         filters.add(field_row("Subsystem", self._subsystem))
         filters.add(field_row("Level", self._level))
-        filters.add(field_row("Message", self._grep))
+        filters.add(field_row("Message", self._like))
         filters.add(field_row("Last", self._last))
         self.content.addWidget(filters)
 
@@ -227,7 +227,7 @@ class ExportScreen(OperationScreen):
             process=_csv_list(self._process.text()),
             subsystem=_csv_list(self._subsystem.text()),
             level=_csv_list(self._level.text()),
-            grep=self._grep.text().strip() or None,
+            like=self._like.text().strip() or None,
             last=self._last.text().strip() or None,
             fmt=self._fmt.value,
             include_fields=True,

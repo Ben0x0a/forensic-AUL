@@ -7,7 +7,7 @@ The ``validate`` subcommand can run in three modes:
 * **Linux/Windows** — only mode 3 (DB+ndjson both supplied) works.
 
 This module centralises the platform checks and the device-name/UDID
-resolution so the rest of the testing pipeline does not have to know
+resolution so the rest of the validation pipeline does not have to know
 about ``pymobiledevice3`` or ``shutil.which``.
 """
 
@@ -83,7 +83,7 @@ def require_macos_log_tools() -> None:
         raise RuntimeError(
             "This action needs Apple's `log` tool, which only ships with macOS. "
             "On Linux/Windows, supply the reference ndjson explicitly:\n"
-            "    forensic-aul validate <logarchive_or_db>  <reference.ndjson>"
+            "    forensic-aul validate-tool <logarchive_or_db>  <reference.ndjson>"
         )
     if not has_log_binary():
         raise RuntimeError(

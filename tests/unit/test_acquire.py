@@ -51,7 +51,7 @@ def patched(monkeypatch):
 
     captured: dict = {}
 
-    def fake_build(logarchive_path, dev, *, case_number, exhibit, analyst, notes,
+    def fake_build(logarchive_path, dev, *, case_number, exhibit_number, analyst, notes,
                    logarchive_sha256, file_count, file_hashes=None):
         captured["file_hashes"] = file_hashes
         captured["case_number"] = case_number
@@ -142,7 +142,7 @@ class TestAcquire:
         # never invokes the .faul packer.
         written: dict = {}
 
-        def fake_report(logarchive_path, dev, *, case_number, exhibit, analyst,
+        def fake_report(logarchive_path, dev, *, case_number, exhibit_number, analyst,
                         notes, logarchive_sha256, file_count, file_hashes=None):
             rp = Path(str(logarchive_path) + ".acquisition.json")
             rp.write_text("{}", encoding="utf-8")

@@ -411,7 +411,7 @@ class ExtractScreen(OperationScreen):
             source=data.get("logarchive"),
             case=data.get("case"),
             imei=data.get("imei"),
-            exhibit=data.get("exhibit"),
+            exhibit=data.get("exhibit_number"),
             analyst=data.get("analyst"),
             only_empty=False,
         )

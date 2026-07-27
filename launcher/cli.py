@@ -25,33 +25,32 @@ log = logging.getLogger(__name__)
 
 # Each subcommand module exposes add_subcommand(sub) + run(args). Registration
 # order is the order they appear in --help.
+# Registration order = workflow order, which is also the order --help prints.
 _COMMAND_MODULES = (
-    "extract_cmd",
-    "validate_cmd",
     "acquire_cmd",
-    "identify_cmd",
-    "verify_cmd",
+    "extract_cmd",
+    "summary_cmd",
     "kb_cmd",
     "annotate_cmd",
     "export_cmd",
-    "summary_cmd",
-    "report_cmd",
+    "verify_hash_cmd",
+    "identify_cmd",
+    "validate_tool_cmd",
+    "redact_errors_cmd",
 )
 
-# Subcommand name → handler module name. ``identify-diff`` is an alias served by
-# the same module as ``identify``.
+# Subcommand name → handler module name.
 _DISPATCH = {
-    "extract":       "extract_cmd",
-    "validate":      "validate_cmd",
     "acquire":       "acquire_cmd",
-    "identify":      "identify_cmd",
-    "identify-diff": "identify_cmd",
-    "verify":        "verify_cmd",
+    "extract":       "extract_cmd",
+    "summary":       "summary_cmd",
     "kb":            "kb_cmd",
     "annotate":      "annotate_cmd",
     "export":        "export_cmd",
-    "summary":       "summary_cmd",
-    "report":        "report_cmd",
+    "verify-hash":   "verify_hash_cmd",
+    "identify":      "identify_cmd",
+    "validate-tool": "validate_tool_cmd",
+    "redact-errors": "redact_errors_cmd",
 }
 
 

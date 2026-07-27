@@ -1,8 +1,8 @@
-"""Tests for forensic_aul.testing.comparator — comparison engine and report renderer."""
+"""Tests for forensic_aul.validation.comparator — comparison engine and report renderer."""
 
 import pytest
-from forensic_aul.testing.ndjson_loader import RefKey, RefRecord, LoadResult
-from forensic_aul.testing.comparator import (
+from forensic_aul.validation.ndjson_loader import RefKey, RefRecord, LoadResult
+from forensic_aul.validation.comparator import (
     DbRecord,
     ComparisonReport,
     FieldStats,

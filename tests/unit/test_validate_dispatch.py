@@ -1,5 +1,5 @@
 """Unit tests for the validate environment probe + L3 dispatch guards —
-forensic_aul/testing/platform.py and pipeline._run_l3_from_device.
+forensic_aul/validation/platform.py and pipeline._run_l3_from_device.
 
 The live L3 run needs macOS + root (Apple ``log collect``), which CI can't provide,
 so the *guards* are what we test here: with the capability probe monkeypatched, the
@@ -11,8 +11,8 @@ from __future__ import annotations
 import argparse
 import os
 
-from forensic_aul.testing import pipeline, platform
-from forensic_aul.testing.platform import Caps
+from forensic_aul.validation import pipeline, platform
+from forensic_aul.validation.platform import Caps
 
 
 def _caps(mac: bool, log_tool: bool, root: bool) -> Caps:

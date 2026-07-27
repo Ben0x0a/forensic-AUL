@@ -23,8 +23,8 @@ log = logging.getLogger(__name__)
 
 def add_subcommand(sub) -> None:  # type: ignore[type-arg]
     p = sub.add_parser(
-        "verify",
-        help="Verify the chain of custody of an extracted SQLite database.",
+        "verify-hash",
+        help="Re-hash the evidence and check it against the digests stored at extract time.",
         description=(
             "Re-hashes the logarchive (global + per-file) and the operational "
             "log file, comparing the digests against those stored at extract "

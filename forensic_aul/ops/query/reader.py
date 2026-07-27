@@ -46,11 +46,11 @@ class LogFilters:
     process: list[str] | None = None
     subsystem: list[str] | None = None
     level: list[str] | None = None
-    grep: str | None = None             # SQL LIKE pattern on the message column
+    like: str | None = None             # SQL LIKE pattern on the message column
     # Prefix match on the *composed* message — the right filter for dynamic
     # messages (format_str_id IS NULL) and generic %{public}s templates, whose
     # format string carries no usable content. %/_ in the prefix are escaped, so
-    # unlike ``grep`` the value is taken literally.
+    # unlike ``like`` the value is taken literally, not as a pattern.
     message_prefix: str | None = None
     # Literal substring match on the composed message (%/_ escaped, like
     # message_prefix but matching anywhere).
@@ -195,18 +195,19 @@ def build_where(
         ids = _lookup_ids(conn, "format_strs", [f.format_str], column="value")
         clauses.append(_in_clause("l.format_str_id", ids))
         params.extend(ids)
-    if f.grep:
-        clauses.append("l.message LIKE ?"); params.append(f.grep)
+    if f.like:
+        clauses.append("l.message LIKE ?"); params.append(f.like)
     if f.message_prefix:
         # Literal prefix: escape LIKE metacharacters so %/_ in the prefix match
-        # themselves (unlike ``grep``, which passes the pattern through raw).
+        # themselves (unlike ``like``, which passes the pattern through raw).
         clauses.append(r"l.message LIKE ? ESCAPE '\'")
         params.append(_escape_like(f.message_prefix) + "%")
     if f.message_contains:
         # Literal substring: same escaping, wildcards on both sides. WHY a
-        # dedicated filter instead of building a grep pattern at the call site:
-        # grep has no ESCAPE clause, so caller-side escaping silently never
-        # matches — the escaping and the ESCAPE declaration must live together.
+        # dedicated filter instead of building a ``like`` pattern at the call
+        # site: ``like`` has no ESCAPE clause, so caller-side escaping silently
+        # never matches — the escaping and the ESCAPE declaration must live
+        # together.
         clauses.append(r"l.message LIKE ? ESCAPE '\'")
         params.append("%" + _escape_like(f.message_contains) + "%")
     if f.message_match:

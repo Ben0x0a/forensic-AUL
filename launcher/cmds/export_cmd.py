@@ -68,8 +68,9 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
                       help="Restrict to this subsystem (repeatable; OR).")
     logf.add_argument("--level",     metavar="LVL", action="append", default=None,
                       help="Restrict to this log level (Default/Info/Debug/Error/Fault, repeatable).")
-    logf.add_argument("--grep",      metavar="PATTERN", default=None,
-                      help="SQL LIKE pattern on the message column (use %% wildcards).")
+    logf.add_argument("--like",      metavar="PATTERN", default=None, dest="like",
+                      help="SQL LIKE pattern on the message column — %% and _ "
+                           "wildcards, NOT a regular expression.")
 
     kbf = p.add_argument_group("knowledge-base filters")
     kbf.add_argument("--signature",       metavar="ID", action="append", default=None,
@@ -101,7 +102,7 @@ def run(args: argparse.Namespace) -> int:
         process=args.process,
         subsystem=args.subsystem,
         level=args.level,
-        grep=args.grep,
+        like=args.like,
         signature=args.signature,
         action=args.action,
         tag=args.tag,

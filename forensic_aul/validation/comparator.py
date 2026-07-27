@@ -26,7 +26,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from forensic_aul.testing.ndjson_loader import LoadResult, RefKey, RefRecord
+from forensic_aul.validation.ndjson_loader import LoadResult, RefKey, RefRecord
 
 log = logging.getLogger(__name__)
 
@@ -102,7 +102,9 @@ def db_record_from_row(row: sqlite3.Row) -> DbRecord:
     key = RefKey(
         boot_uuid=(row["boot_uuid"] or "").upper().replace("-", ""),
         mach_timestamp=row["timestamp_mach"],
-        thread_id=row["tid"],
+        # `logs.tid` is nullable: coerce like the record field below, so the key
+        # stays orderable for the streaming merge-join in merge_compare.
+        thread_id=row["tid"] or 0,
     )
     return DbRecord(
         key=key,

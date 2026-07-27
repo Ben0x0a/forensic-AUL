@@ -21,8 +21,8 @@ log = logging.getLogger(__name__)
 
 def add_subcommand(sub) -> None:  # type: ignore[type-arg]
     p = sub.add_parser(
-        "report",
-        help="List crash reports, or redact one into a shareable bug report.",
+        "redact-errors",
+        help="List local crash reports, or redact one into a shareable bug report.",
         description=(
             "With no argument, lists the crash reports saved under the FAUL crash "
             "directory. Given a report ID or path, writes a redacted, shareable "

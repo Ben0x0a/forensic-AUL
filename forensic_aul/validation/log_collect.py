@@ -20,7 +20,7 @@ import logging
 import subprocess
 from pathlib import Path
 
-from forensic_aul.testing.platform import require_macos_log_tools
+from forensic_aul.validation.platform import require_macos_log_tools
 
 log = logging.getLogger(__name__)
 
