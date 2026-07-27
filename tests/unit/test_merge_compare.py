@@ -1,10 +1,12 @@
-"""Unit tests for the flat-memory sort-merge comparator — forensic_aul/testing/merge_compare.py.
+"""Unit tests for the flat-memory sort-merge comparator — forensic_aul/validation/merge_compare.py.
 
 The contract that must not regress: the streaming ``merge_compare`` produces the
 **same** ``ComparisonReport`` as the in-RAM ``comparator.compare`` — same
 matched/missing/extra sets and the same Level-3 tallies — on a fixture built as a
 real (tiny) SQLite DB + Apple-style ndjson. Also checks the external-sort stream
-comes out in the exact key order the merge relies on.
+comes out in the exact key order the merge relies on, that it spills and merges
+correctly when the reference does not fit in one in-RAM chunk, and that duplicate
+match keys resolve to the same record on both paths.
 """
 
 from __future__ import annotations
@@ -13,9 +15,11 @@ import json
 import sqlite3
 from pathlib import Path
 
-from forensic_aul.testing import merge_compare
-from forensic_aul.testing.comparator import compare, load_db_records
-from forensic_aul.testing.ndjson_loader import load_ndjson
+import pytest
+
+from forensic_aul.validation import merge_compare
+from forensic_aul.validation.comparator import compare, load_db_records
+from forensic_aul.validation.ndjson_loader import load_ndjson
 
 # One boot, a few threads. Each spec: where it lives + fields. "both_diff" is a
 # matched key whose message differs (exercises the mismatch tallies).
@@ -152,3 +156,52 @@ def test_ndjson_sorted_stream_is_key_ordered(tmp_path):
     # All boots normalised; the timesync line was filtered out.
     assert all(r.key.boot_uuid == _BOOT_NORM for r in recs)
     assert len(recs) == 6  # 3 both + 1 both_diff + 2 ref_only (timesync line filtered)
+
+
+@pytest.mark.parametrize("chunk_bytes,fanin", [
+    (1, 32),   # one chunk per record — exercises the many-way merge
+    (1, 2),    # …and forces several reduction passes on top of it
+])
+def test_external_sort_spills_and_merges(tmp_path, monkeypatch, chunk_bytes, fanin):
+    """Same order and same records whether everything fits in one RAM chunk or the
+    sort has to spill and merge — the whole point of the on-disk path."""
+    ndjson = tmp_path / "ref.ndjson"
+    _write_ndjson(ndjson)
+    single, spill_dir = tmp_path / "single", tmp_path / "spilled"
+    single.mkdir()
+    spill_dir.mkdir()
+    in_ram = list(merge_compare._ndjson_sorted_stream(ndjson, single))
+
+    monkeypatch.setattr(merge_compare, "_CHUNK_BYTES", chunk_bytes)
+    monkeypatch.setattr(merge_compare, "_MERGE_FANIN", fanin)
+    spilled = list(merge_compare._ndjson_sorted_stream(ndjson, spill_dir))
+
+    keys = [merge_compare._ordkey(r) for r in spilled]
+    assert keys == sorted(keys)
+    assert keys == [merge_compare._ordkey(r) for r in in_ram]
+    assert [r.event_message for r in spilled] == [r.event_message for r in in_ram]
+
+
+def test_duplicate_key_resolves_like_the_inram_loader(tmp_path):
+    """A duplicated match key must collapse to the record that appears FIRST in the
+    file — the one the in-RAM dict keeps — not to whatever the sort ordered first."""
+    ndjson = tmp_path / "ref.ndjson"
+    dup = {
+        "eventType": "logEvent", "bootUUID": _BOOT, "machTimestamp": 900,
+        "threadID": 4, "processID": 20, "userID": 0, "subsystem": "com.dup",
+        "category": "cat", "activityIdentifier": 0, "parentActivityIdentifier": 0,
+        "timestamp": _apple_ts(900), "formatString": "%s",
+        "messageType": "Default", "processImagePath": "/bin/dup",
+    }
+    # "aaa" sorts before "zzz", so a payload-ordered sort would pick the wrong one.
+    ndjson.write_text(
+        json.dumps({**dup, "eventMessage": "zzz first in file"}) + "\n"
+        + json.dumps({**dup, "eventMessage": "aaa second in file"}) + "\n",
+        encoding="utf-8",
+    )
+
+    streamed = list(merge_compare._dedup(
+        merge_compare._ndjson_sorted_stream(ndjson, tmp_path)
+    ))
+    assert [r.event_message for r in streamed] == ["zzz first in file"]
+    assert load_ndjson(ndjson).records[streamed[0].key].event_message == "zzz first in file"
