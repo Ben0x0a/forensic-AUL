@@ -34,6 +34,8 @@ import logging
 from pathlib import Path
 from typing import Callable
 
+from forensic_aul.config import BATCH_SIZE
+
 log = logging.getLogger(__name__)
 
 
@@ -79,7 +81,8 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
         default=None,
         help="Investigation / case reference number (required unless --list).",
     )
-    case_grp.add_argument("--exhibit",  metavar="EXHIBIT", help="Exhibit / item reference.")
+    case_grp.add_argument("--exhibit-number", "-e", metavar="EXHIBIT",
+                          help="Exhibit / item reference.")
     case_grp.add_argument("--analyst",  metavar="NAME",    help="Analyst name.")
     case_grp.add_argument("--notes",    metavar="TEXT",    help="Free-text notes.")
 
@@ -88,8 +91,10 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
         "--output-dir", "-o",
         type=Path,
         metavar="DIR",
-        default=Path("."),
-        help="Directory where the .logarchive and report will be saved (default: current directory).",
+        default=None,
+        help="**Required** (except with --list). Directory where the .faul (or "
+             "--raw .logarchive + sidecar) is written. Explicit by design: "
+             "evidence must never land in the current directory by accident.",
     )
     acq_grp.add_argument(
         "--start-time",
@@ -147,9 +152,9 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
     post_grp.add_argument(
         "--batch-size",
         type=int,
-        default=1_000,
+        default=BATCH_SIZE,
         metavar="N",
-        help="Batch size for --extract (default: 1000).",
+        help=f"Batch size for --extract (default: {BATCH_SIZE}, same as `extract`).",
     )
 
 
@@ -163,6 +168,12 @@ def run(args) -> int:  # type: ignore[type-arg]
     if not args.case_number:
         log.error("error: --case-number is required for acquisition")
         log.error("       (use --list to enumerate connected devices)")
+        return 1
+
+    # Deliberately not an argparse `required=True`: --list must still work with
+    # no output directory. Evidence is never written to an implicit cwd.
+    if args.output_dir is None:
+        log.error("error: -o/--output-dir is required for acquisition")
         return 1
 
     from forensic_aul.ops.acquisition.acquire import (
@@ -182,7 +193,7 @@ def run(args) -> int:  # type: ignore[type-arg]
             start_time=args.start_time,
             size_limit=args.size_limit,
             age_limit=args.age_limit,
-            exhibit=args.exhibit,
+            exhibit_number=args.exhibit_number,
             analyst=args.analyst,
             notes=args.notes,
             extract=False,
@@ -219,7 +230,7 @@ def run(args) -> int:  # type: ignore[type-arg]
             db_path=db_path,
             case_number=args.case_number,
             imei=imei,
-            exhibit_number=args.exhibit,
+            exhibit_number=args.exhibit_number,
             analyst_name=args.analyst,
             notes=args.notes,
             batch_size=args.batch_size,
