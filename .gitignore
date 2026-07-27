@@ -28,6 +28,7 @@ env/
 
 # --- Internal working notes (not shipped) ---
 tasks/
+docs/internal/
 
 # --- Upstream reference source (fetched on demand by scripts/gen_decoders.py) ---
 original/
