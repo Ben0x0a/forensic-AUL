@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 from functools import lru_cache
 
 from forensic_aul.engine.models import FirehoseItemData, FirehoseItemInfo
+from forensic_aul.engine.parser.firehose import UNPARSEABLE_NUMBER
 
 log = logging.getLogger(__name__)
 
@@ -223,11 +224,17 @@ def _reinterpret_double(raw: str) -> float | None:
 
     WHY: the firehose stores a number argument as its raw little-endian bytes,
     which the item parser resolves to the SIGNED integer value of those bytes
-    (``_parse_item_number``). A ``%f`` / ``%e`` / ``%g`` argument is a ``double``
-    (C variadic promotion makes it 8 bytes), so its stored integer is the double's
-    IEEE-754 bit-pattern — NOT the number to print. Reinterpret those 8 bytes as
-    the double they encode (e.g. the stored integer 4651708241678434304 is the
-    double 966.0). Without this, ``%f`` printed the bit-pattern as a huge float.
+    (``_parse_item_number``). A ``%f`` / ``%e`` / ``%g`` argument is a float, so its
+    stored integer is the IEEE-754 bit-pattern — NOT the number to print.
+    Reinterpret those bytes as the float they encode (e.g. the stored integer
+    4651708241678434304 is the double 966.0). Without this, ``%f`` printed the
+    bit-pattern as a huge float.
+
+    WIDTH: the item size is gone by the time we get here (``message_strings`` is a
+    string), so it is recovered from the magnitude. ``_parse_item_number`` SIGN-
+    EXTENDS, so a 4-byte ``float`` argument always lands in int32 range while a
+    ``double`` bit-pattern does not — try 4 bytes first, then 8. Reinterpreting a
+    4-byte float as a zero-extended double would print 0.000000 instead of its value.
 
     Falls back to parsing ``raw`` as a decimal float when it is not an integer
     bit-pattern (a value already resolved to a decimal string). Returns None when
@@ -240,12 +247,19 @@ def _reinterpret_double(raw: str) -> float | None:
             return float(raw)
         except (ValueError, TypeError):
             return None
-    try:
-        # signed=True mirrors the signed unpack in _parse_item_number, so the
-        # exact original 8 bytes are reconstructed before reinterpretation.
-        return struct.unpack("<d", bits.to_bytes(8, "little", signed=True))[0]
-    except (OverflowError, struct.error):
+    if bits == UNPARSEABLE_NUMBER:
+        # The item could not be decoded at all (unsupported size), so there is no
+        # bit-pattern to reinterpret — its int32 bytes happen to be a NaN pattern,
+        # and printing "nan" would pass the sentinel off as a real value.
         return None
+    # signed=True mirrors the signed unpack in _parse_item_number, so the exact
+    # original bytes are reconstructed before reinterpretation.
+    for width, fmt in ((4, "<f"), (8, "<d")):
+        try:
+            return struct.unpack(fmt, bits.to_bytes(width, "little", signed=True))[0]
+        except (OverflowError, struct.error):
+            continue
+    return None
 
 
 def _apply_printf(raw: str, fmt_modifier: str, conv: str) -> str:

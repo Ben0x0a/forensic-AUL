@@ -88,6 +88,13 @@ OBJECT_ITEMS: frozenset[int] = frozenset([0x40, 0x42])
 ARBITRARY_ITEMS: frozenset[int] = frozenset([0x30, 0x31, 0x32])
 BASE64_RAW_BYTES: int = 0xF2
 
+# Sentinel returned by _parse_item_number for a number item whose size is not one
+# the AUL uses (1/2/4/8 bytes) — the item could not be decoded, so this is "no
+# value", NOT the number −9999. It reaches the formatter as the string "-9999"
+# (message_strings is a str), so consumers that reinterpret the stored integer
+# must exclude it — see engine/parser/message.py::_reinterpret_double.
+UNPARSEABLE_NUMBER: int = -9999
+
 CHUNK_PREAMBLE_SIZE: int = 16
 NO_PRIVATE_DATA: int = 0x1000  # private_data_virtual_offset value = no private data
 
@@ -913,6 +920,12 @@ def parse_private_items(private_data: bytes, item_data: FirehoseItemData) -> Non
 # ── Utility functions ─────────────────────────────────────────────────────────
 
 def _parse_item_number(raw: bytes) -> int:
+    """Signed little-endian integer value of a number item's raw bytes.
+
+    Returns :data:`UNPARSEABLE_NUMBER` when the item size is not one the AUL uses
+    (1/2/4/8), i.e. the item could not be decoded at all — consumers must treat
+    that as "no value", not as the number −9999.
+    """
     sz = len(raw)
     if sz == 1:
         return struct.unpack_from("<b", raw)[0]
@@ -922,7 +935,7 @@ def _parse_item_number(raw: bytes) -> int:
         return struct.unpack_from("<i", raw)[0]
     elif sz == 8:
         return struct.unpack_from("<q", raw)[0]
-    return -9999
+    return UNPARSEABLE_NUMBER
 
 
 def _extract_string(raw: bytes) -> str:
