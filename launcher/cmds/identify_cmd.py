@@ -1,7 +1,10 @@
-"""AUL Parser — ``identify`` and ``identify-diff`` subcommands (CLI glue).
+"""AUL Parser — ``identify`` subcommand (CLI glue).
 
-Defines : the argparse wiring for both commands and thin ``run`` handlers. The
-          actual action-attribution workflow (acquire baseline → operator acts →
+Defines : the argparse wiring for ``identify`` and its thin ``run`` handler. The
+          command has two modes: the default interactive workflow, and the
+          offline ``--diff BASELINE ACTION`` mode that runs only the diff step
+          on captures the analyst already has. The actual action-attribution
+          workflow (acquire baseline → operator acts →
           acquire again → extract ×2 → diff) lives in
           ``forensic_aul.ops.identify.workflow``; this module only supplies the
           terminal front-end (prompts, banners, exception → exit code).
@@ -17,6 +20,8 @@ import logging
 import time
 from pathlib import Path
 
+from forensic_aul.config import BATCH_SIZE
+
 log = logging.getLogger(__name__)
 
 _DEFAULT_KB_DIR = "knowledge_base"
@@ -25,19 +30,25 @@ _DEFAULT_KB_DIR = "knowledge_base"
 # ── Argument parsers ──────────────────────────────────────────────────────────
 
 def add_subcommand(sub) -> None:  # type: ignore[type-arg]
-    _add_identify(sub)
-    _add_identify_diff(sub)
+    p = _add_identify(sub)
+    _add_diff_options(p)
 
 
-def _add_identify(sub) -> None:  # type: ignore[type-arg]
+def _add_identify(sub):  # type: ignore[type-arg,no-untyped-def]
     p = sub.add_parser(
         "identify",
-        help="Identify log lines produced by a user action (interactive).",
+        help="Identify log lines produced by a user action.",
         description=(
-            "Acquires a baseline logarchive, prompts the operator to perform "
-            "an action, acquires a second logarchive, then diffs the two so "
-            "only lines attributable to the action remain.\n\n"
-            "Two outputs are written:\n"
+            "Default (interactive, needs a connected iOS device): acquires a "
+            "baseline logarchive, prompts the operator to perform an action, "
+            "acquires a second logarchive, then diffs the two so only lines "
+            "attributable to the action remain.\n\n"
+            "With --diff BASELINE ACTION: skips the acquisition entirely and "
+            "runs only the diff step on two captures you already have. Each "
+            "may be a .logarchive directory (extracted to a sibling .db) or a "
+            "pre-built SQLite database. No device and no `acquire` extra "
+            "needed.\n\n"
+            "Two outputs are written either way:\n"
             "  * <prefix>.csv  — retained lines only\n"
             "  * <prefix>.db   — every post-baseline line, with `excluded` flag\n"
             "\n"
@@ -54,7 +65,8 @@ def _add_identify(sub) -> None:  # type: ignore[type-arg]
     case.add_argument("--case-number", default=None, metavar="CASE",
                       help="Investigation / case reference number "
                            "(default: 'identify-<UTC timestamp>').")
-    case.add_argument("--exhibit",  metavar="EXHIBIT", help="Exhibit / item reference.")
+    case.add_argument("--exhibit-number", "-e", metavar="EXHIBIT",
+                      help="Exhibit / item reference.")
     case.add_argument("--analyst",  metavar="NAME",    help="Analyst name.")
     case.add_argument("--notes",    metavar="TEXT",    help="Free-text notes.")
 
@@ -98,50 +110,48 @@ def _add_identify(sub) -> None:  # type: ignore[type-arg]
                      help="Skip writing the retained-lines CSV (SQLite output only).")
 
     perf = p.add_argument_group("performance")
-    perf.add_argument("--batch-size", type=int, default=1_000, metavar="N",
-                      help="Batch size for the extract pipeline (default: 1000).")
+    perf.add_argument("--batch-size", type=int, default=BATCH_SIZE, metavar="N",
+                      help=f"Batch size for the extract pipeline "
+                           f"(default: {BATCH_SIZE}, same as `extract`).")
+    return p
 
 
-def _add_identify_diff(sub) -> None:  # type: ignore[type-arg]
-    p = sub.add_parser(
-        "identify-diff",
-        help="Run only the diff step on two existing archives or DBs.",
-        description=(
-            "Diff a baseline against a post-action capture. Each argument "
-            "may be a .logarchive directory (will be extracted to a sibling "
-            ".db) or a pre-built SQLite database.\n\n"
-            "Outputs:\n"
-            "  * <prefix>.csv  — retained lines only\n"
-            "  * <prefix>.db   — every post-baseline line, with `excluded` flag\n"
-        ),
+def _add_diff_options(p) -> None:  # type: ignore[type-arg,no-untyped-def]
+    """Add the diff-only mode (`--diff BASELINE ACTION`) to the identify parser."""
+    diff = p.add_argument_group(
+        "diff-only mode",
+        "Skip the acquisition and diff two captures you already have.",
     )
-    p.add_argument("baseline", type=Path, metavar="BASELINE",
-                   help="Baseline .logarchive directory or .db file.")
-    p.add_argument("action", type=Path, metavar="ACTION",
-                   help="Post-action .logarchive directory or .db file.")
-    p.add_argument(
+    diff.add_argument(
+        "--diff",
+        nargs=2,
+        type=Path,
+        metavar=("BASELINE", "ACTION"),
+        default=None,
+        help="Diff BASELINE against ACTION and exit. Each may be a .logarchive "
+             "directory (extracted to a sibling .db) or a .db file. No device "
+             "is used.",
+    )
+    diff.add_argument(
         "--output-prefix",
         type=Path,
         metavar="PREFIX",
         default=None,
-        help="Path prefix for outputs (default: alongside ACTION as <stem>-identified).",
+        help="--diff only: path prefix for outputs "
+             "(default: alongside ACTION as <stem>-identified).",
     )
-    p.add_argument("--case-number", metavar="CASE", default=None,
-                   help="Case number recorded if a .logarchive must be extracted.")
-    p.add_argument("--imei", metavar="IMEI", default=None,
-                   help="IMEI recorded if a .logarchive must be extracted.")
-    p.add_argument("--batch-size", type=int, default=1_000, metavar="N",
-                   help="Batch size for the extract pipeline (default: 1000).")
+    diff.add_argument("--imei", metavar="IMEI", default=None,
+                      help="--diff only: IMEI recorded if a .logarchive must be extracted.")
 
 
 # ── Entry points ──────────────────────────────────────────────────────────────
 
 def run(args: argparse.Namespace) -> int:
-    if args.command == "identify":
-        return _run_identify(args)
-    if args.command == "identify-diff":
+    # --diff selects the offline mode; without it we drive the full interactive
+    # acquire → act → acquire → diff workflow.
+    if args.diff is not None:
         return _run_identify_diff(args)
-    raise AssertionError(f"unexpected command: {args.command}")
+    return _run_identify(args)
 
 
 # ── identify (terminal front-end for the workflow) ────────────────────────────
@@ -211,7 +221,7 @@ def _run_identify(args: argparse.Namespace) -> int:
             output_dir=args.output_dir,
             udid=args.udid,
             still_seconds=args.still,
-            exhibit=args.exhibit,
+            exhibit_number=args.exhibit_number,
             analyst=args.analyst,
             notes=args.notes,
             batch_size=args.batch_size,
@@ -242,13 +252,14 @@ def _run_identify(args: argparse.Namespace) -> int:
     return 0
 
 
-# ── identify-diff (standalone) ────────────────────────────────────────────────
+# ── identify --diff (offline mode) ────────────────────────────────────────────────
 
 def _run_identify_diff(args: argparse.Namespace) -> int:
-    baseline_db = _resolve_to_db(args.baseline, args.case_number, args.imei, args.batch_size)
+    baseline, action = args.diff
+    baseline_db = _resolve_to_db(baseline, args.case_number, args.imei, args.batch_size)
     if baseline_db is None:
         return 1
-    action_db = _resolve_to_db(args.action, args.case_number, args.imei, args.batch_size)
+    action_db = _resolve_to_db(action, args.case_number, args.imei, args.batch_size)
     if action_db is None:
         return 1
 
@@ -270,7 +281,7 @@ def _run_identify_diff(args: argparse.Namespace) -> int:
         res = run_diff(baseline_db, action_db, csv_out, sqlite_out)
     except Exception as exc:
         from app.diagnostics import capture_exception
-        capture_exception({"entrypoint": "cli", "op": "identify-diff"})
+        capture_exception({"entrypoint": "cli", "op": "identify --diff"})
         log.exception(f"error: diff failed — {exc}")
         return 1
 
@@ -300,7 +311,7 @@ def _resolve_to_db(
                 path, db_path,
                 case_number=case_number or "IDENTIFY",
                 imei=imei or "UNKNOWN",
-                notes="identify-diff",
+                notes="identify --diff",
                 batch_size=batch_size,
             )
         except Exception as exc:
