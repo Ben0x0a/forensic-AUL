@@ -148,6 +148,39 @@ def test_redaction_removes_all_plaintext_pii(tmp_path):
         assert planted not in blob, f"{planted!r} survived redaction"
 
 
+def test_redaction_anonymises_exception_args(tmp_path):
+    """``exception.args`` carries the same free text as ``exception.message`` and
+    must be anonymised with it — it used to keep the operator's home directory."""
+    cfg = diagnostics.CrashConfig(crash_dir=tmp_path)
+    evidence = Path.home() / "Cases" / "phone.logarchive"
+    try:
+        raise ValueError(f"cannot open {evidence}")
+    except ValueError:
+        report = json.loads(
+            diagnostics.capture_exception(cfg=cfg).read_text(encoding="utf-8-sig")
+        )
+
+    red = redact_report(report)
+    assert red["exception"]["args"] == ["cannot open ~/Cases/phone.logarchive"]
+    assert str(Path.home()) not in json.dumps(red)
+
+
+def test_redaction_redacts_a_path_passed_straight_to_raise(tmp_path):
+    """A Path handed to `raise` lands in exception.args, in no bucket — it must
+    still be replaced by a placeholder rather than published verbatim."""
+    cfg = diagnostics.CrashConfig(crash_dir=tmp_path)
+    try:
+        raise FileNotFoundError(Path("/evidence/OP-BLUE/phone.logarchive"))
+    except FileNotFoundError:
+        report = json.loads(
+            diagnostics.capture_exception(cfg=cfg).read_text(encoding="utf-8-sig")
+        )
+
+    red = redact_report(report)
+    assert red["exception"]["args"][0]["redacted"] is True
+    assert "OP-BLUE" not in json.dumps(red)
+
+
 def test_redaction_keeps_safe_values_and_marks_sensitive(tmp_path):
     report = json.loads(_write_sample(tmp_path).read_text(encoding="utf-8-sig"))
     red = redact_report(report)
