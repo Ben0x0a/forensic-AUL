@@ -72,7 +72,7 @@ def run_identify_workflow(
     output_dir: Path = Path("."),
     udid: str | None = None,
     still_seconds: int = 60,
-    exhibit: str | None = None,
+    exhibit_number: str | None = None,
     analyst: str | None = None,
     notes: str | None = None,
     batch_size: int = 1_000,
@@ -122,9 +122,21 @@ def run_identify_workflow(
       ``_IDENTIFY_PHASES``); each inner ``run_extract`` call's own 0..1
       progress advances the current phase.
 
+    Every artefact of one run is written into a single **session directory**,
+    ``output_dir/<prefix>/``, where *prefix* is
+    ``<case>-<imei|udid>-<YYYY_MM_DD_HH_MM_SSZ>`` (UTC). The prefix is repeated
+    on each file inside it, so a file stays self-identifying if it is copied
+    out::
+
+        <output_dir>/<prefix>/
+            <prefix>-baseline.logarchive   <prefix>-baseline.db
+            <prefix>-action.logarchive     <prefix>-action.db
+            <prefix>-identified.csv        <prefix>-identified.db
+
     Args:
-        case_number: Investigation/case reference. When falsy, artefacts are
-            prefixed ``identify-<YYYY_MM_DD_HH_MM_SSZ>`` (UTC) instead.
+        case_number: Investigation/case reference. When falsy, the session
+            directory and its artefacts are named
+            ``identify-<YYYY_MM_DD_HH_MM_SSZ>`` (UTC) instead.
         integrity: Forwarded to both ``run_extract`` calls. When ``"off"``
             (the default), the post-acquisition hashing + acquisition-report
             writing is skipped entirely — identify is a research tool, and
@@ -152,7 +164,7 @@ def run_identify_workflow(
         output_dir=output_dir,
         udid=udid,
         still_seconds=still_seconds,
-        exhibit=exhibit,
+        exhibit_number=exhibit_number,
         analyst=analyst,
         notes=notes,
         batch_size=batch_size,
@@ -175,7 +187,7 @@ async def _run_identify_async(
     output_dir: Path,
     udid: str | None,
     still_seconds: int,
-    exhibit: str | None,
+    exhibit_number: str | None,
     analyst: str | None,
     notes: str | None,
     batch_size: int,
@@ -221,8 +233,14 @@ async def _run_identify_async(
             timestamp_str = datetime.now(tz=timezone.utc).strftime("%Y_%m_%d_%H_%M_%SZ")
             prefix = f"identify-{timestamp_str}"
 
-        baseline_archive = output_dir / f"{prefix}-baseline.logarchive"
-        action_archive = output_dir / f"{prefix}-action.logarchive"
+        # Every artefact of a run lives in one session directory named after the
+        # prefix, so a run is a single self-contained folder to archive, move or
+        # hand over — never six files scattered among other runs' output.
+        session_dir = output_dir / prefix
+        session_dir.mkdir(parents=True, exist_ok=True)
+
+        baseline_archive = session_dir / f"{prefix}-baseline.logarchive"
+        action_archive = session_dir / f"{prefix}-action.logarchive"
 
         # Defence in depth: ensure resolved paths still live under output_dir.
         out_resolved = output_dir.resolve()
@@ -286,7 +304,7 @@ async def _run_identify_async(
                     logarchive_path=archive,
                     device=device,
                     case_number=case_number,
-                    exhibit=exhibit,
+                    exhibit_number=exhibit_number,
                     analyst=analyst,
                     notes=f"identify/{label}" + (f" — {notes}" if notes else ""),
                     logarchive_sha256=sha,
@@ -299,8 +317,8 @@ async def _run_identify_async(
     from forensic_aul.ops.extraction.extract import run_extract
 
     imei = device.imei or "UNKNOWN"
-    baseline_db = output_dir / f"{prefix}-baseline.db"
-    action_db = output_dir / f"{prefix}-action.db"
+    baseline_db = session_dir / f"{prefix}-baseline.db"
+    action_db = session_dir / f"{prefix}-action.db"
 
     for label, phase, archive, db in (
         ("baseline", "extract-baseline", baseline_archive, baseline_db),
@@ -311,7 +329,7 @@ async def _run_identify_async(
         run_extract(
             archive, db,
             case_number=case_number, imei=imei,
-            exhibit_number=exhibit, analyst_name=analyst,
+            exhibit_number=exhibit_number, analyst_name=analyst,
             notes=f"identify/{label}" + (f" — {notes}" if notes else ""),
             batch_size=batch_size,
             jobs=jobs,
@@ -332,8 +350,8 @@ async def _run_identify_async(
 
     # ── Diff ──────────────────────────────────────────────────────────────────
     reporter.phase("diff")
-    csv_out = output_dir / f"{prefix}-identified.csv" if write_csv else None
-    sqlite_out = output_dir / f"{prefix}-identified.db"
+    csv_out = session_dir / f"{prefix}-identified.csv" if write_csv else None
+    sqlite_out = session_dir / f"{prefix}-identified.db"
     say(f"Diffing → {sqlite_out}")
     diff = run_diff(baseline_db, action_db, csv_out, sqlite_out)
     reporter.finish("complete")

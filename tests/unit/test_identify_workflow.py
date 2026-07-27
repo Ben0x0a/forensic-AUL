@@ -128,6 +128,32 @@ class TestWorkflow:
         # Chain-of-custody prefix embeds case + IMEI.
         assert res.baseline_db.name.startswith("CASE-1-356938035643809-")
 
+    def test_artefacts_share_one_session_directory(self, patched):
+        """Every artefact of a run lands in output_dir/<prefix>/, not loose in cwd."""
+        res = run_identify_workflow(
+            "CASE-1",
+            output_dir=patched.out,
+            confirm=lambda device: True,
+            wait_for_action=lambda: None,
+        )
+        artefacts = [
+            res.baseline_archive, res.action_archive,
+            res.baseline_db, res.action_db,
+            res.diff.sqlite_path,
+        ]
+        if res.diff.csv_path is not None:
+            artefacts.append(res.diff.csv_path)
+
+        session_dirs = {p.parent for p in artefacts}
+        assert len(session_dirs) == 1, f"artefacts scattered across {session_dirs}"
+
+        session_dir = session_dirs.pop()
+        # The session dir sits directly under output_dir and carries the prefix,
+        # which each file inside repeats so it stays self-identifying if moved.
+        assert session_dir.parent == patched.out
+        assert session_dir.name.startswith("CASE-1-356938035643809-")
+        assert all(p.name.startswith(session_dir.name) for p in artefacts)
+
     def test_confirm_decline_aborts_before_collection(self, patched):
         with pytest.raises(AcquisitionAborted):
             run_identify_workflow(
