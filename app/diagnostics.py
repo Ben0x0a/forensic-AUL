@@ -10,7 +10,7 @@ Defines : ``install_excepthook`` (global ``sys``/``threading`` hooks),
 Used by : launcher.cli / launcher.gui (install the hooks at start-up), and the
           broad ``except`` handlers in app.extract_session and launcher.cmds.*.
           app.sanitize consumes the classification vocabulary; launcher.cmds.
-          report_cmd reads the reports this module writes.
+          redact_errors_cmd reads the reports this module writes.
 Uses    : the STANDARD LIBRARY ONLY (plus a lazy, guarded read of
           ``forensic_aul.__version__``). Domain types are recognised by *name*,
           never imported — so this module still loads and runs even when a
@@ -63,7 +63,7 @@ SENSITIVE = "sensitive"
 
 # ── configuration ─────────────────────────────────────────────────────────────
 # App-layer tunables. Consumed by: this module (capture caps + output dir) and
-# launcher.cmds.report_cmd (lists CRASH_REPORT_DIR). The app-data dir mirrors the
+# launcher.cmds.redact_errors_cmd (lists CRASH_REPORT_DIR). The app-data dir mirrors the
 # convention already used by gui.settings_store / gui.recent_store.
 
 _APP_DATA_DIR = Path.home() / ".config" / "faul"
@@ -192,10 +192,14 @@ def _sha256_bytes(data: bytes) -> str:
 
 def _safe_size(path: Any) -> int | None:
     """File size via a single stat (metadata only — never reads/hashes the file, so a
-    512 GB acquisition costs nothing). None when it does not exist / is not stattable."""
+    512 GB acquisition costs nothing). None when it does not exist / is not stattable.
+
+    Broad except: a PurePath (PurePosixPath is common in the source-preparation code)
+    has no ``stat`` at all, and letting that AttributeError escape would sink the
+    whole crash report in the very frames we most need captured."""
     try:
         return path.stat().st_size
-    except OSError:
+    except Exception:  # noqa: BLE001 - a size probe must never crash the handler.
         return None
 
 
