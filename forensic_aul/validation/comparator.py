@@ -26,7 +26,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from forensic_aul.testing.ndjson_loader import LoadResult, RefKey, RefRecord
+from forensic_aul.validation.ndjson_loader import LoadResult, RefKey, RefRecord
 
 log = logging.getLogger(__name__)
 
@@ -95,6 +95,38 @@ LEFT JOIN process_uuids pu  ON l.process_uuid_id = pu.id
 """
 
 
+def db_record_from_row(row: sqlite3.Row) -> DbRecord:
+    """Build a :class:`DbRecord` from a ``_DB_QUERY`` row (normalising the boot UUID
+    into the match key). Shared by :func:`load_db_records` and the streaming
+    ``merge_compare`` DB cursor."""
+    key = RefKey(
+        boot_uuid=(row["boot_uuid"] or "").upper().replace("-", ""),
+        mach_timestamp=row["timestamp_mach"],
+        # `logs.tid` is nullable: coerce like the record field below, so the key
+        # stays orderable for the streaming merge-join in merge_compare.
+        thread_id=row["tid"] or 0,
+    )
+    return DbRecord(
+        key=key,
+        mach_timestamp=row["timestamp_mach"],
+        timestamp_unix_ns=row["timestamp_unix_ns"] or 0,
+        boot_uuid=row["boot_uuid"] or "",
+        event_type=row["event_type"] or "",
+        log_level=row["log_level"] or "",
+        pid=row["pid"] or 0,
+        tid=row["tid"] or 0,
+        euid=row["euid"] or 0,
+        subsystem=row["subsystem"],
+        category=row["category"],
+        activity_id=row["activity_id"] or 0,
+        parent_activity_id=row["parent_activity_id"] or 0,
+        message=row["message"],
+        message_format_string=row["message_format_string"],
+        process_uuid=row["process_uuid"],
+        library_uuid=row["library_uuid"],
+    )
+
+
 def load_db_records(db_path: Path | str) -> dict[RefKey, DbRecord]:
     """Load all rows from the logs table into a RefKey-indexed dict.
 
@@ -111,34 +143,11 @@ def load_db_records(db_path: Path | str) -> dict[RefKey, DbRecord]:
     try:
         conn.row_factory = sqlite3.Row
         for row in conn.execute(_DB_QUERY):
-            boot_uuid_norm = (row["boot_uuid"] or "").upper().replace("-", "")
-            key = RefKey(
-                boot_uuid=boot_uuid_norm,
-                mach_timestamp=row["timestamp_mach"],
-                thread_id=row["tid"],
-            )
-            if key in records:
+            rec = db_record_from_row(row)
+            if rec.key in records:
                 collisions += 1
                 continue
-            records[key] = DbRecord(
-                key=key,
-                mach_timestamp=row["timestamp_mach"],
-                timestamp_unix_ns=row["timestamp_unix_ns"] or 0,
-                boot_uuid=row["boot_uuid"] or "",
-                event_type=row["event_type"] or "",
-                log_level=row["log_level"] or "",
-                pid=row["pid"] or 0,
-                tid=row["tid"] or 0,
-                euid=row["euid"] or 0,
-                subsystem=row["subsystem"],
-                category=row["category"],
-                activity_id=row["activity_id"] or 0,
-                parent_activity_id=row["parent_activity_id"] or 0,
-                message=row["message"],
-                message_format_string=row["message_format_string"],
-                process_uuid=row["process_uuid"],
-                library_uuid=row["library_uuid"],
-            )
+            records[rec.key] = rec
     finally:
         conn.close()
 
@@ -242,7 +251,85 @@ class ComparisonReport:
     ts_samples: list["TimestampMismatch"] = field(default_factory=list)
 
 
-# ── Main comparison function ──────────────────────────────────────────────────
+def new_field_stats() -> dict[str, FieldStats]:
+    """The Level-3b field counters, in a fresh dict — shared by both comparison paths."""
+    names = [
+        "event_type", "log_level", "pid", "euid",
+        "subsystem", "category", "activity_id", "parent_activity_id",
+    ]
+    return {n: FieldStats(name=n) for n in names}
+
+
+def compare_matched_pair(
+    ref_rec: RefRecord,
+    db_rec: DbRecord,
+    report: ComparisonReport,
+    fstats: dict[str, FieldStats],
+    *,
+    max_samples: int,
+) -> int:
+    """Compare one matched (reference, DB) pair — the Level-3 a/b/c logic.
+
+    Mutates *report* (message/timestamp/format tallies + bounded samples) and
+    *fstats* (per-field tallies) in place, and returns the absolute µs timestamp
+    delta so the caller can track the worst case. Extracted so the in-RAM
+    :func:`compare` and the streaming merge-join share one implementation.
+    """
+    abs_delta = 0
+
+    # Timestamp at microsecond precision (Apple's resolution); tolerate ±1 µs of
+    # independent half-up rounding around a sub-µs boundary.
+    if ref_rec.timestamp_unix_us is not None and db_rec.timestamp_unix_ns:
+        db_us = db_rec.timestamp_unix_ns // 1_000
+        delta = db_us - ref_rec.timestamp_unix_us
+        abs_delta = abs(delta)
+        report.ts_total += 1
+        if delta == 0:
+            report.ts_us_match += 1
+            report.ts_us_within_1 += 1
+        elif abs_delta <= 1:
+            report.ts_us_within_1 += 1
+        elif len(report.ts_samples) < max_samples:
+            report.ts_samples.append(TimestampMismatch(
+                key=ref_rec.key, ref_unix_us=ref_rec.timestamp_unix_us,
+                db_unix_us=db_us, delta_us=delta,
+            ))
+
+    # Message: exact, else normalised.
+    if ref_rec.event_message == db_rec.message:
+        report.msg_exact += 1
+        report.msg_normalised += 1
+    elif _normalise_msg(ref_rec.event_message) == _normalise_msg(db_rec.message):
+        report.msg_normalised += 1
+    elif len(report.msg_mismatches) < max_samples:
+        report.msg_mismatches.append(MessageMismatch(
+            key=ref_rec.key, expected=ref_rec.event_message, got=db_rec.message,
+            format_str_expected=ref_rec.format_string,
+            format_str_got=db_rec.message_format_string,
+        ))
+
+    if ref_rec.format_string == db_rec.message_format_string:
+        report.msg_format_match += 1
+
+    comparisons: list[tuple[str, object, object]] = [
+        ("event_type",         ref_rec.event_type,          db_rec.event_type),
+        ("log_level",          ref_rec.log_level,           db_rec.log_level),
+        ("pid",                ref_rec.pid,                 db_rec.pid),
+        ("euid",               ref_rec.euid,                db_rec.euid),
+        ("subsystem",          ref_rec.subsystem,           db_rec.subsystem),
+        ("category",           ref_rec.category,            db_rec.category),
+        ("activity_id",        ref_rec.activity_id,         db_rec.activity_id),
+        ("parent_activity_id", ref_rec.parent_activity_id,  db_rec.parent_activity_id),
+    ]
+    for fname, ref_val, db_val in comparisons:
+        fs = fstats[fname]
+        fs.total += 1
+        if ref_val == db_val:
+            fs.match += 1
+    return abs_delta
+
+
+# ── Main comparison function (in-RAM; the streaming twin is merge_compare) ─────
 
 def compare(
     ref: LoadResult,
@@ -257,12 +344,7 @@ def compare(
         db_total=len(db_records),
     )
 
-    # Initialise field-level counters
-    field_names = [
-        "event_type", "log_level", "pid", "euid",
-        "subsystem", "category", "activity_id", "parent_activity_id",
-    ]
-    fstats: dict[str, FieldStats] = {n: FieldStats(name=n) for n in field_names}
+    fstats = new_field_stats()
 
     ref_keys = set(ref.records.keys())
     db_keys  = set(db_records.keys())
@@ -298,75 +380,11 @@ def compare(
     # ── Level 3 : message + timestamp + field comparison on matched keys ────
     ts_max_abs = 0
     for key in matched_keys:
-        ref_rec = ref.records[key]
-        db_rec  = db_records[key]
-
-        # Timestamp comparison at microsecond precision (Apple's resolution).
-        # We tolerate exact equality ("us_match") and ±1 µs ("within_1") to
-        # absorb the harmless half-up rounding when both sides round
-        # independently around a sub-µs boundary.
-        if ref_rec.timestamp_unix_us is not None and db_rec.timestamp_unix_ns:
-            db_us = db_rec.timestamp_unix_ns // 1_000
-            delta = db_us - ref_rec.timestamp_unix_us
-            abs_delta = abs(delta)
-            report.ts_total += 1
-            if delta == 0:
-                report.ts_us_match += 1
-                report.ts_us_within_1 += 1
-            elif abs_delta <= 1:
-                report.ts_us_within_1 += 1
-            elif len(report.ts_samples) < max_samples:
-                report.ts_samples.append(TimestampMismatch(
-                    key=key,
-                    ref_unix_us=ref_rec.timestamp_unix_us,
-                    db_unix_us=db_us,
-                    delta_us=delta,
-                ))
-            if abs_delta > ts_max_abs:
-                ts_max_abs = abs_delta
-
-        # Message exact
-        if ref_rec.event_message == db_rec.message:
-            report.msg_exact += 1
-            report.msg_normalised += 1
-        elif _normalise_msg(ref_rec.event_message) == _normalise_msg(db_rec.message):
-            report.msg_normalised += 1
-        else:
-            if len(report.msg_mismatches) < max_samples:
-                report.msg_mismatches.append(MessageMismatch(
-                    key=key,
-                    expected=ref_rec.event_message,
-                    got=db_rec.message,
-                    format_str_expected=ref_rec.format_string,
-                    format_str_got=db_rec.message_format_string,
-                ))
-
-        # Format string match
-        if ref_rec.format_string == db_rec.message_format_string:
-            report.msg_format_match += 1
-
-        # Structural fields
-        comparisons: list[tuple[str, object, object]] = [
-            ("event_type",           ref_rec.event_type,          db_rec.event_type),
-            ("log_level",            ref_rec.log_level,           db_rec.log_level),
-            ("pid",                  ref_rec.pid,                 db_rec.pid),
-            ("euid",                 ref_rec.euid,                db_rec.euid),
-            ("subsystem",            ref_rec.subsystem,           db_rec.subsystem),
-            ("category",             ref_rec.category,            db_rec.category),
-            ("activity_id",          ref_rec.activity_id,         db_rec.activity_id),
-            ("parent_activity_id",   ref_rec.parent_activity_id,  db_rec.parent_activity_id),
-        ]
-        for fname, ref_val, db_val in comparisons:
-            fs = fstats[fname]
-            fs.total += 1
-            if ref_val == db_val:
-                fs.match += 1
-            else:
-                log.debug(
-                    "field mismatch [%s] key=(%s, %d, %d)  ref=%r  db=%r",
-                    fname, key.boot_uuid[:8], key.mach_timestamp, key.thread_id,
-                    ref_val, db_val,
-                )
+        abs_delta = compare_matched_pair(
+            ref.records[key], db_records[key], report, fstats, max_samples=max_samples
+        )
+        if abs_delta > ts_max_abs:
+            ts_max_abs = abs_delta
 
     report.field_stats = list(fstats.values())
     report.ts_max_abs_us_delta = ts_max_abs

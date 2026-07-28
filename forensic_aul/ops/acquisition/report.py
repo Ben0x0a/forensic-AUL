@@ -11,7 +11,7 @@ Structure
 
   "case": {                         ← entered manually by the operator
     "case_number": "...",
-    "exhibit": "...",
+    "exhibit_number": "...",
     "analyst": "...",
     "notes": "..."
   },
@@ -91,7 +91,7 @@ def build_report_dict(
     device: DeviceInfo,
     *,
     case_number: str,
-    exhibit: str | None,
+    exhibit_number: str | None,
     analyst: str | None,
     notes: str | None,
     logarchive_sha256: str,
@@ -117,7 +117,7 @@ def build_report_dict(
 
         "case": {
             "case_number":  case_number,
-            "exhibit":      exhibit  or "",
+            "exhibit_number":      exhibit_number  or "",
             "analyst":      analyst  or "",
             "notes":        notes    or "",
         },
@@ -141,7 +141,7 @@ def write_acquisition_report(
     device: DeviceInfo,
     *,
     case_number: str,
-    exhibit: str | None,
+    exhibit_number: str | None,
     analyst: str | None,
     notes: str | None,
     logarchive_sha256: str,
@@ -156,7 +156,7 @@ def write_acquisition_report(
     """
     report = build_report_dict(
         logarchive_path, device,
-        case_number=case_number, exhibit=exhibit, analyst=analyst, notes=notes,
+        case_number=case_number, exhibit_number=exhibit_number, analyst=analyst, notes=notes,
         logarchive_sha256=logarchive_sha256, file_count=file_count, file_hashes=file_hashes,
     )
     # Append (do not replace) — `Path.with_suffix` would strip ".logarchive".

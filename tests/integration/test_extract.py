@@ -205,7 +205,7 @@ class TestComparisonAgainstReference:
         strict=False,
     )
     def test_entry_count_within_5_percent(self, db_conn):
-        from forensic_aul.testing.ndjson_loader import load_ndjson
+        from forensic_aul.validation.ndjson_loader import load_ndjson
         ref = load_ndjson(_NDJSON)
         db_count = db_conn.execute("SELECT COUNT(*) FROM logs").fetchone()[0]
         delta = abs(db_count - ref.count) / max(ref.count, 1)
@@ -215,8 +215,8 @@ class TestComparisonAgainstReference:
         )
 
     def test_timestamp_match_rate_above_90_percent(self, extracted_db):
-        from forensic_aul.testing.ndjson_loader import load_ndjson
-        from forensic_aul.testing.comparator import compare, load_db_records
+        from forensic_aul.validation.ndjson_loader import load_ndjson
+        from forensic_aul.validation.comparator import compare, load_db_records
         ref = load_ndjson(_NDJSON)
         db_records = load_db_records(extracted_db)
         report = compare(ref, db_records, max_samples=5)

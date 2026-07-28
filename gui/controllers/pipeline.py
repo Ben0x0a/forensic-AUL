@@ -89,7 +89,7 @@ class AcquireController:
             case_number=case,
             output_dir=Path(self._view.output_path()),
             udid=self._view.device_udid(),
-            exhibit=self._view.exhibit_text() or None,
+            exhibit_number=self._view.exhibit_text() or None,
             analyst=self._view.analyst_text() or None,
             notes=self._view.notes_text() or None,
             confirm=lambda _device: True,  # the GUI already chose to start
@@ -109,7 +109,7 @@ class AcquireController:
             "logarchive": path or None,
             "imei": getattr(device, "imei", None) if device is not None else None,
             "case": self._view.case_text() or None,
-            "exhibit": self._view.exhibit_text() or None,
+            "exhibit_number": self._view.exhibit_text() or None,
             "analyst": self._view.analyst_text() or None,
         }
         self._recents.add("acquire", self._view.output_path(), Path(path).name if path else "")
@@ -170,7 +170,7 @@ class ExtractController:
         filled = self._view.fill_fields(
             case=case.get("case_number"),
             imei=device.get("imei"),
-            exhibit=case.get("exhibit"),
+            exhibit=case.get("exhibit_number"),
             analyst=case.get("analyst"),
             only_empty=True,
         )

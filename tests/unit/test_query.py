@@ -168,13 +168,13 @@ class TestQueryFilters:
         assert list(query_logs(db, format_str="no such template")) == []
 
     def test_message_contains_is_literal(self, db):
-        # Substring anywhere, with %/_ matching themselves (unlike grep).
+        # Substring anywhere, with %/_ matching themselves (unlike like).
         assert len(list(query_logs(db, message_contains="100%_x"))) == 1
         assert len(list(query_logs(db, message_contains="%"))) == 1  # the literal % row
         assert [r.message for r in query_logs(db, message_contains="again")] == ["Hello again"]
 
-    def test_grep_stays_raw_like(self, db):
-        assert len(list(query_logs(db, grep="%Location%"))) == 1
+    def test_like_stays_raw_like(self, db):
+        assert len(list(query_logs(db, like="%Location%"))) == 1
 
     def test_time_window(self, db):
         rows = list(query_logs(db, time_from="2024-01-15T12:00:02",

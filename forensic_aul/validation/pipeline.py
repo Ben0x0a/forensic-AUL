@@ -1,19 +1,19 @@
-"""The ``test`` self-check pipeline: acquire / generate-reference / extract / compare.
+"""The ``validate`` self-check pipeline: acquire / generate-reference / extract / compare.
 
 This is QA tooling, not a user-facing operation — it orchestrates the extract
 pipeline, Apple's ``log show``/``log collect`` CLIs, and the comparator to prove
 our output matches Apple's ground truth. It is non-interactive: the argument
 *shape* selects the mode, and everything else runs to completion. The CLI
-handler (``launcher/cmds/test_cmd.py``) only parses arguments and calls
+handler (``launcher/cmds/validate_tool_cmd.py``) only parses arguments and calls
 :func:`run`.
 
 Source forms (auto-detected by file shape):
 
-  test                                 # mac: list devices, refuse otherwise
-  test --from-device [NAME_OR_UDID]    # mac: collect → show → extract → diff
-  test <logarchive> [ref.ndjson]       # extract → diff (ref auto-made on mac)
-  test <db.sqlite>  <ref.ndjson>       # diff only
-  test <db.sqlite>  --regen-ref <logarchive>   # mac: re-make ref, then diff
+  validate                                 # mac: list devices, refuse otherwise
+  validate --from-device [NAME_OR_UDID]    # mac: collect → show → extract → diff
+  validate <logarchive> [ref.ndjson]       # extract → diff (ref auto-made on mac)
+  validate <db.sqlite>  <ref.ndjson>       # diff only
+  validate <db.sqlite>  --regen-ref <logarchive>   # mac: re-make ref, then diff
 """
 
 from __future__ import annotations
@@ -79,6 +79,8 @@ class _Resources:
 
 def run(args: argparse.Namespace) -> int:
     """Run the self-check pipeline for the parsed CLI *args*."""
+    from forensic_aul.validation.platform import capabilities
+    log.info(f"validate: environment — {capabilities().summary()}")
     resources = _Resources()
     keep_paths: set[Path] = set()
 
@@ -94,21 +96,21 @@ def _dispatch(
     keep_paths: set[Path],
 ) -> int:
     """Decide what to acquire/generate based on argument shape."""
-    from forensic_aul.testing.platform import is_macos
+    from forensic_aul.validation.platform import is_macos
+
+    # Mode L2: --acquisition A B → file-level acquisition-fidelity check (parser-free,
+    # cross-platform, no root). Checked first: it needs neither a device nor `log`.
+    if getattr(args, "acquisition", None):
+        return _run_acquisition_compare(args)
 
     # Mode "no args": list devices on macOS, otherwise help.
     if args.source is None and args.from_device is None and args.regen_ref is None:
         return _print_devices_or_help()
 
-    # Mode 2: --from-device (acquire fresh logarchive from a phone, then full pipeline)
+    # Mode L3: --from-device → acquire the same device both ways, check acquisition
+    # (L2) + parser (L1). Needs macOS + root (Apple `log collect`).
     if args.from_device is not None:
-        if not is_macos():
-            log.error("error: --from-device requires macOS (Apple `log collect`).")
-            return 1
-        logarchive = _collect_from_device(args.from_device or None, resources)
-        ref_path = _make_reference(logarchive, args, resources, keep_paths)
-        db_path = _extract_logarchive(logarchive, args, resources, keep_paths)
-        return _run_compare(db_path, ref_path, args)
+        return _run_l3_from_device(args, resources, keep_paths)
 
     # Beyond this point, SOURCE is required.
     if args.source is None:
@@ -157,10 +159,10 @@ def _dispatch(
 
 def _print_devices_or_help() -> int:
     """No arguments: on mac, list devices; otherwise nudge the user toward --help."""
-    from forensic_aul.testing.platform import is_macos, list_devices
+    from forensic_aul.validation.platform import is_macos, list_devices
 
     if not is_macos():
-        log.error("Nothing to do. Try `forensic-aul test --help`.")
+        log.error("Nothing to do. Try `forensic-aul validate-tool --help`.")
         return 1
     try:
         devices = list_devices()
@@ -179,18 +181,78 @@ def _print_devices_or_help() -> int:
 
 
 def _collect_from_device(
-    name_or_udid: str | None,
+    udid: str,
     resources: _Resources,
+    *,
+    last: str | None = None,
 ) -> Path:
-    """Acquire a fresh logarchive from the resolved device."""
-    from forensic_aul.testing import log_collect
-    from forensic_aul.testing.platform import resolve_device
-
-    device = resolve_device(name_or_udid)
-    log.info(f"Acquiring from device: {device.display()}")
+    """Acquire a logarchive from *udid* via Apple ``log collect`` (needs root)."""
+    from forensic_aul.validation import log_collect
 
     out_dir = resources.tempdir(prefix="forensic_aul_collect_")
-    return log_collect.run(device.udid, out_dir)
+    return log_collect.run(udid, out_dir, last=last)
+
+
+def _acquire_pymobiledevice3(udid: str, args: argparse.Namespace, resources: _Resources) -> Path:
+    """Acquire a loose logarchive from *udid* via pymobiledevice3 (userspace)."""
+    from forensic_aul.ops.acquisition.acquire import acquire
+
+    out_dir = resources.tempdir(prefix="forensic_aul_pmd3_")
+    result = acquire(
+        case_number="VALIDATE-L3",
+        output_dir=out_dir,
+        udid=udid,
+        start_time=getattr(args, "collect_last", None),
+        pack=False,   # loose .logarchive (no .faul wrapper)
+    )
+    return result.logarchive_path
+
+
+def _run_l3_from_device(
+    args: argparse.Namespace,
+    resources: _Resources,
+    keep_paths: set[Path],
+) -> int:
+    """L3 full-native check: acquire the SAME device both ways, then verify
+    acquisition equivalence (L2, file-level) and parser fidelity (L1) on the
+    metadata-complete ``log collect`` archive. Needs macOS + root."""
+    from forensic_aul.validation.archive_compare import compare_archives, render_archive_report
+    from forensic_aul.validation.platform import capabilities, resolve_device
+
+    caps = capabilities()
+    if not caps.is_macos:
+        log.error("--from-device needs macOS (Apple `log collect`). Elsewhere, run "
+                  "`validate --acquisition <A> <B>` for the acquisition check and supply a "
+                  "reference ndjson for the parser check.")
+        return 1
+    if not caps.is_root:
+        log.error("--from-device needs root for `log collect` — run "
+                  "`sudo faul.py validate-tool --from-device`. (pymobiledevice3 `acquire` is the "
+                  "userspace alternative and needs no root.)")
+        return 1
+
+    device = resolve_device(args.from_device or None)
+    log.info(f"L3 full-pipeline validation on: {device.display()}")
+
+    # Acquire both ways, back-to-back, to minimise live-log drift (the append-check
+    # in L2 absorbs whatever tail grows between the two collections).
+    archive_pmd3 = _acquire_pymobiledevice3(device.udid, args, resources)
+    archive_collect = _collect_from_device(device.udid, resources, last=getattr(args, "collect_last", None))
+
+    # L2 — acquisition fidelity (file-level, parser-free).
+    l2 = compare_archives(archive_pmd3, archive_collect,
+                          label_a="pymobiledevice3", label_b="log-collect")
+    for line in render_archive_report(l2).splitlines():
+        log.info("%s", line)
+
+    # L1 — parser fidelity on the metadata-complete log-collect archive.
+    ref_path = _make_reference(archive_collect, args, resources, keep_paths)
+    db_path = _extract_logarchive(archive_collect, args, resources, keep_paths)
+    l1_code = _run_compare(db_path, ref_path, args)
+
+    log.info(f"L3 result: acquisition (L2) = {'PASS' if l2.passed else 'FAIL'}  ·  "
+             f"parser (L1) = {'PASS' if l1_code == 0 else 'FAIL'}")
+    return 0 if (l2.passed and l1_code == 0) else 1
 
 
 def _make_reference(
@@ -200,7 +262,7 @@ def _make_reference(
     keep_paths: set[Path],
 ) -> Path:
     """Run `log show` to produce the reference ndjson."""
-    from forensic_aul.testing import log_show
+    from forensic_aul.validation import log_show
 
     flags = log_show.DEFAULT_FLAGS
     if args.log_show_args:
@@ -240,13 +302,44 @@ def _extract_logarchive(
         imei=args.imei,
         exhibit_number=None,
         analyst_name=None,
-        notes="auto-generated by forensic-aul test",
+        notes="auto-generated by forensic-aul validate-tool",
         batch_size=getattr(args, "batch_size", 1_000),
     )
     if args.keep_db:
         keep_paths.add(db_path.resolve())
         log.info(f"Database kept at: {db_path}")
     return db_path
+
+
+# ── L2 : acquisition comparison (file-level, parser-free) ─────────────────────
+
+def _run_acquisition_compare(args: argparse.Namespace) -> int:
+    """Compare two logarchives at the file level (SHA-256 + append-check)."""
+    from forensic_aul.validation.archive_compare import compare_archives, render_archive_report
+
+    archive_a, archive_b = args.acquisition
+    for path in (archive_a, archive_b):
+        if not Path(path).is_dir():
+            log.error(f"error: not a logarchive directory: {path}")
+            return 1
+
+    result = compare_archives(archive_a, archive_b, label_a=archive_a.name, label_b=archive_b.name)
+    text = render_archive_report(result)
+    for line in text.splitlines():
+        log.info("%s", line)
+    if args.report:
+        try:
+            args.report.parent.mkdir(parents=True, exist_ok=True)
+            args.report.write_text(text, encoding="utf-8")
+            log.info(f"Report written to: {args.report}")
+        except OSError:
+            log.exception("Could not write report file")
+
+    if result.passed:
+        log.info("PASS: the two acquisitions copied identical device files (append aside).")
+        return 0
+    log.error(f"FAIL: {len(result.diverged)} device file(s) diverged between the acquisitions.")
+    return 1
 
 
 # ── Comparison ────────────────────────────────────────────────────────────────
@@ -256,30 +349,24 @@ def _run_compare(
     ref_path: Path,
     args: argparse.Namespace,
 ) -> int:
-    """Load both sides, run the comparator, render the report, decide exit code."""
-    from forensic_aul.testing.comparator import compare, load_db_records, render_report
-    from forensic_aul.testing.ndjson_loader import load_ndjson
-
-    # ── Load reference ────────────────────────────────────────────────────────
-    log.info(f"Loading reference ndjson: {ref_path}")
-    ref = load_ndjson(ref_path)
-    log.info(f"Reference loaded : {ref.count} records  (skipped: {dict(ref.skipped_event_types)}  user_action: {ref.user_action_count}  collisions: {ref.collisions})")
-
-    # ── Load DB ───────────────────────────────────────────────────────────────
-    log.info(f"Loading database: {db_path}")
-    db_records = load_db_records(db_path)
+    """Stream both sides through the sort-merge comparator, render, decide exit code."""
+    from forensic_aul.validation.comparator import render_report
+    from forensic_aul.validation.merge_compare import merge_compare
 
     # ── Optional ndjson export ────────────────────────────────────────────────
+    # Opt-in only: the exporter needs the DB rows in a dict, so this is the one
+    # path that loads the DB into RAM. The comparison itself stays streaming.
     if args.ndjson_output:
-        from forensic_aul.testing.ndjson_exporter import export_db_to_ndjson
+        from forensic_aul.validation.comparator import load_db_records
+        from forensic_aul.validation.ndjson_exporter import export_db_to_ndjson
         ndjson_out: Path = args.ndjson_output
         ndjson_out.parent.mkdir(parents=True, exist_ok=True)
-        n = export_db_to_ndjson(db_records, ndjson_out)
+        n = export_db_to_ndjson(load_db_records(db_path), ndjson_out)
         log.info(f"ndjson export: {n} records → {ndjson_out}")
 
-    # ── Compare ───────────────────────────────────────────────────────────────
-    log.info("Running comparison…")
-    report = compare(ref, db_records, max_samples=args.samples)
+    # ── Compare (flat-memory sort-merge on disk) ──────────────────────────────
+    log.info(f"Comparing (streaming sort-merge): DB={db_path}  ref={ref_path}")
+    report = merge_compare(db_path, ref_path, max_samples=args.samples)
 
     text = render_report(report)
     if args.report:

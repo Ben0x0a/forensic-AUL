@@ -1,4 +1,4 @@
-"""AUL Parser — ``test`` subcommand.
+"""AUL Parser — ``validate`` subcommand.
 
 Compares the output of ``forensic-aul extract`` against the ground-truth
 ``log show --style ndjson`` produced by Apple. Designed to operate as
@@ -6,15 +6,18 @@ autonomously as possible: on macOS, a single ``.logarchive`` argument is
 enough; on a Mac with a phone connected, a single ``--from-device``
 flag triggers the whole pipeline (collect → show → extract → diff).
 
+(Named ``validate-tool`` — not ``test`` — so it never reads as the project's pytest
+suite in ``tests/``; the runtime validation tooling lives in ``forensic_aul/validation/``.)
+
 Source forms (auto-detected by file shape):
 
-  forensic-aul test                                 # mac: list devices, refuse otherwise
-  forensic-aul test --from-device                   # mac: 1 device → auto
-  forensic-aul test --from-device <NAME_OR_UDID>    # mac: explicit device
-  forensic-aul test <logarchive>                    # mac: auto-generate ref
-  forensic-aul test <logarchive> <ref.ndjson>       # cross-platform
-  forensic-aul test <db.sqlite>   <ref.ndjson>      # cross-platform
-  forensic-aul test <db.sqlite>   --regen-ref <logarchive>   # mac: re-generate ref
+  forensic-aul validate-tool                                 # mac: list devices, refuse otherwise
+  forensic-aul validate-tool --from-device                   # mac: 1 device → auto
+  forensic-aul validate-tool --from-device <NAME_OR_UDID>    # mac: explicit device
+  forensic-aul validate-tool <logarchive>                    # mac: auto-generate ref
+  forensic-aul validate-tool <logarchive> <ref.ndjson>       # cross-platform
+  forensic-aul validate-tool <db.sqlite>   <ref.ndjson>      # cross-platform
+  forensic-aul validate-tool <db.sqlite>   --regen-ref <logarchive>   # mac: re-generate ref
 
 Pass criterion
 --------------
@@ -30,17 +33,17 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-_TEST_CASE_NUMBER = "TEST"
+_VALIDATE_CASE_NUMBER = "VALIDATE"
 # Synthetic placeholder IMEI — all-zero, NOT a Luhn-valid identifier.
-_TEST_IMEI = "000000000000000"
+_VALIDATE_IMEI = "000000000000000"
 
 
 def add_subcommand(sub) -> None:  # type: ignore[type-arg]
     p = sub.add_parser(
-        "test",
-        help="Compare extract output against an Apple 'log show' ndjson reference.",
+        "validate-tool",
+        help="Validate FAUL itself against Apple's own tools (log show / log collect).",
         description=(
-            "Compares the output of `forensic-aul extract` against Apple's "
+            "Validates the output of `forensic-aul extract` against Apple's "
             "`log show --style ndjson` ground truth.\n\n"
             "On macOS, the reference can be generated automatically from a "
             "logarchive on disk, or even acquired straight from a connected "
@@ -84,6 +87,18 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
         help=(
             "Force re-generation of the reference ndjson from this logarchive "
             "(macOS only). Useful when SOURCE is an existing DB."
+        ),
+    )
+    src_group.add_argument(
+        "--acquisition",
+        nargs=2,
+        type=Path,
+        metavar=("ARCHIVE_A", "ARCHIVE_B"),
+        help=(
+            "L2 acquisition check: compare two logarchives file-by-file "
+            "(SHA-256 + append-check), parser-free — proves two acquisition "
+            "methods (e.g. pymobiledevice3 vs `log collect`) copied identical "
+            "device files. Cross-platform; needs no reference and no root."
         ),
     )
 
@@ -131,13 +146,23 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
             "Pass them as a single quoted string."
         ),
     )
+    p.add_argument(
+        "--collect-last",
+        type=str,
+        metavar="DURATION",
+        default=None,
+        help=(
+            "For --from-device (L3): bound both device collections to this window "
+            "(e.g. '1h', '30m') — keeps the capture small/fast and drift minimal."
+        ),
+    )
 
     p.add_argument(
         "--db-output",
         type=Path,
         metavar="DB_PATH",
         default=None,
-        help="When extracting, write the DB here (default: persistent file next to the source).",
+        help="When extracting, write the DB here (default: an auto-created temp dir, removed unless --keep-db).",
     )
     p.add_argument(
         "--keep-db",
@@ -158,14 +183,14 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
     p.add_argument(
         "--case-number",
         metavar="CASE",
-        default=_TEST_CASE_NUMBER,
-        help=f"Case number used for auto-extract (default: {_TEST_CASE_NUMBER!r}).",
+        default=_VALIDATE_CASE_NUMBER,
+        help=f"Case number used for auto-extract (default: {_VALIDATE_CASE_NUMBER!r}).",
     )
     p.add_argument(
         "--imei",
         metavar="IMEI",
-        default=_TEST_IMEI,
-        help=f"IMEI used for auto-extract (default: {_TEST_IMEI!r}).",
+        default=_VALIDATE_IMEI,
+        help=f"IMEI used for auto-extract (default: {_VALIDATE_IMEI!r}).",
     )
 
 
@@ -173,5 +198,5 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
 
 def run(args: argparse.Namespace) -> int:
     """Delegate to the self-check pipeline (QA tooling lives in the library)."""
-    from forensic_aul.testing.pipeline import run as run_pipeline
+    from forensic_aul.validation.pipeline import run as run_pipeline
     return run_pipeline(args)

@@ -45,8 +45,10 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
     sp.required = True
 
     p_list = sp.add_parser("list", help="List signatures.")
-    p_list.add_argument("--tag",     metavar="TAG", default=None)
-    p_list.add_argument("--process", metavar="P",   default=None)
+    p_list.add_argument("--tag",     metavar="TAG", default=None,
+                        help="Only signatures carrying this tag.")
+    p_list.add_argument("--process", metavar="P",   default=None,
+                        help="Only signatures that match this process name.")
     p_list.add_argument("--json",    action="store_true",
                         help="Emit machine-readable JSON.")
 

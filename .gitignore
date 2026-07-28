@@ -28,6 +28,7 @@ env/
 
 # --- Internal working notes (not shipped) ---
 tasks/
+docs/internal/
 
 # --- Upstream reference source (fetched on demand by scripts/gen_decoders.py) ---
 original/
@@ -35,6 +36,12 @@ original/
 # --- Test evidence & generated data (real device data / too large for git) ---
 tests/data/
 tests/results/
+
+# Local-only tests: a *_local.py test hard-codes paths to REAL acquisitions on the
+# examiner's own machine (volume names, case folders, device IMEIs). Those paths are
+# personal data, so the file is never tracked — keep such a test named `*_local.py`
+# and its content stays local. pytest still collects it (it matches `test_*.py`).
+tests/**/*_local.py
 
 # --- Benchmark outputs ---
 benchmark/results/

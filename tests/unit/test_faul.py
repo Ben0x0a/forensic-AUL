@@ -33,7 +33,7 @@ def _build_logarchive(root: Path) -> Path:
 
 
 _SIDECAR = {
-    "case": {"case_number": "CASE-42", "exhibit": "EX-1", "analyst": "Alice", "notes": "n"},
+    "case": {"case_number": "CASE-42", "exhibit_number": "EX-1", "analyst": "Alice", "notes": "n"},
     "device": {"imei": "356938035643809"},
 }
 
@@ -151,12 +151,12 @@ def test_resolve_case_fields_precedence(tmp_path):
 
     faul = _make_faul(tmp_path)
     # No explicit flags → all come from the sidecar.
-    args = SimpleNamespace(case_number=None, imei=None, exhibit=None, analyst=None, notes=None)
+    args = SimpleNamespace(case_number=None, imei=None, exhibit_number=None, analyst=None, notes=None)
     case, imei, exhibit, analyst, notes = _resolve_case_fields(args, faul)
     assert (case, imei, exhibit, analyst) == ("CASE-42", "356938035643809", "EX-1", "Alice")
 
     # Explicit flag wins over the sidecar value.
-    args = SimpleNamespace(case_number="OVERRIDE", imei=None, exhibit=None, analyst=None, notes=None)
+    args = SimpleNamespace(case_number="OVERRIDE", imei=None, exhibit_number=None, analyst=None, notes=None)
     case, imei, *_ = _resolve_case_fields(args, faul)
     assert case == "OVERRIDE"
     assert imei == "356938035643809"   # untouched flag still falls back to sidecar

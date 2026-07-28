@@ -51,6 +51,14 @@ class Worker(QObject):
             tb = traceback.format_exc()
             _LOG.error(f"""Worker failed:
 {tb}""")
+            # Capture a full crash report (frame locals) — this is the single funnel
+            # every off-thread GUI operation flows through, and the failed signal
+            # only carries the formatted traceback string.
+            try:
+                from app.diagnostics import capture_exception
+                capture_exception({"entrypoint": "gui", "op": getattr(self._fn, "__name__", None)})
+            except Exception:  # noqa: BLE001 — crash reporting must never mask the failure
+                _LOG.debug("Crash report capture failed", exc_info=True)
             self.failed.emit(tb)
             return
         self.finished.emit(result)

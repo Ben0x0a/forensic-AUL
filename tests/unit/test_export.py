@@ -232,11 +232,11 @@ class TestLogFilters:
         _, data = _read_csv(out)
         assert data[0][10] == "Location updated"
 
-    def test_grep_filter(self, tmp_path):
+    def test_like_filter(self, tmp_path):
         db = tmp_path / "a.db"
         _make_db(db)
         out = tmp_path / "out.csv"
-        n = run_export(db, out, ExportFilters(grep="%Location%"))
+        n = run_export(db, out, ExportFilters(like="%Location%"))
         assert n.rows == 1
 
     def test_time_window(self, tmp_path):

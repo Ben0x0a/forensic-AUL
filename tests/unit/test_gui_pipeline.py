@@ -109,7 +109,7 @@ def test_extract_prefill_populates_fields(qapp):
     ext = _make_extract()
     ext.prefill({
         "logarchive": "/tmp/x.logarchive", "case": "C-9",
-        "imei": "42", "exhibit": "E", "analyst": "Bob",
+        "imei": "42", "exhibit_number": "E", "analyst": "Bob",
     })
     assert (ext.case_text(), ext.imei_text(), ext.exhibit_text(),
             ext.analyst_text(), ext.source_path()) == (
@@ -120,7 +120,7 @@ def test_extract_prefill_populates_fields(qapp):
 
 def _write_sidecar(arc: Path, *, case: str, imei: str, exhibit: str = "", analyst: str = ""):
     (arc.parent / (arc.name + ".acquisition.json")).write_text(json.dumps({
-        "case": {"case_number": case, "exhibit": exhibit, "analyst": analyst},
+        "case": {"case_number": case, "exhibit_number": exhibit, "analyst": analyst},
         "device": {"imei": imei},
     }))
 
@@ -199,7 +199,7 @@ def test_acquire_on_done_builds_payload_and_navigates(qapp):
         "logarchive": "/tmp/c.logarchive",
         "imei": "356000000000001",
         "case": "CASE-A",
-        "exhibit": None,
+        "exhibit_number": None,
         "analyst": "Ana",
     }
     assert not acq._continue_btn.isHidden(), "Continue shortcut should appear after a run"

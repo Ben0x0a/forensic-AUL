@@ -1,4 +1,4 @@
-"""Unit tests for forensic_aul.testing.platform — device resolution.
+"""Unit tests for forensic_aul.validation.platform — device resolution.
 
 Network/usbmux access is mocked: tests run on every OS.
 """
@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from forensic_aul.testing.platform import DeviceRef, resolve_device
+from forensic_aul.validation.platform import DeviceRef, resolve_device
 
 
 def _dev(udid: str, name: str) -> DeviceRef:
@@ -18,18 +18,18 @@ def _dev(udid: str, name: str) -> DeviceRef:
 
 class TestResolveDevice:
     def test_auto_pick_single_device(self):
-        with patch("forensic_aul.testing.platform.list_devices", return_value=[_dev("UDID1", "Alice")]):
+        with patch("forensic_aul.validation.platform.list_devices", return_value=[_dev("UDID1", "Alice")]):
             d = resolve_device(None)
             assert d.udid == "UDID1"
 
     def test_no_device_raises(self):
-        with patch("forensic_aul.testing.platform.list_devices", return_value=[]):
+        with patch("forensic_aul.validation.platform.list_devices", return_value=[]):
             with pytest.raises(RuntimeError, match="No iOS device"):
                 resolve_device(None)
 
     def test_multiple_devices_no_selector_raises(self):
         with patch(
-            "forensic_aul.testing.platform.list_devices",
+            "forensic_aul.validation.platform.list_devices",
             return_value=[_dev("UDID1", "Alice"), _dev("UDID2", "Bob")],
         ):
             with pytest.raises(RuntimeError, match="2 devices are connected"):
@@ -37,37 +37,37 @@ class TestResolveDevice:
 
     def test_match_by_exact_udid(self):
         devices = [_dev("UDID1", "Alice"), _dev("UDID2", "Bob")]
-        with patch("forensic_aul.testing.platform.list_devices", return_value=devices):
+        with patch("forensic_aul.validation.platform.list_devices", return_value=devices):
             d = resolve_device("UDID2")
             assert d.name == "Bob"
 
     def test_match_by_udid_case_insensitive(self):
         devices = [_dev("ABC123", "Alice")]
-        with patch("forensic_aul.testing.platform.list_devices", return_value=devices):
+        with patch("forensic_aul.validation.platform.list_devices", return_value=devices):
             d = resolve_device("abc123")
             assert d.udid == "ABC123"
 
     def test_match_by_exact_name(self):
         devices = [_dev("UDID1", "Alice"), _dev("UDID2", "Bob")]
-        with patch("forensic_aul.testing.platform.list_devices", return_value=devices):
+        with patch("forensic_aul.validation.platform.list_devices", return_value=devices):
             d = resolve_device("Bob")
             assert d.udid == "UDID2"
 
     def test_match_by_name_case_insensitive(self):
         devices = [_dev("UDID1", "Alice")]
-        with patch("forensic_aul.testing.platform.list_devices", return_value=devices):
+        with patch("forensic_aul.validation.platform.list_devices", return_value=devices):
             d = resolve_device("ALICE")
             assert d.udid == "UDID1"
 
     def test_ambiguous_name_raises(self):
         devices = [_dev("UDID1", "iPhone"), _dev("UDID2", "iPhone")]
-        with patch("forensic_aul.testing.platform.list_devices", return_value=devices):
+        with patch("forensic_aul.validation.platform.list_devices", return_value=devices):
             with pytest.raises(RuntimeError, match="ambiguous"):
                 resolve_device("iPhone")
 
     def test_no_match_raises_with_listing(self):
         devices = [_dev("UDID1", "Alice")]
-        with patch("forensic_aul.testing.platform.list_devices", return_value=devices):
+        with patch("forensic_aul.validation.platform.list_devices", return_value=devices):
             with pytest.raises(RuntimeError, match="No device matches"):
                 resolve_device("Charlie")
 

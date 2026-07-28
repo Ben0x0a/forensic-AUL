@@ -1,19 +1,20 @@
-"""Platform helpers for the ``test`` subcommand.
+"""Platform helpers for the ``validate`` subcommand.
 
-The ``test`` subcommand can run in three modes:
+The ``validate`` subcommand can run in three modes:
 
 * **Mac with iPhone**  — use ``log collect`` + ``log show`` natively.
 * **Mac without iPhone** — use ``log show`` against a logarchive on disk.
 * **Linux/Windows** — only mode 3 (DB+ndjson both supplied) works.
 
 This module centralises the platform checks and the device-name/UDID
-resolution so the rest of the testing pipeline does not have to know
+resolution so the rest of the validation pipeline does not have to know
 about ``pymobiledevice3`` or ``shutil.which``.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import platform as _platform
 import shutil
 from dataclasses import dataclass
@@ -53,13 +54,36 @@ def has_log_binary() -> bool:
     return shutil.which("log") is not None
 
 
+def is_root() -> bool:
+    """True when running as root — required by ``log collect --device-udid`` (L3).
+    Guarded: platforms without ``geteuid`` (Windows) are treated as non-root."""
+    geteuid = getattr(os, "geteuid", None)
+    return geteuid() == 0 if geteuid is not None else False
+
+
+@dataclass(frozen=True)
+class Caps:
+    """What validation the current environment can run (see the scenario matrix)."""
+    is_macos: bool
+    has_log: bool
+    is_root: bool
+
+    def summary(self) -> str:
+        return f"macOS={self.is_macos}  log-tool={self.has_log}  root={self.is_root}"
+
+
+def capabilities() -> Caps:
+    """Probe the host. Cheap — does NOT enumerate devices (that happens on demand)."""
+    return Caps(is_macos=is_macos(), has_log=has_log_binary(), is_root=is_root())
+
+
 def require_macos_log_tools() -> None:
     """Raise a clear error if ``log`` cannot be invoked on this host."""
     if not is_macos():
         raise RuntimeError(
             "This action needs Apple's `log` tool, which only ships with macOS. "
             "On Linux/Windows, supply the reference ndjson explicitly:\n"
-            "    forensic-aul test <logarchive_or_db>  <reference.ndjson>"
+            "    forensic-aul validate-tool <logarchive_or_db>  <reference.ndjson>"
         )
     if not has_log_binary():
         raise RuntimeError(

@@ -9,7 +9,12 @@ log; previously ``acquire --extract`` ran its own copy that skipped sealing.
 
 The core pipeline itself lives in ``forensic_aul.ops.extraction.extract``; this
 module only owns the CLI session framing (logging + sealing), which is why it
-sits in the launcher, not the library.
+sits in the ``app`` orchestration layer — above the library, below the shells —
+rather than inside the library.
+
+Used by : launcher.cmds.extract_cmd and launcher.cmds.acquire_cmd (the shells
+          call ``run_extract_session``).
+Uses    : forensic_aul.* (the extract pipeline, integrity sealing, logging setup).
 """
 
 from __future__ import annotations
@@ -99,6 +104,11 @@ def run_extract_session(
         _seal(log_path, db_path, metadata_id)
         return 130
     except Exception:
+        # Capture a crash report (all frame locals) before the traceback is lost —
+        # this handler swallows the exception and returns, so sys.excepthook never
+        # sees it. RunContext/options/paths are live on the stack here.
+        from app.diagnostics import capture_exception
+        capture_exception({"entrypoint": "cli", "op": "extract"})
         log.exception("Unhandled exception during extract")
         _seal(log_path, db_path, metadata_id)
         return 1

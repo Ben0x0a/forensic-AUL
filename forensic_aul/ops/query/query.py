@@ -57,7 +57,7 @@ def query_logs(
     message_contains: str | None = None,
     message_match: str | None = None,
     format_str: str | None = None,
-    grep: str | None = None,
+    like: str | None = None,
     time_from: str | None = None,
     time_to: str | None = None,
     last: str | None = None,
@@ -87,7 +87,7 @@ def query_logs(
     are escaped) — the right filter for dynamic messages whose format string
     is NULL or a bare ``%{public}s``; *message_match* is a keyword search via
     the FTS5 index (terms AND-combined, matched literally — needs an extract
-    with FTS enabled); *grep* is a raw SQL LIKE pattern; *format_str* is an
+    with FTS enabled); *like* is a raw SQL LIKE pattern; *format_str* is an
     exact match on the invariant template. *limit* bounds the number of rows
     yielded. Rows come back ordered by (timestamp_unix_ns, id).
 
@@ -117,7 +117,7 @@ def query_logs(
         process=_as_list(process),
         subsystem=_as_list(subsystem),
         level=_as_list(level),
-        grep=grep,
+        like=like,
         message_prefix=message_prefix,
         message_contains=message_contains,
         message_match=message_match,

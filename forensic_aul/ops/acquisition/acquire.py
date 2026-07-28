@@ -54,12 +54,12 @@ class AcquisitionAborted(AcquisitionError):
 def acquire(
     case_number: str,
     *,
-    output_dir: Path = Path("."),
+    output_dir: Path,
     udid: str | None = None,
     start_time: str | int | None = None,
     size_limit: int | None = None,
     age_limit: int | None = None,
-    exhibit: str | None = None,
+    exhibit_number: str | None = None,
     analyst: str | None = None,
     notes: str | None = None,
     extract: bool = False,
@@ -112,7 +112,7 @@ def acquire(
         start_time=start_time,
         size_limit=size_limit,
         age_limit=age_limit,
-        exhibit=exhibit,
+        exhibit_number=exhibit_number,
         analyst=analyst,
         notes=notes,
         extract=extract,
@@ -133,7 +133,7 @@ async def _acquire_async(
     start_time: str | int | None,
     size_limit: int | None,
     age_limit: int | None,
-    exhibit: str | None,
+    exhibit_number: str | None,
     analyst: str | None,
     notes: str | None,
     extract: bool,
@@ -220,7 +220,7 @@ async def _acquire_async(
         if pack:
             sidecar = build_report_dict(
                 logarchive_path, device,
-                case_number=case_number, exhibit=exhibit, analyst=analyst, notes=notes,
+                case_number=case_number, exhibit_number=exhibit_number, analyst=analyst, notes=notes,
                 logarchive_sha256=logarchive_sha256, file_count=file_count,
                 file_hashes=file_hashes,
             )
@@ -237,7 +237,7 @@ async def _acquire_async(
             try:
                 report_path = write_acquisition_report(
                     logarchive_path, device,
-                    case_number=case_number, exhibit=exhibit, analyst=analyst, notes=notes,
+                    case_number=case_number, exhibit_number=exhibit_number, analyst=analyst, notes=notes,
                     logarchive_sha256=logarchive_sha256, file_count=file_count,
                     file_hashes=file_hashes,
                 )
@@ -255,7 +255,7 @@ async def _acquire_async(
         extract_result = run_extract(
             output, target_db,
             case_number=case_number, imei=device.imei or "UNKNOWN",
-            exhibit_number=exhibit, analyst_name=analyst, notes=notes,
+            exhibit_number=exhibit_number, analyst_name=analyst, notes=notes,
             batch_size=batch_size, overwrite=True,
         )
 

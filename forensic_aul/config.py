@@ -28,10 +28,12 @@ from __future__ import annotations
 
 # Number of log entries accumulated before a single executemany() + commit().
 # Higher values → fewer round-trips (each commit is a WAL sync), more RAM.
-# 10 000 is the default: on a multi-million-row archive it cuts the number of
-# commits/syncs ~10x versus 1 000 while the pending batch stays only a few MB.
-# Raise further (e.g. 50 000) on RAM-rich hosts; lower it on tiny machines.
-BATCH_SIZE: int = 10_000
+# 100 000 is the default: on a multi-million-row archive it cuts the number of
+# commits/syncs ~100x versus 1 000 while the pending batch stays in the tens of
+# MB. Lower it on tiny machines. This single constant is the default for every
+# command that feeds the extract pipeline (extract, acquire --extract, identify),
+# so the batch size never differs between entry points.
+BATCH_SIZE: int = 100_000
 
 # WAL auto-checkpoint threshold, in pages (consumed by database/schema.py:apply_pragmas).
 # SQLite's default is 1 000 pages (~4 MiB at the 4 KiB page size); over a multi-GB

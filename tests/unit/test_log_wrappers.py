@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
-from forensic_aul.testing import log_collect, log_show
+from forensic_aul.validation import log_collect, log_show
 
 
 def _completed(returncode: int, stderr: bytes = b"") -> subprocess.CompletedProcess:
@@ -36,7 +36,7 @@ class TestLogShow:
             captured["cmd"] = cmd
             return _completed(0)
 
-        with patch("forensic_aul.testing.log_show.require_macos_log_tools"):
+        with patch("forensic_aul.validation.log_show.require_macos_log_tools"):
             with patch("subprocess.run", side_effect=fake_run):
                 # touch the file so .stat().st_size doesn't fail
                 out.write_bytes(b"")
@@ -60,7 +60,7 @@ class TestLogShow:
             captured["cmd"] = cmd
             return _completed(0)
 
-        with patch("forensic_aul.testing.log_show.require_macos_log_tools"):
+        with patch("forensic_aul.validation.log_show.require_macos_log_tools"):
             with patch("subprocess.run", side_effect=fake_run):
                 out.write_bytes(b"")
                 log_show.run(archive, out, flags=("--info",))
@@ -69,7 +69,7 @@ class TestLogShow:
         assert "--debug" not in captured["cmd"]
 
     def test_missing_archive_raises(self, tmp_path: Path):
-        with patch("forensic_aul.testing.log_show.require_macos_log_tools"):
+        with patch("forensic_aul.validation.log_show.require_macos_log_tools"):
             with pytest.raises(FileNotFoundError):
                 log_show.run(tmp_path / "absent.logarchive", tmp_path / "out.ndjson")
 
@@ -78,7 +78,7 @@ class TestLogShow:
         archive.mkdir()
         out = tmp_path / "ref.ndjson"
 
-        with patch("forensic_aul.testing.log_show.require_macos_log_tools"):
+        with patch("forensic_aul.validation.log_show.require_macos_log_tools"):
             with patch("subprocess.run", return_value=_completed(1, b"bad")):
                 with pytest.raises(RuntimeError, match="bad"):
                     log_show.run(archive, out)
@@ -90,7 +90,7 @@ class TestLogShow:
         archive.mkdir()
         out = tmp_path / "ref.ndjson"
 
-        with patch("forensic_aul.testing.log_show.require_macos_log_tools"):
+        with patch("forensic_aul.validation.log_show.require_macos_log_tools"):
             with patch("subprocess.run", side_effect=FileNotFoundError):
                 with pytest.raises(RuntimeError, match="Could not invoke"):
                     log_show.run(archive, out)
@@ -108,7 +108,7 @@ class TestLogCollect:
             (tmp_path / "system_logs.logarchive").mkdir()
             return _completed(0)
 
-        with patch("forensic_aul.testing.log_collect.require_macos_log_tools"):
+        with patch("forensic_aul.validation.log_collect.require_macos_log_tools"):
             with patch("subprocess.run", side_effect=fake_run):
                 result = log_collect.run("UDID-XYZ", tmp_path)
 
@@ -119,17 +119,17 @@ class TestLogCollect:
         assert result.name == "system_logs.logarchive"
 
     def test_empty_udid_rejected(self, tmp_path: Path):
-        with patch("forensic_aul.testing.log_collect.require_macos_log_tools"):
+        with patch("forensic_aul.validation.log_collect.require_macos_log_tools"):
             with pytest.raises(ValueError):
                 log_collect.run("", tmp_path)
 
     def test_missing_output_dir_rejected(self, tmp_path: Path):
-        with patch("forensic_aul.testing.log_collect.require_macos_log_tools"):
+        with patch("forensic_aul.validation.log_collect.require_macos_log_tools"):
             with pytest.raises(FileNotFoundError):
                 log_collect.run("UDID", tmp_path / "absent")
 
     def test_nonzero_exit_surfaces_stderr(self, tmp_path: Path):
-        with patch("forensic_aul.testing.log_collect.require_macos_log_tools"):
+        with patch("forensic_aul.validation.log_collect.require_macos_log_tools"):
             with patch(
                 "subprocess.run",
                 return_value=_completed(1, b"device not paired"),
@@ -138,7 +138,7 @@ class TestLogCollect:
                     log_collect.run("UDID", tmp_path)
 
     def test_no_archive_produced_raises(self, tmp_path: Path):
-        with patch("forensic_aul.testing.log_collect.require_macos_log_tools"):
+        with patch("forensic_aul.validation.log_collect.require_macos_log_tools"):
             with patch("subprocess.run", return_value=_completed(0)):
                 with pytest.raises(RuntimeError, match="produced no .logarchive"):
                     log_collect.run("UDID", tmp_path)
@@ -149,7 +149,7 @@ class TestLogCollect:
             (tmp_path / "b.logarchive").mkdir()
             return _completed(0)
 
-        with patch("forensic_aul.testing.log_collect.require_macos_log_tools"):
+        with patch("forensic_aul.validation.log_collect.require_macos_log_tools"):
             with patch("subprocess.run", side_effect=fake_run):
                 result = log_collect.run("UDID", tmp_path)
         assert result.name in {"a.logarchive", "b.logarchive"}

@@ -28,8 +28,8 @@ import logging
 import os
 from pathlib import Path
 
-from forensic_aul.testing.comparator import DbRecord
-from forensic_aul.testing.ndjson_loader import RefKey
+from forensic_aul.validation.comparator import DbRecord
+from forensic_aul.validation.ndjson_loader import RefKey
 
 log = logging.getLogger(__name__)
 
