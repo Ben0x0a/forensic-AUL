@@ -16,6 +16,8 @@ QSizeGrip, and the window stays movable via titlebar drag.
 
 from __future__ import annotations
 
+import logging
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
@@ -41,6 +43,8 @@ from gui.views.screens_pipeline import AcquireScreen, ExtractScreen
 from gui.views.screens_prefs import SettingsScreen
 from gui.widgets.components import TrafficLights, asset_pixmap, make_icon
 from gui.widgets.log_panel import LogPanel
+
+_LOG = logging.getLogger(__name__)
 
 # Sidebar layout. Each item: (id, number/badge, label, enabled, future_tag).
 # Disabled items are placeholders for later roadmap versions. Consumed by:
@@ -306,6 +310,7 @@ class MainWindow(QWidget):
         sub_layout.setSpacing(0)
         for screen_id, label, enabled, tag in _PREFS:
             sub_layout.addWidget(self._nav_button(screen_id, "", label, enabled, tag, indent=True))
+        sub_layout.addWidget(self._build_report_entry())
         submenu.setVisible(False)
         layout.addWidget(submenu)
 
@@ -313,10 +318,57 @@ class MainWindow(QWidget):
             visible = not submenu.isVisible()
             submenu.setVisible(visible)
             self._prefs_caret.setText("▾" if visible else "▸")
+            # Re-sync on OPEN, not after each run: the caption is only readable while
+            # the submenu is showing, so syncing here is the one moment that
+            # guarantees it matches the folder no matter what wrote a report since.
+            if visible:
+                self._sync_report_entry()
 
         toggle.clicked.connect(_toggle_submenu)
         self._prefs_submenu = submenu
         return holder
+
+    def _build_report_entry(self) -> QPushButton:
+        """The single "something is wrong" entry. Its caption depends on whether
+        error reports already exist, so it is an ACTION, not a screen — the caption
+        and the behaviour both come from gui.report_actions, which the CLI shares."""
+        from gui.report_actions import perform
+
+        button = QPushButton()
+        button.setProperty("nav", "true")
+        button.setCheckable(False)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        row = QHBoxLayout(button)
+        row.setContentsMargins(28, 0, 14, 0)
+        row.setSpacing(10)
+        label = QLabel()
+        label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        label.setStyleSheet("background:transparent;")
+        row.addWidget(label)
+        row.addStretch(1)
+
+        def _pressed() -> None:
+            perform()
+            self._sync_report_entry()  # filing one flips the caption to "Open …"
+
+        button.clicked.connect(_pressed)
+        self._report_button = button
+        self._report_label = label
+        self._sync_report_entry()
+        return button
+
+    def _sync_report_entry(self) -> None:
+        """Point the entry at whichever action is right now (guarded: a diagnostics
+        problem must not stop the Preferences menu from opening)."""
+        from gui.report_actions import caption, pending_action, tooltip
+
+        try:
+            action = pending_action()
+        except Exception:  # noqa: BLE001 — the menu matters more than the caption.
+            _LOG.debug("Could not resolve the report action", exc_info=True)
+            return
+        self._report_label.setText(caption(action))
+        self._report_button.setToolTip(tooltip(action))
 
     # ── Main area (screens + log panel) ──────────────────────────────────────────
 

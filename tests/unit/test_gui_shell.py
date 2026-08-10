@@ -50,3 +50,32 @@ def test_log_panel_collapse_shrinks_then_restores_pane(qapp):
     w._log_panel._toggle_collapsed()
     QApplication.processEvents()
     assert splitter.sizes() == open_sizes, "expanding should restore the open sizes"
+
+
+def test_report_entry_caption_follows_the_error_reports(qapp, tmp_path, monkeypatch):
+    """The one "something is wrong" entry: "Report bug…" while no error report
+    exists, "Open error reports" once one does — and filing a BUG report must not
+    flip it, or asking for help would make the tool claim it had errored."""
+    from app import diagnostics
+    from gui import report_actions
+
+    monkeypatch.setattr(diagnostics, "_DEFAULT_CONFIG", diagnostics.CrashConfig(crash_dir=tmp_path))
+
+    w = MainWindow()
+    w.show()
+    QApplication.processEvents()
+
+    assert w._report_label.text() == report_actions.caption(report_actions.FILE_BUG)
+
+    # A filed BUG report leaves the caption alone …
+    diagnostics.write_bug_report(cfg=diagnostics.CrashConfig(crash_dir=tmp_path))
+    w._sync_report_entry()
+    assert w._report_label.text() == report_actions.caption(report_actions.FILE_BUG)
+
+    # … while a real ERROR report flips it.
+    try:
+        raise RuntimeError("boom")
+    except RuntimeError:
+        diagnostics.capture_exception(cfg=diagnostics.CrashConfig(crash_dir=tmp_path))
+    w._sync_report_entry()
+    assert w._report_label.text() == report_actions.caption(report_actions.OPEN_ERRORS)

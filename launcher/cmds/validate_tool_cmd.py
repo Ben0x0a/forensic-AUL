@@ -16,8 +16,15 @@ Source forms (auto-detected by file shape):
   forensic-aul validate-tool --from-device <NAME_OR_UDID>    # mac: explicit device
   forensic-aul validate-tool <logarchive>                    # mac: auto-generate ref
   forensic-aul validate-tool <logarchive> <ref.ndjson>       # cross-platform
+  forensic-aul validate-tool <acquisition.zip>               # mac: build archive, then ref
+  forensic-aul validate-tool <acquisition.zip> <ref.ndjson>  # cross-platform
   forensic-aul validate-tool <db.sqlite>   <ref.ndjson>      # cross-platform
   forensic-aul validate-tool <db.sqlite>   --regen-ref <logarchive>   # mac: re-generate ref
+
+A packaged acquisition (``.faul``, sysdiagnose ``.tar.gz``, FFS ``.zip``) is
+unpacked and given a synthesised ``Info.plist`` so Apple's ``log show`` will read
+it — that is what lets the acquisitions analysts actually receive be checked
+against ground truth, not just Mac-produced logarchives.
 
 Pass criterion
 --------------
@@ -177,6 +184,17 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Keep the auto-generated reference ndjson after the test (default: discard).",
+    )
+    p.add_argument(
+        "--keep-archive",
+        dest="keep_archive",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "For a packaged SOURCE (.faul / .zip / .tar.gz): keep the synthesised "
+            "logarchive built for `log show` (default: discard). Useful to run "
+            "`log show` against it by hand."
+        ),
     )
 
     # Case identifiers used when auto-extracting (optional — defaults work for testing)

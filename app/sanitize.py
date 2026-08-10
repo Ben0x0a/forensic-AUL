@@ -330,17 +330,46 @@ def _metadata_rows(safe_meta: dict[str, Any]) -> list[str]:
     return rows
 
 
+def _frame_lines(frame: dict[str, Any]) -> list[str]:
+    """One frame rendered as a heading, its source line, and its two locals lists."""
+    lines = [
+        f"### `{frame.get('function', '?')}` — "
+        f"{frame.get('file', '?')}:{frame.get('lineno', '?')}"
+    ]
+    if frame.get("code"):
+        lines.append(f"> `{frame['code']}`")
+    locs = frame.get("locals", {})
+    for label, bucket in (("_Safe:_", locs.get(SAFE, {})),
+                          ("_⚠ Sensitive (review before sharing):_", locs.get(SENSITIVE, {}))):
+        if bucket:
+            lines.append("")
+            lines.append(label)
+            lines.extend(f"- `{name}` = {_one_line(summary)}" for name, summary in bucket.items())
+    lines.append("")
+    return lines
+
+
 def render_markdown(report: dict[str, Any]) -> str:
     """A human-readable summary of a report (full or already-redacted). Doubles as a
-    fileable bug template via the placeholder sections at the end."""
-    exc = report.get("exception", {})
+    fileable bug template via the placeholder sections at the end.
+
+    Renders BOTH kinds from the one schema: a crash report leads with the exception
+    and its traceback, while a bug report — which has neither — leads straight into
+    the live thread stacks. Frames carrying a ``thread`` label are grouped under it.
+    """
+    exc = report.get("exception") or {}
     meta = report.get("metadata", {})
     safe_meta = meta.get(SAFE, {}) if isinstance(meta, dict) else {}
+    is_bug = report.get("kind") == "bug" or not exc
 
     lines: list[str] = []
-    lines.append("# forensic_AUL crash report")
+    lines.append(f"# forensic_AUL {'bug' if is_bug else 'crash'} report")
     lines.append("")
-    lines.append(f"**{exc.get('type', 'Exception')}**: {exc.get('message', '')}")
+    if is_bug:
+        lines.append("Filed by the operator — no exception was raised. The stacks below are "
+                     "the tool's live state at the moment the report was requested.")
+    else:
+        lines.append(f"**{exc.get('type', 'Exception')}**: {exc.get('message', '')}")
     lines.append("")
 
     lines.append("## Environment")
@@ -350,33 +379,25 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines.extend(_metadata_rows(safe_meta))
     lines.append("")
 
-    lines.append("## Traceback")
-    lines.append("")
-    lines.append("```")
-    lines.append(str(report.get("traceback", "")).rstrip())
-    lines.append("```")
-    lines.append("")
-
-    lines.append("## Stack frames & variables")
-    lines.append("")
-    for frame in report.get("frames", []):
-        lines.append(f"### `{frame.get('function', '?')}` — {frame.get('file', '?')}:{frame.get('lineno', '?')}")
-        if frame.get("code"):
-            lines.append(f"> `{frame['code']}`")
-        locs = frame.get("locals", {})
-        safe_locals = locs.get(SAFE, {})
-        sens_locals = locs.get(SENSITIVE, {})
-        if safe_locals:
-            lines.append("")
-            lines.append("_Safe:_")
-            for name, summary in safe_locals.items():
-                lines.append(f"- `{name}` = {_one_line(summary)}")
-        if sens_locals:
-            lines.append("")
-            lines.append("_⚠ Sensitive (review before sharing):_")
-            for name, summary in sens_locals.items():
-                lines.append(f"- `{name}` = {_one_line(summary)}")
+    if report.get("traceback"):
+        lines.append("## Traceback")
         lines.append("")
+        lines.append("```")
+        lines.append(str(report["traceback"]).rstrip())
+        lines.append("```")
+        lines.append("")
+
+    lines.append("## Live thread stacks & variables" if is_bug
+                 else "## Stack frames & variables")
+    lines.append("")
+    current_thread: str | None = None
+    for frame in report.get("frames", []):
+        thread = frame.get("thread")
+        if thread is not None and thread != current_thread:
+            lines.append(f"## Thread — {thread}")
+            lines.append("")
+            current_thread = thread
+        lines.extend(_frame_lines(frame))
 
     lines.append("---")
     lines.append("")
@@ -385,7 +406,7 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines.append("")
     lines.append("## Steps to reproduce")
     lines.append("")
-    lines.append("<!-- What were you doing when it crashed? -->")
+    lines.append("<!-- What were you doing when it went wrong? -->")
     lines.append("")
     lines.append("## Expected vs actual")
     lines.append("")
