@@ -8,6 +8,7 @@ import pytest
 
 from forensic_aul.engine.integrity import compute_sha256, seal_log_file
 from forensic_aul.engine.database.schema import apply_pragmas, init_schema
+from forensic_aul.ops.summary.cache import clear_summary, load_summary, store_summary
 from forensic_aul.ops.summary.summary import Summary, summarise
 from forensic_aul.engine.utils.time import parse_duration_seconds
 from forensic_aul.ops.verify.verify import verify_database
@@ -73,6 +74,97 @@ def test_summarise_not_extract_db(tmp_path):
     sqlite3.connect(str(db)).close()  # no case_metadata table at all
     with pytest.raises(Exception):
         summarise(db)
+
+
+def test_summarise_full_facets(tmp_path):
+    """facets carry every value; the top-N lists are slices of them."""
+    db = tmp_path / "facets.db"
+    _extract_db(db)
+    s = summarise(db, top=1, buckets=10)
+    # top=1 truncates the visible list but never the facet behind it.
+    assert [t.name for t in s.top_processes] == ["syslogd"]
+    assert [t.name for t in s.facets["process"]] == ["syslogd", "locationd"]
+    assert dict((t.name, t.count) for t in s.facets["process"]) == {
+        "syslogd": 2, "locationd": 1,
+    }
+    assert set(s.facets) == {"process", "subsystem", "category", "level"}
+    # Every row has a level and none has a subsystem/category in this fixture.
+    assert [t.name for t in s.facets["level"]] == ["Default"]
+    assert s.facets["subsystem"] == []
+
+
+# ── summary cache ─────────────────────────────────────────────────────────────
+
+def test_summary_cache_round_trip(tmp_path):
+    db = tmp_path / "cached.db"
+    _extract_db(db)
+    original = summarise(db, top=5, buckets=10)
+
+    conn = sqlite3.connect(str(db))
+    store_summary(conn, original, top=5, buckets=10)
+    conn.commit()
+    conn.close()
+
+    restored = load_summary(db)
+    assert restored is not None
+    assert restored.case_number == original.case_number
+    assert restored.total_entries == original.total_entries
+    assert restored.range_min_ns == original.range_min_ns
+    assert restored.range_seconds == original.range_seconds
+    assert [(t.name, t.count) for t in restored.top_processes] == \
+           [(t.name, t.count) for t in original.top_processes]
+    assert {k: [(t.name, t.count) for t in v] for k, v in restored.facets.items()} == \
+           {k: [(t.name, t.count) for t in v] for k, v in original.facets.items()}
+    assert restored.histogram_bucket_ns == original.histogram_bucket_ns
+    assert [(b.start_unix_ns, b.total, b.annotated) for b in restored.histogram] == \
+           [(b.start_unix_ns, b.total, b.annotated) for b in original.histogram]
+
+
+def test_load_summary_absent_returns_none(tmp_path):
+    """A database extracted before the cache existed reports "not evaluated"."""
+    db = tmp_path / "uncached.db"
+    _extract_db(db)
+    assert load_summary(db) is None
+
+
+def test_load_summary_ignores_unreadable_payload(tmp_path):
+    """A payload from an incompatible version degrades to None, never raises."""
+    db = tmp_path / "corrupt.db"
+    _extract_db(db)
+    conn = sqlite3.connect(str(db))
+    store_summary(conn, summarise(db), top=5, buckets=10)
+    conn.execute("UPDATE summary_cache SET payload = '{\"nope\": 1}' WHERE id = 1")
+    conn.commit()
+    conn.close()
+    assert load_summary(db) is None
+
+
+def test_clear_summary(tmp_path):
+    db = tmp_path / "cleared.db"
+    _extract_db(db)
+    conn = sqlite3.connect(str(db))
+    store_summary(conn, summarise(db), top=5, buckets=10)
+    conn.commit()
+    assert load_summary(conn) is not None
+    clear_summary(conn)
+    assert load_summary(conn) is None
+    # Clearing a database that never had the table is a no-op, not an error.
+    conn.close()
+
+
+def test_summary_cache_is_single_row(tmp_path):
+    """A second store REPLACEs the first — two disagreeing summaries cannot exist."""
+    db = tmp_path / "single.db"
+    _extract_db(db)
+    conn = sqlite3.connect(str(db))
+    summary = summarise(db)
+    store_summary(conn, summary, top=5, buckets=10)
+    store_summary(conn, summary, top=9, buckets=99)
+    conn.commit()
+    assert conn.execute("SELECT COUNT(*) FROM summary_cache").fetchone()[0] == 1
+    assert conn.execute("SELECT params FROM summary_cache").fetchone()[0] == \
+           '{"top":9,"buckets":99}'
+    conn.close()
 
 
 # ── verify ────────────────────────────────────────────────────────────────────

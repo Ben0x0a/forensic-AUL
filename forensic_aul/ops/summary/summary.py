@@ -65,6 +65,16 @@ class Summary:
     log_levels: list[TopEntry] = field(default_factory=list)
     annotated_actions: list[AnnotatedAction] = field(default_factory=list)
 
+    # Complete name→count breakdowns, keyed by facet name ("process",
+    # "subsystem", "category", "level"), each ordered by descending count.
+    # ``top_processes`` / ``top_subsystems`` / ``log_levels`` above are the
+    # first *top* entries of the corresponding facet, kept as separate fields so
+    # the CLI's summary output is unchanged. WHY the full lists too: they drive
+    # the GUI's faceted filter pickers, which need every value and its count —
+    # and the GROUP BY that produces the top-N already scans the whole table, so
+    # dropping the LIMIT costs nothing beyond a slightly larger cached payload.
+    facets: dict[str, list[TopEntry]] = field(default_factory=dict)
+
     histogram_bucket_ns: int = 0
     histogram: list[HistogramBucket] = field(default_factory=list)
 
@@ -79,6 +89,31 @@ _NICE_BUCKET_SECONDS = [
 ]
 
 
+# There are only five log levels (schema.py::LOG_LEVEL_NAMES), so the "top" of
+# that facet is all of it — the constant just keeps the slice self-explanatory.
+_TOP_LOG_LEVELS = 5
+
+# One un-LIMITed GROUP BY per facet, keyed by the name used in Summary.facets and
+# by the GUI's filter pickers. INNER JOIN (not LEFT): a row whose process /
+# subsystem / category is NULL has no name to filter on or display, and counting
+# it under an empty label would invent a value the analyst cannot select.
+# Consumed by: summarise_connection, and through Summary.facets by the GUI.
+_FACET_SQL: dict[str, str] = {
+    "process":
+        "SELECT p.name, COUNT(*) c FROM logs l JOIN processes p ON p.id=l.process_id "
+        "GROUP BY p.id ORDER BY c DESC",
+    "subsystem":
+        "SELECT s.name, COUNT(*) c FROM logs l JOIN subsystems s ON s.id=l.subsystem_id "
+        "GROUP BY s.id ORDER BY c DESC",
+    "category":
+        "SELECT c2.name, COUNT(*) c FROM logs l JOIN categories c2 ON c2.id=l.category_id "
+        "GROUP BY c2.id ORDER BY c DESC",
+    "level":
+        "SELECT ll.name, COUNT(*) c FROM logs l JOIN log_levels ll ON ll.id=l.log_level_id "
+        "GROUP BY ll.id ORDER BY c DESC",
+}
+
+
 def _round_bucket_ns(approx_ns: float) -> int:
     """Round *approx_ns* up to the next nice bucket size (in nanoseconds)."""
     approx_s = approx_ns / 1e9
@@ -88,7 +123,17 @@ def _round_bucket_ns(approx_ns: float) -> int:
     return int(_NICE_BUCKET_SECONDS[-1] * 1e9)
 
 
-def summarise(database: Path | str, *, top: int = 10, buckets: int = 40) -> Summary:
+# Defaults for the top-N lists and the histogram resolution. Named so the extract
+# -time cache write stores statistics computed with exactly the parameters every
+# other caller assumes. Consumed by: summarise(), ops/extraction/extract.py,
+# ops/annotation/matcher.py, launcher/cmds/summary_cmd.py.
+DEFAULT_TOP = 10
+DEFAULT_BUCKETS = 40
+
+
+def summarise(
+    database: Path | str, *, top: int = DEFAULT_TOP, buckets: int = DEFAULT_BUCKETS
+) -> Summary:
     """Compute a :class:`Summary` of the extract database at *database*.
 
     Raises:
@@ -98,12 +143,12 @@ def summarise(database: Path | str, *, top: int = 10, buckets: int = 40) -> Summ
     """
     conn = open_analysis_database(database)
     try:
-        return _summarise(conn, top=top, buckets=buckets)
+        return summarise_connection(conn, top=top, buckets=buckets)
     finally:
         conn.close()
 
 
-def _summarise(conn: sqlite3.Connection, *, top: int, buckets: int) -> Summary:
+def summarise_connection(conn: sqlite3.Connection, *, top: int, buckets: int) -> Summary:
     md = conn.execute("""
         SELECT case_number, imei, ios_model, ios_build_version, ios_version,
                log_start_time, log_end_time
@@ -141,9 +186,18 @@ def _summarise(conn: sqlite3.Connection, *, top: int, buckets: int) -> Summary:
     # Exclude the unix_ns=0 failure sentinel from the range — otherwise one
     # unresolved entry pins range_min at 1970-01-01. Sentinel rows stay counted
     # in ``total``; they are only dropped from the wall-clock span.
-    range_min, range_max = conn.execute(
-        "SELECT MIN(timestamp_unix_ns), MAX(timestamp_unix_ns) FROM logs "
-        "WHERE timestamp_unix_ns > 0").fetchone()
+    #
+    # WHY two statements rather than one ``SELECT MIN(...), MAX(...)``: SQLite's
+    # min/max optimisation turns an aggregate over an indexed column into a
+    # single index seek, but it applies to at most ONE aggregate per query — ask
+    # for both together and it falls back to scanning the whole index. Two
+    # queries are two O(log N) seeks; one query is O(N).
+    range_min = conn.execute(
+        "SELECT MIN(timestamp_unix_ns) FROM logs WHERE timestamp_unix_ns > 0"
+    ).fetchone()[0]
+    range_max = conn.execute(
+        "SELECT MAX(timestamp_unix_ns) FROM logs WHERE timestamp_unix_ns > 0"
+    ).fetchone()[0]
     if range_min is None:
         # Every entry was unresolved — no usable wall-clock span.
         return base
@@ -151,16 +205,14 @@ def _summarise(conn: sqlite3.Connection, *, top: int, buckets: int) -> Summary:
     base.range_max_ns = range_max
     base.range_seconds = (range_max - range_min) / 1_000_000_000
 
-    base.top_processes = _top(conn, top,
-        "SELECT p.name, COUNT(*) c FROM logs l JOIN processes p ON p.id=l.process_id "
-        "GROUP BY p.id ORDER BY c DESC LIMIT ?")
-    base.top_subsystems = _top(conn, top,
-        "SELECT s.name, COUNT(*) c FROM logs l JOIN subsystems s ON s.id=l.subsystem_id "
-        "GROUP BY s.id ORDER BY c DESC LIMIT ?")
-    base.log_levels = _top(conn, 5,
-        "SELECT ll.name, COUNT(*) c FROM logs l "
-        "JOIN log_levels ll ON ll.id = l.log_level_id "
-        "GROUP BY ll.id ORDER BY c DESC LIMIT ?")
+    # One GROUP BY per facet, un-LIMITed: the top-N lists are slices of these,
+    # so the table is scanned once per facet rather than twice (see Summary.facets).
+    base.facets = {
+        name: _facet(conn, sql) for name, sql in _FACET_SQL.items()
+    }
+    base.top_processes = base.facets["process"][:top]
+    base.top_subsystems = base.facets["subsystem"][:top]
+    base.log_levels = base.facets["level"][:_TOP_LOG_LEVELS]
 
     if has_kb and annotated_count:
         base.annotated_actions = [
@@ -223,5 +275,6 @@ def _has_table(conn: sqlite3.Connection, name: str) -> bool:
     ).fetchone() is not None
 
 
-def _top(conn: sqlite3.Connection, n: int, sql: str) -> list[TopEntry]:
-    return [TopEntry(name, count) for name, count in conn.execute(sql, (n,)).fetchall()]
+def _facet(conn: sqlite3.Connection, sql: str) -> list[TopEntry]:
+    """Run one un-LIMITed facet GROUP BY, returning every (name, count) pair."""
+    return [TopEntry(name, count) for name, count in conn.execute(sql).fetchall()]

@@ -291,6 +291,37 @@ An **external-content** FTS5 index over `logs.message`, plus `logs_ai` / `logs_a
   would report an emptied index as populated. The `message_match` filter **raises**
   rather than silently falling back to a `LIKE` scan when no usable index exists.
 
+## `summary_cache` (statistics, written by `extract`)
+
+```sql
+CREATE TABLE summary_cache (
+    id           INTEGER PRIMARY KEY CHECK (id = 1),
+    computed_at  TEXT NOT NULL,   -- ISO 8601 UTC
+    faul_version TEXT NOT NULL,   -- the forensic-aul that computed it
+    params       TEXT NOT NULL,   -- JSON: {"top": N, "buckets": N}
+    payload      TEXT NOT NULL    -- JSON serialisation of Summary
+);
+```
+
+The database's statistics about itself: entry total, wall-clock range, annotation
+counts, complete per-facet breakdowns (process / subsystem / category / level) and
+the temporal histogram — everything
+[`summary`](../cli/summary.md) reports, computed once and stored.
+
+- Written as the final `stats` phase of `extract`, and rewritten by `annotate`
+  (which changes the annotation counts). Recomputing costs six-plus full passes
+  over `logs`; paying it at the end of a run that has already read every byte
+  means readers get the statistics instantly instead of freezing on open.
+- `CHECK (id = 1)` makes "at most one cached summary" a schema-level invariant, so
+  a rewrite can only ever REPLACE the previous row.
+- Read with `load_summary()` (`ops/summary/cache.py`), which returns `None` when
+  the table or row is absent. **There is no fallback compute on the read path**: a
+  database extracted before this table existed reports "not evaluated" rather than
+  silently spending a minute recomputing. Re-extract to populate it.
+- A payload written by an incompatible version is ignored with a warning, not
+  raised — the cache is a convenience, never evidence. Nothing in it is
+  authoritative: every value is derivable from `logs` and the annotation tables.
+
 ## Annotation tables (created by `annotate`)
 
 These do not exist until [`annotate`](../cli/annotate.md) has run; probe with
