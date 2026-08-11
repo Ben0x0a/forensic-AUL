@@ -1,4 +1,13 @@
-"""Load and validate the YAML knowledge base."""
+"""Load and validate the YAML knowledge base.
+
+Defines : ``load_kb`` (public entry point), ``KnowledgeBaseError``, and the
+          hand-written per-field validation behind it (no pydantic/jsonschema).
+Used by : forensic_aul.ops.annotation.matcher, forensic_aul.ops.knowledge_base.
+          {lint,writer}, the ``kb`` CLI commands (launcher/cmds/kb_cmd.py).
+Uses    : forensic_aul.ops.knowledge_base.models (Match/Signature/KnowledgeBase),
+          forensic_aul.engine.database.schema (EVENT_TYPE_NAMES, for
+          match.event_type validation), yaml.safe_load.
+"""
 
 from __future__ import annotations
 
@@ -9,6 +18,7 @@ from pathlib import Path
 
 import yaml
 
+from forensic_aul.engine.database.schema import EVENT_TYPE_NAMES
 from forensic_aul.errors import ForensicAULError
 from forensic_aul.ops.knowledge_base.models import KnowledgeBase, Match, Signature
 
@@ -16,8 +26,13 @@ log = logging.getLogger(__name__)
 
 
 _VALID_LOG_LEVELS = {"Default", "Info", "Debug", "Error", "Fault"}
+_VALID_EVENT_TYPES = set(EVENT_TYPE_NAMES)
 _VALID_CONFIDENCE = {"low", "medium", "high"}
+_VALID_STATUS = {"draft", "validated", "deprecated"}
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+# Loose ISO date shape check (YYYY-MM-DD) — not a full calendar validation, just
+# enough to catch an obviously malformed `created` value at load time.
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 class KnowledgeBaseError(ForensicAULError, ValueError):
@@ -167,12 +182,23 @@ def _build_signature(raw: object, *, source_file: str) -> Signature:
 
     action = _require_str(raw, "action")
     description = _opt_str(raw, "description", default="")
+    interpretation = _opt_str(raw, "interpretation", default="")
+    caveats = _opt_str(raw, "caveats", default="")
     confidence = _opt_str(raw, "confidence", default="medium")
     if confidence not in _VALID_CONFIDENCE:
         raise KnowledgeBaseError(
             f"confidence {confidence!r} must be one of {sorted(_VALID_CONFIDENCE)}"
         )
     platform = _opt_str(raw, "platform", default="ios")
+
+    author = _opt_str(raw, "author", default="")
+    created = _opt_str(raw, "created", default="")
+    if created and not _DATE_RE.fullmatch(created):
+        raise KnowledgeBaseError(f"created {created!r} must be an ISO date (YYYY-MM-DD)")
+    sig_version = _opt_str(raw, "version", default="")
+    status = _opt_str(raw, "status", default="validated")
+    if status not in _VALID_STATUS:
+        raise KnowledgeBaseError(f"status {status!r} must be one of {sorted(_VALID_STATUS)}")
 
     match = _build_match(raw.get("match"))
 
@@ -218,10 +244,10 @@ def _build_signature(raw: object, *, source_file: str) -> Signature:
 
     # Reject unknown top-level keys to surface typos early.
     known_keys = {
-        "id", "action", "description", "confidence", "platform",
-        "ios_min", "ios_max", "match",
+        "id", "action", "description", "interpretation", "caveats",
+        "confidence", "platform", "ios_min", "ios_max", "match",
         "extract-regex", "extract_regex", "extract-fields", "extract_fields",
-        "references", "tags",
+        "references", "tags", "author", "created", "version", "status",
     }
     unknown = set(raw) - known_keys
     if unknown:
@@ -232,6 +258,8 @@ def _build_signature(raw: object, *, source_file: str) -> Signature:
         action=action,
         description=description,
         match=match,
+        interpretation=interpretation,
+        caveats=caveats,
         extract_regex=extract_regex,
         extract_fields=tuple(extract_fields),
         confidence=confidence,
@@ -241,6 +269,10 @@ def _build_signature(raw: object, *, source_file: str) -> Signature:
         references=tuple(refs),
         tags=tuple(tags),
         source_file=source_file,
+        author=author,
+        created=created,
+        version=sig_version,
+        status=status,
         _compiled_message_regex=compiled_msg,
         _compiled_extract_regex=compiled_er,
         _compiled_extract_fields=compiled_ef,
@@ -288,9 +320,18 @@ def _build_match(raw: object) -> Match:
             f"match.log_level {log_level!r} must be one of {sorted(_VALID_LOG_LEVELS)}"
         )
 
+    event_type = _opt_str_field(raw, "event_type")
+    if event_type is not None and event_type not in _VALID_EVENT_TYPES:
+        raise KnowledgeBaseError(
+            f"match.event_type {event_type!r} must be one of {sorted(_VALID_EVENT_TYPES)}"
+        )
+
+    library = _opt_str_field(raw, "library")
+
     known = {
         "format_str", "format_str_any", "dynamic",
-        "process", "subsystem", "category", "log_level", "message_regex",
+        "process", "subsystem", "category", "log_level", "event_type", "library",
+        "message_regex",
     }
     unknown = set(raw) - known
     if unknown:
@@ -304,6 +345,8 @@ def _build_match(raw: object) -> Match:
         subsystem=_opt_str_field(raw, "subsystem"),
         category=_opt_str_field(raw, "category"),
         log_level=log_level,
+        event_type=event_type,
+        library=library,
         message_regex=msg_regex,
     )
 

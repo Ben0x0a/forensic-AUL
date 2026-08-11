@@ -52,6 +52,7 @@ def query_logs(
     *,
     process: list[str] | str | None = None,
     subsystem: list[str] | str | None = None,
+    category: list[str] | str | None = None,
     level: list[str] | str | None = None,
     message_prefix: str | None = None,
     message_contains: str | None = None,
@@ -80,8 +81,8 @@ def query_logs(
                               message_prefix="Bonjour unauth peer found"):
             print(row.timestamp_iso, row.process, row.message)
 
-    Filter semantics: list-valued filters (*process*, *subsystem*, *level*,
-    *signature*, *tag*) accept a single string or a list — values within a
+    Filter semantics: list-valued filters (*process*, *subsystem*, *category*,
+    *level*, *signature*, *tag*) accept a single string or a list — values within a
     filter are OR-combined; different filters are AND-combined.
     *message_prefix* matches the composed message **literally** (``%``/``_``
     are escaped) — the right filter for dynamic messages whose format string
@@ -116,6 +117,7 @@ def query_logs(
         last=last,
         process=_as_list(process),
         subsystem=_as_list(subsystem),
+        category=_as_list(category),
         level=_as_list(level),
         like=like,
         message_prefix=message_prefix,

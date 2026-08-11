@@ -20,7 +20,7 @@ from forensic_aul.engine.models import (
     SharedCacheStrings,
     UUIDText,
 )
-from forensic_aul.engine.parser.dsc import lookup_dsc_string
+from forensic_aul.engine.parser.dsc import find_range, lookup_dsc_string
 from forensic_aul.engine.parser.firehose import (
     ACTIVITY_TYPE_ACTIVITY,
     ACTIVITY_TYPE_SIGNPOST,
@@ -72,7 +72,7 @@ def resolve_format_string(
         file_id = strings.get_file_id(fmt.uuid_relative)
         if uuidtext:
             fs = lookup_format_string(uuidtext, offset)
-            return fs, fmt.uuid_relative, fmt.uuid_relative, "", file_id
+            return fs, uuidtext.image_path, fmt.uuid_relative, "", file_id
         return "", "", fmt.uuid_relative, "", file_id
 
     # Shared cache (DSC)
@@ -84,7 +84,8 @@ def resolve_format_string(
             if dsc:
                 effective_offset = _dsc_effective_offset(offset, fmt)
                 fs = lookup_dsc_string(dsc, effective_offset)
-                return fs, dsc_uuid, dsc_uuid, main_uuid, file_id
+                library = _dsc_library_path(dsc, effective_offset)
+                return fs, library, dsc_uuid, main_uuid, file_id
         return "", "", dsc_uuid, "", None
 
     # Absolute — an alternative UUID file (chosen by load-address range), NOT the
@@ -102,8 +103,8 @@ def resolve_format_string(
             file_id = strings.get_file_id(main_uuid)
             if uuidtext:
                 fs = lookup_format_string(uuidtext, offset)
-                return fs, main_uuid, main_uuid, main_uuid, file_id
-        return "", main_uuid, main_uuid, main_uuid, None
+                return fs, uuidtext.image_path, main_uuid, main_uuid, file_id
+        return "", "", main_uuid, main_uuid, None
 
     return "", "", "", "", None
 
@@ -162,6 +163,26 @@ def _dsc_effective_offset(string_offset: int, fmt) -> int:
     return (lo << 32) | so32
 
 
+def _dsc_library_path(dsc: SharedCacheStrings, effective_offset: int) -> str:
+    """Return the image path of the DSC range that owns *effective_offset*.
+
+    HOW: ask :func:`~forensic_aul.engine.parser.dsc.find_range` which range covers
+    the offset — the same call the format-string lookup makes, so the path and the
+    string can never come from different ranges — then follow that range's
+    ``unknown_uuid_index`` into ``dsc.uuids``, whose ``path_string`` is the
+    library path already parsed by the DSC parser.
+
+    WHY the bounds check: ``unknown_uuid_index`` is an unvalidated on-disk field,
+    so a corrupt DSC must yield an unnamed library rather than raise mid-extraction.
+    """
+    rng = find_range(dsc, effective_offset)
+    if rng is None:
+        return ""
+    if 0 <= rng.unknown_uuid_index < len(dsc.uuids):
+        return dsc.uuids[rng.unknown_uuid_index].path_string
+    return ""
+
+
 def _resolve_absolute(
     firehose: Firehose,
     fmt,
@@ -205,6 +226,6 @@ def _resolve_absolute(
         file_id = strings.get_file_id(library_uuid)
         if uuidtext:
             fs = lookup_format_string(uuidtext, offset)
-            return fs, library_uuid, library_uuid, main_uuid, file_id
-        return "", library_uuid, library_uuid, main_uuid, file_id
-    return "", library_uuid, library_uuid, main_uuid, None
+            return fs, uuidtext.image_path, library_uuid, main_uuid, file_id
+        return "", "", library_uuid, main_uuid, file_id
+    return "", "", library_uuid, main_uuid, None

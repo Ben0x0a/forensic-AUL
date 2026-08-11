@@ -403,9 +403,34 @@ class MainWindow(QWidget):
         # just the header on collapse, restoring it on expand.
         self._main_splitter = splitter
         self._log_open_sizes = [560, 200]
+        # The analyst's own collapsed/expanded choice, saved while a data screen
+        # borrows the space (see _apply_log_panel_preference). None = not borrowed.
+        self._log_collapsed_before: bool | None = None
         self._log_panel.collapsedChanged.connect(self._on_log_collapsed)
         layout.addWidget(splitter, 1)
         return main
+
+    def _apply_log_panel_preference(self, target: QWidget) -> None:
+        """Collapse the log panel for a screen that declares it wants the space.
+
+        A data screen (Exploit, Identify results) is a table that should use the
+        full height of the window; the log panel is a pipeline affordance that
+        matters while an operation runs, not while an analyst reads rows. So
+        entering such a screen collapses it to its header strip and leaving
+        restores whatever state the analyst had before.
+
+        WHY remember ``_log_collapsed_before`` rather than always expanding on
+        exit: the analyst may have collapsed the panel deliberately, and
+        un-collapsing it on their behalf would override a choice they made.
+        """
+        wants_collapsed = bool(getattr(target, "wants_collapsed_log", False))
+        if wants_collapsed:
+            if self._log_collapsed_before is None:
+                self._log_collapsed_before = self._log_panel.is_collapsed()
+            self._log_panel.set_collapsed(True)
+        elif self._log_collapsed_before is not None:
+            self._log_panel.set_collapsed(self._log_collapsed_before)
+            self._log_collapsed_before = None
 
     def _on_log_collapsed(self, collapsed: bool) -> None:
         sizes = self._main_splitter.sizes()
@@ -437,6 +462,7 @@ class MainWindow(QWidget):
         index = self._screen_index.get(screen_id)
         if index is None:
             return
+        self._apply_log_panel_preference(self._stack.widget(index))
         self._stack.setCurrentIndex(index)
         button = self._nav_buttons.get(screen_id)
         if button is not None:

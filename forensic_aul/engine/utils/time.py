@@ -236,6 +236,44 @@ def iso8601_from_unix_ns(unix_ns: int) -> str:
     return _format_iso8601(unix_ns)
 
 
+# The timestamp renderings a display layer may ask for. "utc" is the canonical,
+# portable form and the one every stored/exported value uses; the others exist
+# only for reading on screen. Consumed by: format_timestamp, gui.settings_store
+# ("tz" preference), gui.views.screens_prefs.
+TIMESTAMP_MODES = ("utc", "local", "raw")
+
+
+def format_timestamp(unix_ns: int, mode: str = "utc") -> str:
+    """Render *unix_ns* for display in the given *mode*.
+
+    * ``utc``   — ISO 8601, nanosecond-precise, UTC (identical to
+      :func:`iso8601_from_unix_ns`; what is stored and exported).
+    * ``local`` — the same instant in this workstation's zone, with its UTC
+      offset appended so the reading is never ambiguous.
+    * ``raw``   — the stored integer, for cross-checking against the database.
+
+    An unknown *mode* falls back to ``utc`` rather than raising: this is a
+    display preference read from a JSON file a user can hand-edit, and a bad
+    value must not stop a table from rendering.
+
+    WHY only display: nothing derived from this is stored, exported or hashed.
+    Case data stays UTC everywhere so it remains portable between examiners —
+    see the note in the Settings screen.
+    """
+    if unix_ns == 0:
+        # The failure sentinel: an unresolved timestamp renders empty rather than
+        # as a misleading 1970 date (same rule as LogRow.timestamp_iso).
+        return ""
+    if mode == "raw":
+        return str(unix_ns)
+    if mode == "local":
+        dt = datetime.fromtimestamp(unix_ns / 1_000_000_000, tz=timezone.utc).astimezone()
+        # Sub-second precision comes from the integer, not from the float above,
+        # which cannot hold nanoseconds for present-day epochs.
+        return f"{dt:%Y-%m-%dT%H:%M:%S}.{unix_ns % 1_000_000_000:09d}{dt:%z}"
+    return _format_iso8601(unix_ns)
+
+
 def mach_to_wall_ns(
     timesync_data: dict[str, TimesyncBoot],
     boot_uuid: str,

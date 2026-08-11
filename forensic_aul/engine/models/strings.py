@@ -24,6 +24,11 @@ class UUIDText:
     minor_version: int                  # u32
     entry_descriptors: list[UUIDTextEntry]
     footer_data: bytes                  # raw null-terminated string pool
+    # Path of the binary (executable or dylib) this UUIDText describes, stored as
+    # a trailing null-terminated C string after the entry string ranges in
+    # footer_data. "" when the file is truncated before it. This is what gives a
+    # log entry a real process/library name instead of a bare UUID.
+    image_path: str
 
 
 @dataclass

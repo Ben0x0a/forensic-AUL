@@ -7,6 +7,7 @@ import sqlite3
 
 import pytest
 
+from forensic_aul.engine.database.ordering import assign_ordering
 from forensic_aul.engine.database.schema import apply_pragmas, init_schema
 from forensic_aul.ops.annotation.matcher import init_annotation_schema
 from forensic_aul.ops.identify.diff import run_diff
@@ -29,6 +30,87 @@ def _db(path, rows) -> None:
         )
     conn.commit()
     conn.close()
+
+
+def _action_db_multi_source(path) -> None:
+    """Action DB with 2 tracev3 files (2 rows each), ordering assigned by the
+    real production pass (``assign_ordering``, not hand-computed) — for testing
+    that source_order/source_file survive the diff (L10). All timestamps are
+    well past any baseline cutoff used by the tests below, so every row is
+    retained. Mirrors the fixture pattern in tests/unit/test_ordering.py.
+    """
+    conn = sqlite3.connect(str(path))
+    apply_pragmas(conn)
+    init_schema(conn)
+    conn.execute("INSERT INTO processes(id, name) VALUES (1, 'p2')")
+    conn.executemany(
+        "INSERT INTO source_files (id, file_path, file_type, parsed_at) VALUES (?, ?, ?, ?)",
+        [
+            (1, "logdata/a.tracev3", "tracev3", "2024-01-15T00:00:00Z"),
+            (2, "logdata/b.tracev3", "tracev3", "2024-01-15T00:00:00Z"),
+        ],
+    )
+    conn.execute("INSERT INTO boots (id, boot_uuid, rank) VALUES (1, 'BOOT-A', 0)")
+    # (id, tracev3_file_id, chunkset_offset, mach, message) — source_order is
+    # per-file rank by chunkset offset; event_order is the merged rank by mach.
+    rows = [
+        (1, 1, 100, 10, "row 1"),
+        (2, 1, 200, 30, "row 2"),
+        (3, 2, 50, 20, "row 3"),
+        (4, 2, 150, 40, "row 4"),
+    ]
+    for rid, file_id, chunk, mach, msg in rows:
+        conn.execute(
+            "INSERT INTO logs (id, tracev3_file_id, tracev3_chunkset_file_offset, "
+            "tracev3_firehose_inner_offset, tracev3_entry_inner_offset, boot_id, "
+            "timestamp_unix_ns, timestamp_mach, message, process_id) "
+            "VALUES (?, ?, ?, 0, 0, 1, ?, ?, ?, 1)",
+            (rid, file_id, chunk, 300_000_000_000 + mach, mach, msg),
+        )
+    conn.commit()
+    assign_ordering(conn)
+    conn.commit()
+    conn.close()
+
+
+def test_diff_carries_source_order_and_source_file(tmp_path):
+    _db(tmp_path / "base.db", [(100, "boot", "p1")])  # cutoff = 100
+    action_path = tmp_path / "act.db"
+    _action_db_multi_source(action_path)
+
+    csv_out = tmp_path / "out.csv"
+    sqlite_out = tmp_path / "out.db"
+    res = run_diff(tmp_path / "base.db", action_path, csv_out, sqlite_out)
+    assert res.retained == 4
+
+    c = sqlite3.connect(str(sqlite_out))
+    rows = c.execute(
+        "SELECT message, source_order, source_file, event_order FROM identified_logs"
+    ).fetchall()
+    c.close()
+    by_msg = {msg: (so, sf, eo) for msg, so, sf, eo in rows}
+
+    # source_order restarts per file: rows 1/2 are file a, rows 3/4 are file b.
+    assert by_msg["row 1"][:2] == (1, "logdata/a.tracev3")
+    assert by_msg["row 2"][:2] == (2, "logdata/a.tracev3")
+    assert by_msg["row 3"][:2] == (1, "logdata/b.tracev3")
+    assert by_msg["row 4"][:2] == (2, "logdata/b.tracev3")
+
+    # event_order is one merged, ever-increasing sequence — unlike source_order
+    # it never restarts, even though the two files interleave by mach time.
+    event_orders = [by_msg[f"row {i}"][2] for i in range(1, 5)]
+    assert sorted(event_orders) == [1, 2, 3, 4]
+    assert event_orders[0] < event_orders[2] < event_orders[1] < event_orders[3]
+
+    with csv_out.open(encoding="utf-8-sig") as fp:
+        reader = csv.DictReader(fp)
+        assert "source_order" in reader.fieldnames
+        assert "source_file" in reader.fieldnames
+        by_msg_csv = {row["message"]: row for row in reader}
+    assert by_msg_csv["row 1"]["source_order"] == "1"
+    assert by_msg_csv["row 1"]["source_file"] == "logdata/a.tracev3"
+    assert by_msg_csv["row 3"]["source_order"] == "1"
+    assert by_msg_csv["row 3"]["source_file"] == "logdata/b.tracev3"
 
 
 def test_diff_retained_and_excluded(tmp_path):

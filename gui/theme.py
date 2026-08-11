@@ -75,38 +75,44 @@ _FONT_UI = '"SF Pro Text", "Segoe UI", system-ui, "Helvetica Neue", sans-serif'
 _FONT_MONO = '"SF Mono", "Menlo", "Cascadia Mono", "Consolas", monospace'
 
 
-# Cached path to the white check glyph painted inside a ticked checkbox. WHY a
-# file: QSS ``QCheckBox::indicator:checked`` can only draw a tick via ``image:
-# url(...)`` (it cannot render text), so the SVG check is rasterised once to a PNG
-# and referenced by path. Empty string ⇒ no QApplication / QtSvg, in which case the
-# indicator still shows its accent fill (just no tick) rather than erroring.
-_CHECK_IMAGE_PATH: str | None = None
+# Cached filesystem paths for glyphs QSS has to draw as images, keyed by
+# (icon name, colour, size). WHY files: several QSS pseudo-elements
+# (``QCheckBox::indicator``, ``QAbstractSpinBox::up-arrow``, …) can only draw a
+# mark via ``image: url(...)`` — they cannot render text or SVG data — so the
+# shared SVG icons are rasterised once to PNGs and referenced by path.
+# Consumed by: build_stylesheet().
+_GLYPH_PATHS: dict[tuple[str, str, int], str] = {}
 
 
-def _checkmark_image_path() -> str:
-    """Return a filesystem path to a small white check PNG (rendered once)."""
-    global _CHECK_IMAGE_PATH
-    if _CHECK_IMAGE_PATH:
-        return _CHECK_IMAGE_PATH
+def _glyph_url(name: str, colour: str, size: int = 12) -> str:
+    """Return a path to *name* rendered at *size* in *colour* (rasterised once).
+
+    Returns "" when Qt/QtSvg is unavailable or the render fails; the calling QSS
+    rule then simply draws no image, which degrades to a plain (but still
+    correctly coloured) control rather than erroring.
+    """
+    key = (name, colour, size)
+    cached = _GLYPH_PATHS.get(key)
+    if cached is not None:
+        return cached
     try:
         from PySide6.QtCore import QSize, Qt
 
         from gui.widgets.components import make_icon
 
-        # Render the shared "check" SVG in white, then normalise to a fixed 12 px
-        # physical size so it sits centred inside the 14 px indicator.
-        pixmap = make_icon("check", 12, "#ffffff").pixmap(QSize(12, 12))
+        pixmap = make_icon(name, size, colour).pixmap(QSize(size, size))
         if pixmap.isNull():
             return ""
         image = pixmap.toImage().scaled(
-            12, 12, Qt.AspectRatioMode.KeepAspectRatio,
+            size, size, Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
-        path = Path(tempfile.gettempdir()) / "faul_checkbox_tick.png"
+        safe = colour.lstrip("#")
+        path = Path(tempfile.gettempdir()) / f"faul_glyph_{name}_{safe}_{size}.png"
         if not image.save(str(path)):
             return ""
-        _CHECK_IMAGE_PATH = path.as_posix()
-        return _CHECK_IMAGE_PATH
+        _GLYPH_PATHS[key] = path.as_posix()
+        return _GLYPH_PATHS[key]
     except Exception:  # noqa: BLE001 — a missing glyph must never break theming
         return ""
 
@@ -114,7 +120,9 @@ def _checkmark_image_path() -> str:
 def build_stylesheet(tokens: dict[str, str] | None = None) -> str:
     """Return the application-wide QSS string built from *tokens* (defaults to dark)."""
     t = tokens or DARK_TOKENS
-    check = _checkmark_image_path()
+    check = _glyph_url("check", "#ffffff", 12)
+    arrow_up = _glyph_url("up", DARK_TOKENS["text_faint"], 8)
+    arrow_down = _glyph_url("down", DARK_TOKENS["text_faint"], 8)
     return f"""
 /* ── Base ─────────────────────────────────────────────────────────────── */
 /* WHY no `background` here: an opaque background on *every* QWidget makes each
@@ -206,6 +214,12 @@ QLabel[role="ok"]   {{ color: {t['ok']}; }}
 QLabel[role="warn"] {{ color: {t['warn']}; }}
 QLabel[role="err"]  {{ color: {t['err']}; }}
 
+/* Scroll areas are structural, not surfaces: an opaque viewport paints the
+   palette's (light) Base colour over whatever card it sits in. Both the page
+   scroller and the record-detail drawer rely on this. */
+QScrollArea {{ background: transparent; border: none; }}
+QScrollArea > QWidget > QWidget {{ background: transparent; }}
+
 /* ── Cards / panels ───────────────────────────────────────────────────── */
 QFrame[card="true"] {{
     background: {t['bg_surface']};
@@ -220,7 +234,7 @@ QFrame[card="elev"] {{
 QFrame[role="divider"] {{ background: {t['border']}; max-height: 1px; min-height: 1px; border: none; }}
 
 /* ── Inputs ───────────────────────────────────────────────────────────── */
-QLineEdit, QComboBox, QSpinBox {{
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QDateTimeEdit, QDateEdit, QTimeEdit {{
     background: {t['bg_input']};
     border: 1px solid {t['border']};
     border-radius: {t['radius']};
@@ -229,8 +243,46 @@ QLineEdit, QComboBox, QSpinBox {{
     padding: 0 10px;
     selection-background-color: {t['accent']};
 }}
-QLineEdit:focus, QComboBox:focus, QSpinBox:focus {{ border-color: {t['accent']}; }}
-QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled {{ color: {t['text_mute']}; }}
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus,
+QDoubleSpinBox:focus, QDateTimeEdit:focus, QDateEdit:focus, QTimeEdit:focus {{
+    border-color: {t['accent']};
+}}
+QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled,
+QDoubleSpinBox:disabled, QDateTimeEdit:disabled {{ color: {t['text_mute']}; }}
+/* Spin/step buttons: Fusion draws these as raised native widgets with a light
+   base. Flatten them onto the field so a date picker reads as one control. */
+QAbstractSpinBox {{ font-family: {_FONT_MONO}; font-size: 12px; }}
+QAbstractSpinBox::up-button, QAbstractSpinBox::down-button {{
+    background: transparent;
+    border: none;
+    width: 16px;
+}}
+QAbstractSpinBox::up-arrow, QAbstractSpinBox::down-arrow {{
+    width: 7px; height: 7px;
+}}
+QAbstractSpinBox::up-arrow {{ image: url({arrow_up}); }}
+QAbstractSpinBox::down-arrow {{ image: url({arrow_down}); }}
+/* Calendar popup — otherwise a bright native panel over a dark app. */
+QCalendarWidget QWidget {{ alternate-background-color: {t['bg_surface']}; }}
+QCalendarWidget QAbstractItemView:enabled {{
+    background: {t['bg_elev']};
+    color: {t['text_hi']};
+    selection-background-color: {t['accent']};
+    selection-color: #ffffff;
+}}
+QCalendarWidget QAbstractItemView:disabled {{ color: {t['text_mute']}; }}
+QCalendarWidget QWidget#qt_calendar_navigationbar {{
+    background: {t['bg_surface']};
+    border-bottom: 1px solid {t['border']};
+}}
+QCalendarWidget QToolButton {{
+    background: transparent;
+    color: {t['text_hi']};
+    border: none;
+    padding: 4px 8px;
+}}
+QCalendarWidget QToolButton:hover {{ background: {t['bg_row_hover']}; border-radius: 4px; }}
+QCalendarWidget QSpinBox {{ min-height: 22px; }}
 QLineEdit[mono="true"] {{ font-family: {_FONT_MONO}; font-size: 12px; }}
 QComboBox::drop-down {{ border: none; width: 22px; }}
 /* Popup list: rounded, accent selection. Item height comes from style_combo's
@@ -373,12 +425,22 @@ QCheckBox::indicator:checked {{
 QCheckBox:disabled {{ color: {t['text_mute']}; }}
 
 /* ── In-screen tabs (QTabWidget in document mode: flat underline tabs) ── */
-QTabWidget::pane {{ border: none; background: transparent; }}
-QTabBar {{ background: transparent; }}
+QTabWidget::pane {{ border: none; background: transparent; top: -1px; }}
+/* Fusion paints a light "tab bar base" line across the full width beside the
+   tabs; neither the pane border nor a transparent QTabBar suppresses it, so it
+   is overpainted with the window colour and the selected tab's accent underline
+   provides the only rule the eye should see. */
+QTabWidget::tab-bar {{ alignment: left; }}
+QTabBar {{ background: transparent; border: none; }}
+QTabBar::tab:!selected {{ border-bottom: 2px solid {t['bg_window']}; }}
+/* min-width + generous padding so a label is never squeezed to an ellipsis
+   ("Overvi…"); the tab bar is also told not to elide (setElideMode) and not to
+   stretch its tabs (setExpanding) at each construction site. */
 QTabBar::tab {{
-    background: transparent;
+    background: {t['bg_window']};
     color: {t['text_dim']};
-    padding: 7px 14px;
+    padding: 7px 16px;
+    min-width: 76px;
     border: none;
     border-bottom: 2px solid transparent;
     font-size: 12px;

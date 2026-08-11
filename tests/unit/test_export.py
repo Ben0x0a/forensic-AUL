@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from forensic_aul.ops.annotation.matcher import init_annotation_schema
+from forensic_aul.engine.database.ordering import assign_ordering
 from forensic_aul.engine.database.schema import apply_pragmas, init_schema
 from forensic_aul.ops.export.exporter import (
     ExportFilters,
@@ -142,15 +143,16 @@ class TestBasicExport:
         header, data = _read_csv(out)
         # No KB → exactly the base columns (no per-signature field columns).
         assert header == [
-            "timestamp", "timestamp_unix_ns", "event_order", "process", "pid", "tid",
+            "timestamp", "timestamp_unix_ns", "event_order", "source_order", "source_file",
+            "process", "pid", "tid",
             "log_level", "event_type", "subsystem", "category", "message",
             "matched_signatures",
         ]
         assert len(data) == 3
-        messages = [r[10] for r in data]
+        messages = [r[header.index("message")] for r in data]
         assert messages == ["Hello world", "Location updated", "Goodbye"]
         # matched_signatures empty when there are no annotations.
-        assert all(r[11] == "" for r in data)
+        assert all(r[header.index("matched_signatures")] == "" for r in data)
 
     def test_csv_has_bom(self, tmp_path):
         db = tmp_path / "a.db"
@@ -220,8 +222,8 @@ class TestLogFilters:
         out = tmp_path / "out.csv"
         n = run_export(db, out, ExportFilters(process=["syslogd"]))
         assert n.rows == 2  # id 1 and 3
-        _, data = _read_csv(out)
-        assert {r[3] for r in data} == {"syslogd"}
+        header, data = _read_csv(out)
+        assert {r[header.index("process")] for r in data} == {"syslogd"}
 
     def test_level_filter(self, tmp_path):
         db = tmp_path / "a.db"
@@ -229,8 +231,8 @@ class TestLogFilters:
         out = tmp_path / "out.csv"
         n = run_export(db, out, ExportFilters(level=["Error"]))
         assert n.rows == 1
-        _, data = _read_csv(out)
-        assert data[0][10] == "Location updated"
+        header, data = _read_csv(out)
+        assert data[0][header.index("message")] == "Location updated"
 
     def test_like_filter(self, tmp_path):
         db = tmp_path / "a.db"
@@ -272,11 +274,12 @@ class TestKbExport:
         assert "lat" in header
         assert "lon" in header
         lat = header.index("lat")
-        annotated = [r for r in data if r[10] == "Location updated"][0]
+        msg_col = header.index("message")
+        annotated = [r for r in data if r[msg_col] == "Location updated"][0]
         assert annotated[lat] == "48.8"
         assert annotated[header.index("matched_signatures")] == "loc.update"
         # Non-annotated rows leave the label columns blank.
-        other = [r for r in data if r[10] == "Hello world"][0]
+        other = next(r for r in data if r[msg_col] == "Hello world")
         assert other[lat] == ""
 
     def test_no_fields_option(self, tmp_path):
@@ -303,8 +306,8 @@ class TestKbExport:
         out = tmp_path / "out.csv"
         n = run_export(db, out, ExportFilters(annotated_only=True))
         assert n.rows == 1
-        _, data = _read_csv(out)
-        assert data[0][10] == "Location updated"
+        header, data = _read_csv(out)
+        assert data[0][header.index("message")] == "Location updated"
 
     def test_signature_filter(self, tmp_path):
         db = tmp_path / "a.db"
@@ -325,6 +328,99 @@ class TestKbExport:
         out = tmp_path / "out.csv"
         assert run_export(db, out, ExportFilters(tag=["privacy"])).rows == 1
         assert run_export(db, out, ExportFilters(tag=["nonexistent"])).rows == 0
+
+
+# ── source_order / source_file (L10 completion) ───────────────────────────────
+
+def _make_db_multi_source(path: Path) -> None:
+    """Two tracev3 files (2 logs each), ordering assigned by the real production
+    pass (``assign_ordering``, not hand-computed) so the test exercises the same
+    code path ``extract`` uses. Mirrors the fixture pattern in
+    ``tests/unit/test_ordering.py``.
+    """
+    conn = sqlite3.connect(str(path))
+    apply_pragmas(conn)
+    init_schema(conn)
+
+    conn.executemany(
+        "INSERT INTO source_files (id, file_path, file_type, parsed_at) VALUES (?, ?, ?, ?)",
+        [
+            (1, "logdata/a.tracev3", "tracev3", "2024-01-15T00:00:00Z"),
+            (2, "logdata/b.tracev3", "tracev3", "2024-01-15T00:00:00Z"),
+        ],
+    )
+    conn.execute("INSERT INTO boots (id, boot_uuid, rank) VALUES (1, 'BOOT-A', 0)")
+
+    # (id, tracev3_file_id, chunkset_offset, mach) — source_order is per-file rank
+    # by chunkset offset; event_order is the merged rank by mach across both files.
+    rows = [
+        (1, 1, 100, 10),
+        (2, 1, 200, 30),
+        (3, 2, 50, 20),
+        (4, 2, 150, 40),
+    ]
+    for rid, file_id, chunk, mach in rows:
+        conn.execute(
+            "INSERT INTO logs (id, tracev3_file_id, tracev3_chunkset_file_offset, "
+            "tracev3_firehose_inner_offset, tracev3_entry_inner_offset, boot_id, "
+            "timestamp_unix_ns, timestamp_mach, message) "
+            "VALUES (?, ?, ?, 0, 0, 1, ?, ?, ?)",
+            (rid, file_id, chunk, _BASE_NS + mach, mach, f"row {rid}"),
+        )
+    conn.commit()
+    assign_ordering(conn)
+    conn.commit()
+    conn.close()
+
+
+class TestSourceOrdering:
+    def test_source_order_and_source_file_in_csv(self, tmp_path):
+        db = tmp_path / "multi.db"
+        _make_db_multi_source(db)
+        out = tmp_path / "out.csv"
+        n = run_export(db, out)
+        assert n.rows == 4
+        header, data = _read_csv(out)
+        assert "source_order" in header
+        assert "source_file" in header
+        so_col, sf_col, msg_col = (
+            header.index("source_order"), header.index("source_file"), header.index("message"),
+        )
+        by_msg = {r[msg_col]: r for r in data}
+        # File a: rows 1, 2 → source_order restarts at 1.
+        assert by_msg["row 1"][sf_col] == "logdata/a.tracev3"
+        assert by_msg["row 1"][so_col] == "1"
+        assert by_msg["row 2"][sf_col] == "logdata/a.tracev3"
+        assert by_msg["row 2"][so_col] == "2"
+        # File b: rows 3, 4 → source_order restarts at 1 too (per-file, not global).
+        assert by_msg["row 3"][sf_col] == "logdata/b.tracev3"
+        assert by_msg["row 3"][so_col] == "1"
+        assert by_msg["row 4"][sf_col] == "logdata/b.tracev3"
+        assert by_msg["row 4"][so_col] == "2"
+
+    def test_event_order_does_not_restart_across_files(self, tmp_path):
+        db = tmp_path / "multi.db"
+        _make_db_multi_source(db)
+        out = tmp_path / "out.csv"
+        run_export(db, out)
+        header, data = _read_csv(out)
+        eo_col, msg_col = header.index("event_order"), header.index("message")
+        by_msg = {r[msg_col]: int(r[eo_col]) for r in data}
+        # Merged mach order spans both files: row1(10) < row3(20) < row2(30) < row4(40).
+        assert by_msg["row 1"] < by_msg["row 3"] < by_msg["row 2"] < by_msg["row 4"]
+        # One ever-increasing sequence — unlike source_order it never restarts.
+        assert sorted(by_msg.values()) == [1, 2, 3, 4]
+
+    def test_json_keys_include_source_order_and_source_file(self, tmp_path):
+        db = tmp_path / "multi.db"
+        _make_db_multi_source(db)
+        out = tmp_path / "out.json"
+        run_export(db, out)
+        objs = json.loads(out.read_text(encoding="utf-8"))
+        assert all("source_order" in o and "source_file" in o for o in objs)
+        row1 = next(o for o in objs if o["message"] == "row 1")
+        assert row1["source_order"] == 1
+        assert row1["source_file"] == "logdata/a.tracev3"
 
 
 # ── Result object ─────────────────────────────────────────────────────────────

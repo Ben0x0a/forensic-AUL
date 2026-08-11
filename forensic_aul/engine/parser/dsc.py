@@ -85,23 +85,41 @@ def lookup_dsc_string(dsc: SharedCacheStrings, string_offset: int) -> str:
     return result
 
 
+def find_range(
+    dsc: SharedCacheStrings, string_offset: int
+) -> RangeDescriptor | None:
+    """Return the DSC range owning *string_offset*, or ``None``.
+
+    The single definition of "which range covers this offset" — both the format
+    string (:func:`lookup_dsc_string`) and the library path
+    (``format_string._dsc_library_path``) must select the same range, so the
+    rule lives here rather than being written out at each call site.
+
+    HOW: DSC ranges are non-overlapping ``[range_offset, range_offset+range_size)``
+    spans. A linear scan is O(ranges) and runs once *per log entry* — on a real
+    logarchive (thousands of ranges × millions of entries) that is a multi-minute
+    stall. So a sorted index is built once per DSC and binary searched instead:
+    O(log ranges) per lookup. The index is cached on the parsed object (one per
+    process; workers each hold their own copy).
+    """
+    starts, ranges_sorted = _range_index(dsc)
+    i = bisect.bisect_right(starts, string_offset) - 1
+    if i < 0:
+        return None
+    rng = ranges_sorted[i]
+    if string_offset >= rng.range_offset + rng.range_size:
+        return None
+    return rng
+
+
 def _lookup_dsc_string_uncached(dsc: SharedCacheStrings, string_offset: int) -> str:
     """Resolve a DSC format string by offset (see lookup_dsc_string for caching)."""
     if string_offset == DYNAMIC_STRING_OFFSET:
         return "%s"
 
-    # DSC ranges are non-overlapping [range_offset, range_offset+range_size)
-    # spans. A linear scan here is O(ranges) and is called once *per log entry*
-    # — on a real logarchive (thousands of ranges × millions of entries) that
-    # is a multi-minute stall. Build a sorted index once per DSC and binary
-    # search it instead: O(log ranges) per lookup. The index is cached on the
-    # parsed object (one per process; workers each hold their own copy).
-    starts, ranges_sorted = _range_index(dsc)
-    i = bisect.bisect_right(starts, string_offset) - 1
-    if i >= 0:
-        rng = ranges_sorted[i]
-        if string_offset < rng.range_offset + rng.range_size:
-            return _read_cstr(rng.strings, string_offset - rng.range_offset)
+    rng = find_range(dsc, string_offset)
+    if rng is not None:
+        return _read_cstr(rng.strings, string_offset - rng.range_offset)
 
     log.debug(
         "DSC %s: offset 0x%x not found in any range", dsc.dsc_uuid, string_offset

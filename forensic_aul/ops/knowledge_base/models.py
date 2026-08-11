@@ -1,4 +1,12 @@
-"""Dataclasses for the knowledge-base signatures."""
+"""Dataclasses for the knowledge-base signatures.
+
+Defines : ``Match``, ``Signature``, ``KnowledgeBase`` (the loaded, validated KB)
+          and ``SignatureDraft`` (an in-memory signature awaiting emission by the
+          writer — see ``forensic_aul.ops.knowledge_base.writer``).
+Used by : forensic_aul.ops.knowledge_base.{loader,writer,lint},
+          forensic_aul.ops.annotation.matcher.
+Uses    : the standard library only (dataclasses, re).
+"""
 
 from __future__ import annotations
 
@@ -24,6 +32,8 @@ class Match:
     subsystem:  str | None = None
     category:   str | None = None
     log_level:  str | None = None       # Default/Info/Debug/Error/Fault
+    event_type: str | None = None       # Log/Activity/Trace/Signpost/Loss/Statedump/Simpledump
+    library:    str | None = None       # exact match on the library path
 
     # Optional post-filter on the rendered message.
     message_regex: str | None = None
@@ -35,6 +45,9 @@ class Signature:
     action:       str
     description:  str
     match:        Match
+    # What the match means to an analyst — `action` is only a title.
+    interpretation: str = ""   # what one may conclude from this line
+    caveats:        str = ""   # known false positives / when the conclusion doesn't hold
     # Two complementary ways to pull named values out of a matched message; the
     # extracted (label → value) pairs from both are merged. Use whichever reads
     # cleaner for a given signature (or both):
@@ -51,6 +64,11 @@ class Signature:
     references:   tuple[str, ...] = ()
     tags:         tuple[str, ...] = ()
     source_file:  str = ""               # YAML file the signature came from
+    # Provenance: who wrote the rule and whether it has been reviewed.
+    author:       str = ""
+    created:      str = ""              # ISO date, "YYYY-MM-DD"
+    version:      str = ""              # per-signature semver
+    status:       str = "validated"     # draft | validated | deprecated
 
     # Pre-compiled regexes — populated by the loader for hot-path use.
     _compiled_message_regex: re.Pattern | None = field(default=None, compare=False)
@@ -58,6 +76,39 @@ class Signature:
     _compiled_extract_fields: tuple[tuple[str, re.Pattern], ...] = field(
         default=(), compare=False,
     )
+
+
+@dataclass(frozen=True)
+class SignatureDraft:
+    """An in-memory signature awaiting emission as YAML.
+
+    Mirrors the authorable (non-compiled, non-source_file) fields of
+    ``Signature``. Built programmatically — e.g. by a GUI "new signature"
+    dialog — and handed to ``writer.render_signature`` /
+    ``writer.write_signature``, which turn it into house-style YAML and
+    validate it by round-tripping through ``load_kb``.
+    """
+    id:             str
+    action:         str
+    match:          Match
+    description:    str = ""
+    interpretation: str = ""
+    caveats:        str = ""
+    extract_regex:  str | None = None
+    extract_fields: tuple[tuple[str, str], ...] = ()
+    confidence:     str = "medium"
+    platform:       str = "ios"
+    ios_min:        str | None = None
+    ios_max:        str | None = None
+    references:     tuple[str, ...] = ()
+    tags:           tuple[str, ...] = ()
+    author:         str = ""
+    created:        str = ""
+    version:        str = ""
+    # Interactively-created signatures default to "draft" (unlike the loaded
+    # Signature model, whose default of "validated" preserves the meaning of
+    # existing hand-authored signatures that predate this field).
+    status:         str = "draft"
 
 
 @dataclass(frozen=True)

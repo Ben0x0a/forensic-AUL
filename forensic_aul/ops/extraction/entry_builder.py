@@ -1,6 +1,7 @@
 """Firehose-entry → LogEntry assembly.
 
-Defines : _LOG_LEVELS, _EVENT_TYPES, _resolve_oversize, _firehose_to_log_entry
+Defines : _LOG_LEVELS, _EVENT_TYPES, _resolve_oversize, _basename,
+          _process_image_path, _firehose_to_log_entry
 Used by : forensic_aul.ops.extraction.tracev3_parse (_firehose_to_log_entry),
           forensic_aul.ops.extraction.workers (transitively)
 Uses    : forensic_aul.ops.extraction.oversize_pass (OversizeCache, OversizeKey),
@@ -77,6 +78,45 @@ def _resolve_oversize(
 ) -> list[FirehoseItemInfo]:
     """Return the message items from an Oversize entry."""
     return ov.message_items.item_info
+
+
+def _basename(path: str) -> str:
+    """Return the last POSIX path component of *path* ("" when there is none).
+
+    Apple's image paths are always absolute POSIX paths, so a plain rpartition
+    is both correct and cheaper than pathlib on this per-entry hot path.
+    """
+    return path.rpartition("/")[2] if path else ""
+
+
+def _process_image_path(process_uuid: str, strings: StringCacheProvider) -> str:
+    """Return the main executable's image path for *process_uuid* ("" if unknown).
+
+    HOW: memoised on the *strings* provider itself, mirroring the offset memos on
+    UUIDText/SharedCacheStrings. WHY memoise: this runs once per log entry (tens
+    of millions) while an archive holds only tens of distinct process UUIDs, so
+    without a memo every entry would repeat the provider lookup. WHY on the
+    provider rather than a module global: ``_firehose_to_log_entry`` runs inside
+    worker processes and a module global would either be copied per process
+    anyway or, in the main process, leak one archive's UUID→path map into the
+    next one; the cache lives and dies with the provider it was derived from.
+    """
+    if not process_uuid:
+        return ""
+    cache = getattr(strings, "_process_image_path_cache", None)
+    if cache is None:
+        cache = {}
+        strings._process_image_path_cache = cache  # type: ignore[attr-defined]
+    cached = cache.get(process_uuid)
+    if cached is not None:
+        return cached
+
+    uuidtext = strings.get_uuidtext(process_uuid)
+    # Bounded by the archive's own catalog UUIDs, which are already resident in
+    # memory — so no eviction cap is needed here.
+    path = uuidtext.image_path if uuidtext else ""
+    cache[process_uuid] = path
+    return path
 
 
 def _firehose_to_log_entry(
@@ -193,10 +233,19 @@ def _firehose_to_log_entry(
         activity_id = act.unknown_activity_id
         parent_activity_id = act.unknown_activity_id_2
 
-    # ── Process name from UUIDText (or library path) ──────────────────────
-    # Use library path as process name fallback — full resolution would
-    # require reading the binary's path from UUIDText, which is deferred.
-    process_name = library or process_uuid or ""
+    # ── Process name ──────────────────────────────────────────────────────
+    # HOW: the main executable's UUIDText carries its own image path, so the
+    # process name is the basename of that path; failing that, the basename of
+    # the library path that resolved the format string; failing that, the raw
+    # process UUID. WHY that order: only the main-exe path names the *process*
+    # (the library may be a shared dylib logging on its behalf), and falling
+    # back to the UUID keeps the entry attributable when neither path exists.
+    process_name = (
+        _basename(_process_image_path(process_uuid, strings))
+        or _basename(library)
+        or process_uuid
+        or ""
+    )
 
     # ── raw_data JSON ─────────────────────────────────────────────────────
     # Opt-in (extract --keep-raw): this per-item JSON is often the fattest column

@@ -150,7 +150,35 @@ def _parse(data: bytes, uuid: str) -> UUIDText:
         minor_version=minor_version,
         entry_descriptors=entries,
         footer_data=footer_data,
+        image_path=_image_path_from_footer(entries, footer_data),
     )
+
+
+def _image_path_from_footer(entries: list[UUIDTextEntry], footer_data: bytes) -> str:
+    """Return the binary path stored after the string ranges in *footer_data*.
+
+    HOW: footer_data is a flat pool holding each entry's string range back to
+    back, in entry_descriptors order (the same layout assumption
+    :func:`_range_offset_in_footer` relies on), followed by one null-terminated
+    C string — the path of the executable or dylib the file describes. So the
+    path starts at the sum of every declared entry_size.
+
+    WHY the guards: entry sizes come straight off disk and are never validated
+    against the file length, so a truncated, malformed or hostile UUIDText can
+    make that sum overshoot footer_data (or overflow into an absurd value). Such
+    a file must degrade to an unnamed process, never abort an extraction that is
+    otherwise parsing millions of good entries.
+    """
+    path_start = 0
+    for entry in entries:
+        path_start += entry.entry_size
+        # Bound the running sum on every step so an inflated entry_size cannot
+        # walk the start offset past the pool (and _read_cstr never scans out of
+        # the region the ranges actually occupy).
+        if path_start > len(footer_data):
+            return ""
+
+    return _read_cstr(footer_data, path_start)
 
 
 def _range_offset_in_footer(uuidtext: UUIDText, target: UUIDTextEntry) -> int:

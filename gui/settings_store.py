@@ -28,12 +28,31 @@ _LOG = logging.getLogger(__name__)
 # path, so we honour it. Consumed by: SettingsStore.load/_save.
 _SETTINGS_PATH = Path.home() / ".config" / "faul" / "settings.json"
 
-# Workstation display preferences. FAUL ships a single dark theme, so there is no
-# appearance/mode key. Consumed by: SettingsStore.__init__.
+# Workstation preferences. FAUL ships a single dark theme, so there is no
+# appearance/mode key. Every key here MUST have a consumer — a preference that
+# changes nothing is worse than no preference, because it tells the analyst the
+# tool behaves in a way it does not. Consumed by: SettingsStore.__init__.
 _DEFAULTS: dict[str, object] = {
+    # Interface
     "recentDb": True,          # show the "recent databases" list atop pipeline steps
     "tz": "utc",               # "utc" | "local" | "raw" — timestamp rendering
-    "reduceMotion": False,     # suppress non-essential transitions
+    "recentsLimit": 5,         # how many entries each recents list keeps
+    # Exploit / analysis
+    "contextSize": 20,         # rows either side of a line in "view context"
+    "rowCap": 5_000,           # most rows the analysis table will materialise
+    # Paths & pipeline defaults
+    "kbPath": "",              # knowledge base directory ("" = the shipped one)
+    "extractJobs": 0,          # default --jobs for Extract (0 = auto/one per core)
+}
+
+# Bounds for the integer preferences, so a hand-edited settings.json cannot put a
+# nonsensical value into a spin box or make the analysis table try to materialise
+# ten million rows. Consumed by: get_int.
+_INT_BOUNDS: dict[str, tuple[int, int]] = {
+    "recentsLimit": (1, 50),
+    "contextSize": (1, 500),
+    "rowCap": (1, 1_000_000),
+    "extractJobs": (0, 256),
 }
 
 # The keys SettingsStore will persist. Anything outside this set is ignored on
@@ -61,6 +80,27 @@ class SettingsStore(QObject):
 
     def get(self, key: str) -> object:
         return self._values.get(key, _DEFAULTS.get(key))
+
+    def get_int(self, key: str) -> int:
+        """Read *key* as an int, coerced and clamped to its allowed range.
+
+        WHY coerce: values come back from JSON a user can hand-edit, so a string
+        or a float can reach a spin box's setValue and raise. Falling back to the
+        default keeps a mistyped preferences file from breaking a screen.
+        """
+        try:
+            value = int(self._values.get(key, _DEFAULTS.get(key)))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            value = int(_DEFAULTS.get(key, 0))  # type: ignore[arg-type]
+        low, high = _INT_BOUNDS.get(key, (None, None))
+        if low is not None:
+            value = max(low, min(high, value))
+        return value
+
+    def get_str(self, key: str) -> str:
+        """Read *key* as a string ("" when unset or of the wrong type)."""
+        value = self._values.get(key, _DEFAULTS.get(key))
+        return value if isinstance(value, str) else ""
 
     def set(self, key: str, value: object) -> None:
         # Ignore no-op writes so we don't churn the file or fire spurious signals.

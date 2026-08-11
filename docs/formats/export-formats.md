@@ -37,16 +37,18 @@ so the order below is exact and identical across formats.
 |---|---|---|---|
 | 1 | `timestamp` | `LogRow.timestamp_iso` | ISO 8601, ns-precise, formatted from `timestamp_unix_ns`. **Empty string** when the stored value is the `0` failure sentinel (never a misleading 1970 date) |
 | 2 | `timestamp_unix_ns` | `logs.timestamp_unix_ns` | integer |
-| 3 | `event_order` | `logs.event_order` | The forensic ordering rank; emitted so the tamper signal (wall-clock going backwards while `event_order` rises) is visible in the primary analyst output. NULL/empty if the extract never ran its ordering pass |
-| 4 | `process` | `processes.name` | |
-| 5 | `pid` | `logs.pid` | |
-| 6 | `tid` | `logs.tid` | |
-| 7 | `log_level` | `log_levels.name` | |
-| 8 | `event_type` | `event_types.name` | |
-| 9 | `subsystem` | `subsystems.name` | |
-| 10 | `category` | `categories.name` | |
-| 11 | `message` | `logs.message` | The composed message |
-| 12 | `matched_signatures` | rolled-up `kb_signatures.signature_id` | CSV: comma-joined in one cell. JSON/JSONL: a list of strings (empty list when unannotated) |
+| 3 | `event_order` | `logs.event_order` | The forensic ordering rank — the merged real timeline across every source file; emitted so the tamper signal (wall-clock going backwards while `event_order` rises) is visible in the primary analyst output. NULL/empty if the extract never ran its ordering pass |
+| 4 | `source_order` | `logs.source_order` | Physical position **within its own tracev3 file** (1-based, byte order) — the other half of the ordering evidence: `event_order` shows the merged timeline stays monotonic, `source_order` + `source_file` pin down exactly where in which file a row physically sat. NULL/empty if the ordering pass never ran |
+| 5 | `source_file` | `source_files.file_path`, via `logs.tracev3_file_id` | The tracev3 file `source_order` ranks within, path relative to the logarchive root. NULL when the source file's provenance was not resolved |
+| 6 | `process` | `processes.name` | |
+| 7 | `pid` | `logs.pid` | |
+| 8 | `tid` | `logs.tid` | |
+| 9 | `log_level` | `log_levels.name` | |
+| 10 | `event_type` | `event_types.name` | |
+| 11 | `subsystem` | `subsystems.name` | |
+| 12 | `category` | `categories.name` | |
+| 13 | `message` | `logs.message` | The composed message |
+| 14 | `matched_signatures` | rolled-up `kb_signatures.signature_id` | CSV: comma-joined in one cell. JSON/JSONL: a list of strings (empty list when unannotated) |
 
 Any unresolved lookup is NULL in SQL, which becomes an empty cell in CSV and
 `null` in JSON.
@@ -69,7 +71,7 @@ result, not the whole database.
 
 `include_fields` is silently ineffective on a database that was never annotated
 (`include_fields and has_kb`), so exporting an un-annotated database produces the
-12 base columns only.
+14 base columns only.
 
 ## CSV specifics
 
@@ -89,14 +91,14 @@ result, not the whole database.
 CSV (annotated database, labels `bssid` and `ssid` discovered):
 
 ```csv
-timestamp,timestamp_unix_ns,event_order,process,pid,tid,log_level,event_type,subsystem,category,message,matched_signatures,bssid,ssid
-2024-06-01T09:15:02.123456789Z,1717233302123456789,481920,wifid,132,4210,Default,Log,com.apple.wifi,,Associated to HomeNet with bssid aa:bb:cc:dd:ee:ff,net.wifi_associate,aa:bb:cc:dd:ee:ff,HomeNet
+timestamp,timestamp_unix_ns,event_order,source_order,source_file,process,pid,tid,log_level,event_type,subsystem,category,message,matched_signatures,bssid,ssid
+2024-06-01T09:15:02.123456789Z,1717233302123456789,481920,392,7C2A9E11.../0000000000000123.tracev3,wifid,132,4210,Default,Log,com.apple.wifi,,Associated to HomeNet with bssid aa:bb:cc:dd:ee:ff,net.wifi_associate,aa:bb:cc:dd:ee:ff,HomeNet
 ```
 
 JSONL row for the same entry:
 
 ```json
-{"timestamp":"2024-06-01T09:15:02.123456789Z","timestamp_unix_ns":1717233302123456789,"event_order":481920,"process":"wifid","pid":132,"tid":4210,"log_level":"Default","event_type":"Log","subsystem":"com.apple.wifi","category":null,"message":"Associated to HomeNet with bssid aa:bb:cc:dd:ee:ff","matched_signatures":["net.wifi_associate"],"extracted_values":{"ssid":"HomeNet","bssid":"aa:bb:cc:dd:ee:ff"}}
+{"timestamp":"2024-06-01T09:15:02.123456789Z","timestamp_unix_ns":1717233302123456789,"event_order":481920,"source_order":392,"source_file":"7C2A9E11.../0000000000000123.tracev3","process":"wifid","pid":132,"tid":4210,"log_level":"Default","event_type":"Log","subsystem":"com.apple.wifi","category":null,"message":"Associated to HomeNet with bssid aa:bb:cc:dd:ee:ff","matched_signatures":["net.wifi_associate"],"extracted_values":{"ssid":"HomeNet","bssid":"aa:bb:cc:dd:ee:ff"}}
 ```
 
 ## Errors

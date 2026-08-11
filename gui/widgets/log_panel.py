@@ -277,7 +277,21 @@ class LogPanel(QFrame):
         self._pause_button.setToolTip("Resume" if self._paused else "Pause")
 
     def _toggle_collapsed(self) -> None:
-        collapsed = self._body.isVisible()  # visible now ⇒ we are about to collapse
+        self.set_collapsed(self._body.isVisible())  # visible now ⇒ collapse it
+
+    def is_collapsed(self) -> bool:
+        return not self._body.isVisible()
+
+    def set_collapsed(self, collapsed: bool) -> None:
+        """Collapse the panel to its header strip, or expand it again.
+
+        Public so a screen that needs the vertical space (the Exploit table) can
+        ask for it on entry and hand it back on exit — see
+        ``MainWindow.set_current``. A no-op when already in the requested state,
+        so a repeated request cannot make the shell forget the restore size.
+        """
+        if collapsed == self.is_collapsed():
+            return
         self._body.setVisible(not collapsed)
         self._collapse_button.setIcon(make_icon("down" if collapsed else "up", 13, "#545a68"))
         self._collapse_button.setToolTip("Expand" if collapsed else "Collapse")

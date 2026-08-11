@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QTabWidget, QVBoxLayout, QWidget
 
 from gui.recent_store import RecentStore
@@ -58,6 +58,11 @@ class IdentifyHub(QWidget):
         # in-screen switcher (styled by the theme's QTabBar block).
         self._tabs = QTabWidget()
         self._tabs.setDocumentMode(True)
+        # Match the Exploit tabs: no elision, no stretch, no base rule.
+        tab_bar = self._tabs.tabBar()
+        tab_bar.setElideMode(Qt.TextElideMode.ElideNone)
+        tab_bar.setExpanding(False)
+        tab_bar.setDrawBase(False)
         self._tabs.addTab(self._run, "Run")
         self._tabs.addTab(self._results, "Results")
 

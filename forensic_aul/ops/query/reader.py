@@ -45,6 +45,9 @@ class LogFilters:
     last: str | None = None             # shortcut for time_from = now - DURATION (10m/1h/24h/7d)
     process: list[str] | None = None
     subsystem: list[str] | None = None
+    # Resolved through categories.id, exactly like process/subsystem, and
+    # index-assisted by idx_logs_category_id.
+    category: list[str] | None = None
     level: list[str] | None = None
     like: str | None = None             # SQL LIKE pattern on the message column
     # Prefix match on the *composed* message — the right filter for dynamic
@@ -185,6 +188,10 @@ def build_where(
         ids = _lookup_ids(conn, "subsystems", f.subsystem)
         clauses.append(_in_clause("l.subsystem_id", ids))
         params.extend(ids)
+    if f.category:
+        ids = _lookup_ids(conn, "categories", f.category)
+        clauses.append(_in_clause("l.category_id", ids))
+        params.extend(ids)
     if f.level:
         # log_level is normalised: resolve the requested names to log_levels.id and
         # filter on the FK (same pattern as process/subsystem above).
@@ -293,11 +300,17 @@ def _in_clause(col: str, ids: list[int]) -> str:
 # The per-log SELECT columns (shared by both query shapes below). The KB shape
 # appends the trailing annotation trio; _N_LOG_COLS names the boundary so the
 # accumulation code cannot silently break when a column is added.
+# ``source_order`` + ``source_file`` are appended at the end (additive, so the
+# leading columns keep their positions): source_order is the physical rank
+# WITHIN its tracev3 file, and source_file names that file, so together they
+# answer "where in which file did this row physically sit" — the other half
+# of the ordering evidence alongside event_order (the merged real timeline).
 _LOG_COLS = (
     "l.id", "l.timestamp_unix_ns", "l.event_order",
     "p.name", "l.pid", "l.tid",
     "ll.name", "et.name", "s.name", "c.name", "l.message",
     "fs.value",
+    "l.source_order", "sf.file_path",
 )
 _N_LOG_COLS = len(_LOG_COLS)
 # Trailing annotation trio = (kbs.signature_id, ev.label, ev.value).
@@ -307,12 +320,13 @@ _COL_VALUE = _N_LOG_COLS + 2
 
 _LOG_JOINS = """
     FROM logs l
-    LEFT JOIN processes   p  ON p.id  = l.process_id
-    LEFT JOIN subsystems  s  ON s.id  = l.subsystem_id
-    LEFT JOIN categories  c  ON c.id  = l.category_id
-    LEFT JOIN log_levels  ll ON ll.id = l.log_level_id
-    LEFT JOIN event_types et ON et.id = l.event_type_id
-    LEFT JOIN format_strs fs ON fs.id = l.format_str_id
+    LEFT JOIN processes    p  ON p.id  = l.process_id
+    LEFT JOIN subsystems   s  ON s.id  = l.subsystem_id
+    LEFT JOIN categories   c  ON c.id  = l.category_id
+    LEFT JOIN log_levels   ll ON ll.id = l.log_level_id
+    LEFT JOIN event_types  et ON et.id = l.event_type_id
+    LEFT JOIN format_strs  fs ON fs.id = l.format_str_id
+    LEFT JOIN source_files sf ON sf.id = l.tracev3_file_id
 """
 
 
@@ -325,6 +339,13 @@ class LogRow:
     that are accumulated here: distinct signature ids, and distinct values per
     label (joined with "; " when a label legitimately holds several values
     across annotations).
+
+    ``source_order`` (physical rank within ``source_file``) plus ``source_file``
+    (the tracev3 file's path, from ``source_files.file_path``) locate a row's
+    exact position in the raw acquisition, complementing ``event_order`` (the
+    merged real timeline across all files) — together they are the ordering
+    evidence the tamper signal relies on. Either is ``None`` when the ordering
+    pass never ran or the source file's provenance was not resolved.
     """
 
     __slots__ = (
@@ -332,6 +353,7 @@ class LogRow:
         "process", "pid", "tid",
         "log_level", "event_type", "subsystem", "category", "message",
         "format_string",
+        "source_order", "source_file",
         "signature_ids", "_values_by_label",
     )
 
@@ -339,7 +361,8 @@ class LogRow:
         (self.log_id, self.timestamp_unix_ns, self.event_order,
          self.process, self.pid, self.tid,
          self.log_level, self.event_type, self.subsystem, self.category,
-         self.message, self.format_string) = row[:_N_LOG_COLS]
+         self.message, self.format_string,
+         self.source_order, self.source_file) = row[:_N_LOG_COLS]
         self.signature_ids: list[str] = []
         self._values_by_label: dict[str, list[str]] = {}
         self.absorb(row[_COL_SIG_ID], row[_COL_LABEL], row[_COL_VALUE])

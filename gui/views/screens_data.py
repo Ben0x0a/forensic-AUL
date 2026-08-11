@@ -35,11 +35,9 @@ from gui.settings_store import SettingsStore
 from gui.views.screen_base import OperationScreen, RecentList
 from gui.widgets.components import (
     ComboBox,
-    clear_layout,
     ghost_button,
     mono_input,
     primary_button,
-    result_panel,
     Divider,
     Panel,
     Pill,
@@ -194,8 +192,7 @@ class ExportScreen(OperationScreen):
         filters.add(field_row("Last", self._last))
         self.content.addWidget(filters)
 
-        self._result_host = QVBoxLayout()
-        self.content.addLayout(self._result_host)
+        self.content.addLayout(self.make_result_host())
 
         actions = QHBoxLayout()
         actions.addStretch(1)
@@ -217,10 +214,10 @@ class ExportScreen(OperationScreen):
 
     def _start(self) -> None:
         if not self._db.path():
-            self._show_result(False, "Choose a database to export.")
+            self.show_result(False, "Choose a database to export.")
             return
         if not self._out.path():
-            self._show_result(False, "Choose an output file.")
+            self.show_result(False, "Choose an output file.")
             return
         db, out = Path(self._db.path()), Path(self._out.path())
         filters = ExportFilters(
@@ -241,20 +238,16 @@ class ExportScreen(OperationScreen):
         rows = getattr(result, "rows", 0)
         fmt = getattr(result, "fmt", "") or self._fmt.value
         out = str(getattr(result, "output_path", self._out.path()))
-        self._show_result(True, f"Exported {rows:,} row(s) as {fmt.upper()} → {Path(out).name}")
+        self.show_result(True, f"Exported {rows:,} row(s) as {fmt.upper()} → {Path(out).name}")
 
     def _on_failed(self, tb: str) -> None:
         self._reset_button()
         last = tb.strip().splitlines()[-1] if tb.strip() else "export failed"
-        self._show_result(False, last)
+        self.show_result(False, last)
 
     def _reset_button(self) -> None:
         self._export_btn.setEnabled(True)
         self._export_btn.setText("Export")
-
-    def _show_result(self, ok: bool, message: str) -> None:
-        clear_layout(self._result_host)
-        self._result_host.addWidget(result_panel(ok, message))
 
 
 # ── Verify hash ─────────────────────────────────────────────────────────────────

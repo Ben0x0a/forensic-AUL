@@ -39,7 +39,6 @@ from gui.widgets.components import (
     h2,
     help_label,
     mono,
-    result_panel,
     subtitle,
 )
 from gui.widgets.log_table import LogTableModel, LogTablePanel
@@ -153,8 +152,7 @@ class IdentifyResultsScreen(ScrollScreen):
         self.content.addWidget(self._hidden_panel)
 
         # Export/result confirmation host.
-        self._result_host = QVBoxLayout()
-        self.content.addLayout(self._result_host)
+        self.content.addLayout(self.make_result_host())
 
         self.content.addStretch(1)
         self._set_open_state()
@@ -348,6 +346,3 @@ class IdentifyResultsScreen(ScrollScreen):
 
     # ── Result line ───────────────────────────────────────────────────────────────
 
-    def show_result(self, ok: bool, message: str) -> None:
-        clear_layout(self._result_host)
-        self._result_host.addWidget(result_panel(ok, message))

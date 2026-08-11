@@ -11,7 +11,8 @@ Defines : ``run_diff`` — given two extracted SQLite databases (baseline +
           on top of the engine's mechanical ``excluded`` classification.
 Used by : forensic_aul.ops.identify.workflow (run_identify_workflow),
           forensic_aul.ops.identify.results (IdentifyResults — reopens the
-          same hidden_keys/view objects), launcher/cmds/identify_cmd.py.
+          same hidden_keys/view objects and the source_order/source_file
+          backfill), launcher/cmds/identify_cmd.py.
 Uses    : forensic_aul.ops.query.reader (has_kb_tables), forensic_aul.outcomes
           (DiffResult), forensic_aul.engine.utils.time (iso8601_from_unix_ns).
 
@@ -46,13 +47,17 @@ log = logging.getLogger(__name__)
 
 
 # Columns selected per row, in display order. Joined against the lookup tables
-# (processes, subsystems, categories, log_levels, event_types) for human
-# readability. The ISO timestamp is not stored — it is formatted on read from
-# timestamp_unix_ns (the first SELECT column), so it is omitted from the SQL.
-# Rows newer than the cutoff OR with the unix_ns=0 failure sentinel: a sentinel
-# row cannot be proven to predate the action, so it is surfaced (excluded=0) with
-# a note rather than silently dropped. event_order is carried through so the
-# tamper signal stays visible in the diff output too (L10).
+# (processes, subsystems, categories, log_levels, event_types, source_files) for
+# human readability. The ISO timestamp is not stored — it is formatted on read
+# from timestamp_unix_ns (the first SELECT column), so it is omitted from the
+# SQL. Rows newer than the cutoff OR with the unix_ns=0 failure sentinel: a
+# sentinel row cannot be proven to predate the action, so it is surfaced
+# (excluded=0) with a note rather than silently dropped. event_order and
+# source_order (+ source_file, the tracev3 file it ranks within) are carried
+# through so the tamper signal stays visible in the diff output too (L10):
+# event_order shows the merged timeline stays monotonic while wall-clock moves
+# backwards; source_order + source_file pin down exactly where in which file
+# each entry physically sat.
 #
 # matched_signatures is a scalar subquery (not a JOIN) specifically to avoid row
 # multiplication: a log matched by several signatures must still appear once —
@@ -63,6 +68,8 @@ _CSV_SQL_TEMPLATE = """
 SELECT
     l.timestamp_unix_ns   AS timestamp_unix_ns,
     l.event_order         AS event_order,
+    l.source_order        AS source_order,
+    sf.file_path          AS source_file,
     p.name                AS process,
     l.pid                 AS pid,
     l.tid                 AS tid,
@@ -73,11 +80,12 @@ SELECT
     l.message             AS message,
     {matched_signatures}  AS matched_signatures
 FROM logs l
-LEFT JOIN processes   p  ON p.id  = l.process_id
-LEFT JOIN subsystems  s  ON s.id  = l.subsystem_id
-LEFT JOIN categories  c  ON c.id  = l.category_id
-LEFT JOIN log_levels  ll ON ll.id = l.log_level_id
-LEFT JOIN event_types et ON et.id = l.event_type_id
+LEFT JOIN processes    p  ON p.id  = l.process_id
+LEFT JOIN subsystems   s  ON s.id  = l.subsystem_id
+LEFT JOIN categories   c  ON c.id  = l.category_id
+LEFT JOIN log_levels   ll ON ll.id = l.log_level_id
+LEFT JOIN event_types  et ON et.id = l.event_type_id
+LEFT JOIN source_files sf ON sf.id = l.tracev3_file_id
 WHERE l.timestamp_unix_ns > ? OR l.timestamp_unix_ns = 0
 ORDER BY l.timestamp_unix_ns ASC, l.id ASC
 """
@@ -97,7 +105,8 @@ def _build_csv_sql(conn: sqlite3.Connection) -> str:
 
 
 _CSV_HEADER = [
-    "timestamp", "timestamp_unix_ns", "event_order", "process", "pid", "tid",
+    "timestamp", "timestamp_unix_ns", "event_order", "source_order", "source_file",
+    "process", "pid", "tid",
     "log_level", "event_type", "subsystem", "category", "message",
     "matched_signatures", "note",
 ]
@@ -204,6 +213,8 @@ def run_diff(
                 timestamp           TEXT,
                 timestamp_unix_ns   INTEGER,
                 event_order         INTEGER,
+                source_order        INTEGER,
+                source_file         TEXT,
                 process             TEXT,
                 pid                 INTEGER,
                 tid                 INTEGER,
@@ -237,10 +248,11 @@ def run_diff(
 
         insert_sql = """
             INSERT INTO identified_logs
-                (timestamp, timestamp_unix_ns, event_order, process, pid, tid,
+                (timestamp, timestamp_unix_ns, event_order, source_order, source_file,
+                 process, pid, tid,
                  log_level, event_type, subsystem, category, message,
                  matched_signatures, excluded, note)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
 
         batch: list[tuple] = []
@@ -248,7 +260,8 @@ def run_diff(
         n_unresolved = 0
 
         for row in cur:
-            ts_ns, event_order, proc, pid, tid, lvl, et, sub, cat, msg, matched_sigs = row
+            (ts_ns, event_order, source_order, source_file, proc, pid, tid,
+             lvl, et, sub, cat, msg, matched_sigs) = row
             matched_sigs = matched_sigs or ""
             if ts_ns == 0:
                 # Unresolved timestamp: emit empty ISO (not the 1970 sentinel) and
@@ -263,7 +276,8 @@ def run_diff(
                 key = (msg, proc or "")
                 excluded = 1 if (msg is not None and key in baseline_keys) else 0
 
-            batch.append((ts, ts_ns, event_order, proc, pid, tid, lvl, et, sub, cat, msg,
+            batch.append((ts, ts_ns, event_order, source_order, source_file,
+                          proc, pid, tid, lvl, et, sub, cat, msg,
                           matched_sigs, excluded, note))
             if len(batch) >= BATCH:
                 dst.executemany(insert_sql, batch)
@@ -273,7 +287,8 @@ def run_diff(
                 n_excluded += 1
             else:
                 if writer is not None:
-                    writer.writerow([ts, ts_ns, event_order, proc, pid, tid, lvl, et, sub, cat,
+                    writer.writerow([ts, ts_ns, event_order, source_order, source_file,
+                                     proc, pid, tid, lvl, et, sub, cat,
                                      msg, matched_sigs, note])
                 n_retained += 1
 
@@ -313,3 +328,21 @@ def _create_hidden_keys_objects(conn: sqlite3.Connection) -> None:
                 ON hk.message = il.message AND hk.process = COALESCE(il.process, '')
             WHERE hk.message IS NULL
     """)
+
+
+def _ensure_source_columns(conn: sqlite3.Connection) -> None:
+    """Add ``source_order``/``source_file`` to ``identified_logs`` if absent.
+
+    Shared with :mod:`forensic_aul.ops.identify.results` so a pre-L10 diff DB
+    (produced before these two columns existed) can gain them on open. Unlike
+    the hidden_keys/v_identified_visible objects above, a column addition has
+    no ``IF NOT EXISTS`` form — ``ALTER TABLE ... ADD COLUMN`` raises if the
+    column is already there — so presence is checked via ``PRAGMA table_info``
+    first, keeping this idempotent across repeated calls (e.g. on every
+    ``IdentifyResults`` open).
+    """
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(identified_logs)")}
+    if "source_order" not in cols:
+        conn.execute("ALTER TABLE identified_logs ADD COLUMN source_order INTEGER")
+    if "source_file" not in cols:
+        conn.execute("ALTER TABLE identified_logs ADD COLUMN source_file TEXT")

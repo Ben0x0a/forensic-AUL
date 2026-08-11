@@ -49,6 +49,12 @@ from forensic_aul.ops.extraction.source import PreparedSource, prepare_source
 from forensic_aul.ops.extraction.timesync_setup import setup_timesync
 from forensic_aul.ops.extraction.tracev3_parse import process_tracev3
 from forensic_aul.ops.extraction.workers import parallel_parse
+from forensic_aul.ops.summary.cache import store_summary
+from forensic_aul.ops.summary.summary import (
+    DEFAULT_BUCKETS,
+    DEFAULT_TOP,
+    summarise_connection,
+)
 from forensic_aul.outcomes import ExtractResult
 
 # Relative phase weights for the extract progress bar (ratios, normalised by the
@@ -60,6 +66,7 @@ _EXTRACT_PHASES = [
     ("ordering", 0.17),  # assign_ordering
     ("index", 0.13),     # finalize_indexes
     ("fts", 0.07),       # deferred FTS rebuild (--fast-fts only)
+    ("stats", 0.05),     # summary statistics, cached into the database
 ]
 
 log = logging.getLogger(__name__)
@@ -516,6 +523,21 @@ def _run_parse(ctx: RunContext) -> _ParseStats:
     return stats
 
 
+def _store_summary_cache(conn: sqlite3.Connection) -> None:
+    """Compute the summary and cache it in the database (best-effort).
+
+    Never raises: see the WHY at the call site — a failed statistics pass must not
+    fail an otherwise complete extraction.
+    """
+    try:
+        _t = time.monotonic()
+        summary = summarise_connection(conn, top=DEFAULT_TOP, buckets=DEFAULT_BUCKETS)
+        store_summary(conn, summary, top=DEFAULT_TOP, buckets=DEFAULT_BUCKETS)
+        log.info(f"Summary statistics cached in {time.monotonic() - _t:.1f} s")
+    except Exception as exc:  # noqa: BLE001 — statistics are a convenience, not the deliverable
+        log.warning(f"Could not compute summary statistics: {exc}")
+
+
 def _finalise(ctx: RunContext, stats: _ParseStats) -> ExtractResult:
     """Ordering, indexes, FTS, integrity re-check, metadata update; returns ExtractResult."""
     conn, writer, opts = ctx.conn, ctx.writer, ctx.opts
@@ -612,6 +634,17 @@ def _finalise(ctx: RunContext, stats: _ParseStats) -> ExtractResult:
         log_end_time=last_ts,
     )
     conn.commit()
+
+    # ── Summary statistics, cached into the database ───────────────────────
+    # WHY here and not on demand: summarising costs six-plus full passes over
+    # ``logs``. Paying that once, at the end of a run that has already read every
+    # byte and while the page cache is still warm, means every later reader — the
+    # GUI's Exploit overview above all — gets the statistics for free instead of
+    # freezing for tens of seconds on open. A failure is logged and swallowed: the
+    # extraction itself succeeded, and a missing cache degrades to "not evaluated",
+    # never to a lost database.
+    ctx.reporter.phase("stats", "summary statistics")
+    _store_summary_cache(conn)
 
     elapsed = time.monotonic() - ctx.t0
     log.info("═" * 72)

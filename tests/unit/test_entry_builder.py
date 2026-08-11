@@ -15,6 +15,7 @@ from forensic_aul.engine.models import (
     CatalogChunk,
     Firehose,
     FirehoseActivity,
+    FirehoseFormatters,
     FirehoseItemData,
     FirehoseItemInfo,
     FirehoseLoss,
@@ -22,6 +23,8 @@ from forensic_aul.engine.models import (
     FirehosePreamble,
     FirehoseTrace,
     Oversize,
+    ProcessInfoEntry,
+    UUIDText,
 )
 from forensic_aul.engine.parser.firehose import (
     ACTIVITY_TYPE_ACTIVITY,
@@ -434,3 +437,132 @@ class TestNormalisedFields:
         fh = _base_firehose(ACTIVITY_TYPE_NON_ACTIVITY)
         entry = _call(fh)
         assert entry.format_string_file_offset is None
+
+
+# ── Test: process name resolution ────────────────────────────────────────────
+
+_SPRINGBOARD = "/System/Library/CoreServices/SpringBoard.app/SpringBoard"
+_MAIN_UUID = "1FE459BBDC3E19BBF82D58415A2AE9AB"
+
+
+def _uuidtext(uuid: str, image_path: str) -> UUIDText:
+    return UUIDText(
+        uuid=uuid, signature=0x66778899, major_version=2, minor_version=0,
+        entry_descriptors=[], footer_data=b"", image_path=image_path,
+    )
+
+
+def _catalog_with_main_uuid() -> CatalogChunk:
+    """A catalog whose single process resolves to _MAIN_UUID as its main exe."""
+    proc = ProcessInfoEntry(
+        index=0, unknown=0, catalog_main_uuid_index=0, catalog_dsc_uuid_index=0,
+        first_number_proc_id=1, second_number_proc_id=2, pid=10, effective_user_id=0,
+        unknown2=0, number_uuids_entries=0, unknown3=0, uuid_info_entries=[],
+        number_subsystems=0, unknown4=0, subsystem_entries=[],
+        main_uuid=_MAIN_UUID, dsc_uuid="",
+    )
+    catalog = _minimal_catalog()
+    catalog.catalog_uuids = [_MAIN_UUID]
+    catalog.catalog_process_info_entries = {"1_2": proc}
+    return catalog
+
+
+class _MainExeStrings:
+    """String source resolving _MAIN_UUID to a UUIDText with an image path."""
+
+    def __init__(self, image_path: str | None = _SPRINGBOARD):
+        self._image_path = image_path
+
+    def get_uuidtext(self, uuid: str):
+        if uuid == _MAIN_UUID and self._image_path is not None:
+            return _uuidtext(uuid, self._image_path)
+        return None
+
+    def get_dsc(self, uuid: str):
+        return None
+
+    def get_file_id(self, uuid: str):
+        return None
+
+
+def _main_exe_firehose() -> Firehose:
+    fh = _base_firehose(ACTIVITY_TYPE_NON_ACTIVITY)
+    fh.format_string_location = 0x100  # not DYNAMIC — forces a real lookup
+    fh.firehose_non_activity = FirehoseNonActivity(
+        firehose_formatters=FirehoseFormatters(main_exe=True),
+    )
+    return fh
+
+
+def _call_with_strings(fh: Firehose, strings, catalog: CatalogChunk):
+    return _firehose_to_log_entry(
+        firehose=fh,
+        preamble=_preamble(),
+        catalog=catalog,
+        strings=strings,
+        oversize_cache={},
+        timesync_data={},
+        boot_uuid=_BOOT_UUID,
+        tracev3_file_id=1,
+        timesync_file_id=None,
+        anchor_id_map={},
+        chunkset_file_offset=0,
+        firehose_inner_offset=0,
+        keep_raw=False,
+    )
+
+
+class TestProcessName:
+    def test_process_is_basename_of_the_image_path(self):
+        entry = _call_with_strings(
+            _main_exe_firehose(), _MainExeStrings(), _catalog_with_main_uuid()
+        )
+        assert entry.process == "SpringBoard"
+
+    def test_library_keeps_the_full_path(self):
+        entry = _call_with_strings(
+            _main_exe_firehose(), _MainExeStrings(), _catalog_with_main_uuid()
+        )
+        assert entry.library == _SPRINGBOARD
+
+    def test_process_is_never_the_raw_uuid_when_a_path_exists(self):
+        entry = _call_with_strings(
+            _main_exe_firehose(), _MainExeStrings(), _catalog_with_main_uuid()
+        )
+        assert entry.process != _MAIN_UUID
+        assert entry.process_uuid == _MAIN_UUID
+
+    def test_falls_back_to_the_uuid_without_a_uuidtext(self):
+        entry = _call_with_strings(
+            _main_exe_firehose(), _StubStrings(), _catalog_with_main_uuid()
+        )
+        assert entry.process == _MAIN_UUID
+        assert entry.library == ""
+
+    def test_falls_back_to_the_uuid_when_the_path_is_empty(self):
+        entry = _call_with_strings(
+            _main_exe_firehose(), _MainExeStrings(image_path=""),
+            _catalog_with_main_uuid(),
+        )
+        assert entry.process == _MAIN_UUID
+
+    def test_empty_process_when_nothing_resolves(self):
+        entry = _call(_base_firehose(ACTIVITY_TYPE_NON_ACTIVITY))
+        assert entry.process == ""
+
+    def test_image_path_lookup_is_memoised(self):
+        # The provider must be consulted once per process UUID, not per entry.
+        class _CountingStrings(_MainExeStrings):
+            calls = 0
+
+            def get_uuidtext(self, uuid: str):
+                _CountingStrings.calls += 1
+                return super().get_uuidtext(uuid)
+
+        strings = _CountingStrings()
+        catalog = _catalog_with_main_uuid()
+        for _ in range(5):
+            _call_with_strings(_main_exe_firehose(), strings, catalog)
+        # resolve_format_string performs one lookup per entry; the process-name
+        # memo must add only the single extra lookup for the first entry.
+        assert _CountingStrings.calls == 6

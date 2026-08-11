@@ -124,8 +124,7 @@ class IdentifyScreen(OperationScreen):
         self._build_waiting()
 
         # Result/DONE host — filled in show_result / on the DONE state.
-        self._result_host = QVBoxLayout()
-        self.content.addLayout(self._result_host)
+        self.content.addLayout(self.make_result_host())
         self._done_host = QVBoxLayout()
         self.content.addLayout(self._done_host)
 
@@ -273,19 +272,16 @@ class IdentifyScreen(OperationScreen):
             self._highlight_step("Setup")
             clear_layout(self._done_host)
         elif state is _State.RUNNING:
-            clear_layout(self._result_host)
+            self.clear_result()
             self._bar.setValue(0)
         elif state is _State.DONE:
             self._highlight_step("Results")
-            clear_layout(self._result_host)
+            self.clear_result()
             self._show_done(result)
 
     def set_countdown(self, text: str) -> None:
         self._countdown.setText(text)
 
-    def show_result(self, ok: bool, message: str) -> None:
-        clear_layout(self._result_host)
-        self._result_host.addWidget(result_panel(ok, message))
 
     # ── DONE rendering ────────────────────────────────────────────────────────────
 

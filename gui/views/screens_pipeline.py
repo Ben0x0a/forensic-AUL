@@ -45,7 +45,6 @@ from gui.widgets.components import (
     ghost_button,
     mono_input,
     primary_button,
-    result_panel,
     field_row,
     h1,
     h2,
@@ -131,8 +130,7 @@ class AcquireScreen(OperationScreen):
         form.add(field_row("Output folder", self._out, required=True))
         self.content.addWidget(form)
 
-        self._result_host = QVBoxLayout()
-        self.content.addLayout(self._result_host)
+        self.content.addLayout(self.make_result_host())
 
         actions = QHBoxLayout()
         actions.addStretch(1)
@@ -196,13 +194,6 @@ class AcquireScreen(OperationScreen):
         for edit in (self._case, self._exhibit, self._analyst, self._notes):
             edit.clear()
         self._out.set_path("")
-
-    def clear_result(self) -> None:
-        clear_layout(self._result_host)
-
-    def show_result(self, ok: bool, message: str) -> None:
-        clear_layout(self._result_host)
-        self._result_host.addWidget(result_panel(ok, message))
 
 
 # ── Extract ───────────────────────────────────────────────────────────────────
@@ -314,8 +305,7 @@ class ExtractScreen(OperationScreen):
         self._progress_panel.setVisible(False)
         self.content.addWidget(self._progress_panel)
 
-        self._result_host = QVBoxLayout()
-        self.content.addLayout(self._result_host)
+        self.content.addLayout(self.make_result_host())
 
         self._actions = QHBoxLayout()
         self._actions.addStretch(1)
@@ -458,7 +448,7 @@ class ExtractScreen(OperationScreen):
             self._sidecar_note.setVisible(False)
 
     def begin_progress(self) -> None:
-        clear_layout(self._result_host)
+        self.clear_result()
         self._progress_panel.setVisible(True)
         self._progress_title.setText("Extracting…")
         self._bar.setValue(0)
@@ -474,18 +464,12 @@ class ExtractScreen(OperationScreen):
         self._bar.setValue(int(fraction * 100))
         self._progress_label.setText(f"{fraction * 100:.1f}% · {label}")
 
-    def clear_result(self) -> None:
-        clear_layout(self._result_host)
-
-    def show_result(self, ok: bool, message: str) -> None:
-        clear_layout(self._result_host)
-        self._result_host.addWidget(result_panel(ok, message))
 
     def _reset(self) -> None:
         self._src.set_path("")
         self._out.set_path("")
         self._progress_panel.setVisible(False)
-        clear_layout(self._result_host)
+        self.clear_result()
         self.show_idle_actions()
 
 
@@ -507,6 +491,5 @@ def _indent_widget(widget: QWidget) -> QWidget:
 def _indented_help(text: str) -> QWidget:
     """A help line aligned under the field column (matches ``.field-help``)."""
     return _indent_widget(help_label(text))
-
 
 

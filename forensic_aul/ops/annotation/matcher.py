@@ -24,6 +24,12 @@ from pathlib import Path
 
 from forensic_aul.engine.database.access import open_analysis_database
 from forensic_aul.ops.knowledge_base.models import KnowledgeBase, Signature
+from forensic_aul.ops.summary.cache import clear_summary, store_summary
+from forensic_aul.ops.summary.summary import (
+    DEFAULT_BUCKETS,
+    DEFAULT_TOP,
+    summarise_connection,
+)
 from forensic_aul.outcomes import AnnotateResult
 
 log = logging.getLogger(__name__)
@@ -157,12 +163,34 @@ def annotate_connection(
         log.info(f"  {sig.id:<30}  {n:6} match(es)  ({time.monotonic() - t0:.2f}s)")
 
     conn.commit()
+    refresh_summary_cache(conn)
     return AnnotateResult(
         counts=counts,
         total_matches=sum(counts.values()),
         signatures_run=len(counts),
         signatures_matched=sum(1 for v in counts.values() if v),
     )
+
+
+def refresh_summary_cache(conn: sqlite3.Connection) -> None:
+    """Recompute the cached summary after annotations changed (best-effort).
+
+    Annotating moves ``annotated_count``, ``signature_count``, the per-action
+    rollup and the histogram's annotated series, so a summary cached at extract
+    time is stale the moment this runs. WHY recompute rather than clear it: the
+    connection is already open and the tables are hot, and the alternative —
+    leaving the analyst with "not evaluated" after every annotate — would make
+    the statistics useless exactly when they became interesting.
+
+    Never raises: statistics are a convenience, and a failure here must not undo
+    a successful annotation.
+    """
+    try:
+        summary = summarise_connection(conn, top=DEFAULT_TOP, buckets=DEFAULT_BUCKETS)
+        store_summary(conn, summary, top=DEFAULT_TOP, buckets=DEFAULT_BUCKETS)
+    except Exception as exc:  # noqa: BLE001 — never fail an annotation over its statistics
+        log.warning(f"Could not refresh summary statistics: {exc}")
+        clear_summary(conn)
 
 
 def _select_signatures(

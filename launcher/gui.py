@@ -34,6 +34,14 @@ def run_gui() -> int:
 
     app = QApplication(sys.argv)
 
+    # Fusion, not the platform's native style. WHY: gui/theme.py styles the entire
+    # UI through one stylesheet, and the native macOS style ignores much of it —
+    # QTabBar in particular is drawn as a native segmented control, so the theme's
+    # colours are dropped and its labels elide to "Overvi…". Fusion honours QSS
+    # for every widget, which makes the stylesheet the single source of truth for
+    # how the app looks on every platform.
+    app.setStyle("Fusion")
+
     # Install the crash handler before building the UI or running the event loop,
     # so a main-thread (Qt slot) exception is captured. Worker-thread crashes are
     # captured separately in gui.workers.base.Worker.run.
