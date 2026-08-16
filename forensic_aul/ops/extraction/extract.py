@@ -49,12 +49,7 @@ from forensic_aul.ops.extraction.source import PreparedSource, prepare_source
 from forensic_aul.ops.extraction.timesync_setup import setup_timesync
 from forensic_aul.ops.extraction.tracev3_parse import process_tracev3
 from forensic_aul.ops.extraction.workers import parallel_parse
-from forensic_aul.ops.summary.cache import store_summary
-from forensic_aul.ops.summary.summary import (
-    DEFAULT_BUCKETS,
-    DEFAULT_TOP,
-    summarise_connection,
-)
+from forensic_aul.ops.summary.cache import refresh_summary
 from forensic_aul.outcomes import ExtractResult
 
 # Relative phase weights for the extract progress bar (ratios, normalised by the
@@ -523,21 +518,6 @@ def _run_parse(ctx: RunContext) -> _ParseStats:
     return stats
 
 
-def _store_summary_cache(conn: sqlite3.Connection) -> None:
-    """Compute the summary and cache it in the database (best-effort).
-
-    Never raises: see the WHY at the call site — a failed statistics pass must not
-    fail an otherwise complete extraction.
-    """
-    try:
-        _t = time.monotonic()
-        summary = summarise_connection(conn, top=DEFAULT_TOP, buckets=DEFAULT_BUCKETS)
-        store_summary(conn, summary, top=DEFAULT_TOP, buckets=DEFAULT_BUCKETS)
-        log.info(f"Summary statistics cached in {time.monotonic() - _t:.1f} s")
-    except Exception as exc:  # noqa: BLE001 — statistics are a convenience, not the deliverable
-        log.warning(f"Could not compute summary statistics: {exc}")
-
-
 def _finalise(ctx: RunContext, stats: _ParseStats) -> ExtractResult:
     """Ordering, indexes, FTS, integrity re-check, metadata update; returns ExtractResult."""
     conn, writer, opts = ctx.conn, ctx.writer, ctx.opts
@@ -644,7 +624,7 @@ def _finalise(ctx: RunContext, stats: _ParseStats) -> ExtractResult:
     # extraction itself succeeded, and a missing cache degrades to "not evaluated",
     # never to a lost database.
     ctx.reporter.phase("stats", "summary statistics")
-    _store_summary_cache(conn)
+    refresh_summary(conn)
 
     elapsed = time.monotonic() - ctx.t0
     log.info("═" * 72)

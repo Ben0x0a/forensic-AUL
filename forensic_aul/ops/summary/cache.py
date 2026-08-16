@@ -1,8 +1,8 @@
 """Persist a computed :class:`Summary` inside the analysis database.
 
-Defines : the ``summary_cache`` table plus ``store_summary`` / ``load_summary`` /
-          ``clear_summary`` — the read side of the statistics a database carries
-          about itself.
+Defines : the ``summary_cache`` table plus ``store_summary`` /
+          ``refresh_summary`` / ``load_summary`` / ``clear_summary`` — the
+          statistics a database carries about itself.
 Used by : forensic_aul.ops.extraction.extract (writes the cache as the final
           extract phase), forensic_aul.ops.annotation.matcher (refreshes it after
           annotations change), gui.views.screen_exploit (reads it).
@@ -41,7 +41,10 @@ from forensic_aul.ops.summary.summary import (
 
 log = logging.getLogger(__name__)
 
-__all__ = ["store_summary", "load_summary", "clear_summary", "init_summary_cache_schema"]
+__all__ = [
+    "store_summary", "refresh_summary", "load_summary", "clear_summary",
+    "init_summary_cache_schema",
+]
 
 # Single-row table: ``CHECK (id = 1)`` makes "there is at most one cached summary"
 # a schema-level invariant, so a second write can only ever REPLACE the first —
@@ -91,6 +94,33 @@ def store_summary(
             "(id, computed_at, faul_version, params, payload) VALUES (1, ?, ?, ?, ?)",
             (computed_at, __version__, params, payload),
         )
+
+
+def refresh_summary(conn: sqlite3.Connection) -> bool:
+    """Recompute the summary and store it; never raises. True when it succeeded.
+
+    The one place the compute-then-store pair lives — extract calls it at the end
+    of a run and annotate after changing the annotation counts. WHY it swallows
+    failures: statistics are a convenience, and neither an extraction nor an
+    annotation should be lost because summarising them went wrong. A failure
+    clears the cache instead, so a stale summary is never presented as current.
+    """
+    # Local import: summary.py must not import this module at module scope
+    # (cache.py already imports summary.py for the dataclasses).
+    from forensic_aul.ops.summary.summary import (
+        DEFAULT_BUCKETS,
+        DEFAULT_TOP,
+        summarise_connection,
+    )
+
+    try:
+        summary = summarise_connection(conn, top=DEFAULT_TOP, buckets=DEFAULT_BUCKETS)
+        store_summary(conn, summary, top=DEFAULT_TOP, buckets=DEFAULT_BUCKETS)
+        return True
+    except Exception as exc:  # noqa: BLE001 — see the docstring
+        log.warning(f"Could not compute summary statistics: {exc}")
+        clear_summary(conn)
+        return False
 
 
 def clear_summary(conn: sqlite3.Connection) -> None:
