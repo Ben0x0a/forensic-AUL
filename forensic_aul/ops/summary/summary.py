@@ -60,6 +60,14 @@ class Summary:
     signature_count: int
     kb_versions: list[str] = field(default_factory=list)
 
+    # Entries whose timestamp could not be resolved, persisted as the unix_ns=0
+    # sentinel. They ARE counted in total_entries but are excluded from the
+    # wall-clock range, the histogram and any time-filtered read (they cannot be
+    # placed on a timeline), so without this number a reader cannot explain why
+    # those figures disagree. Belongs conceptually beside range_seconds; it sits
+    # here only because a defaulted field cannot precede a required one.
+    unresolved_timestamps: int = 0
+
     top_processes: list[TopEntry] = field(default_factory=list)
     top_subsystems: list[TopEntry] = field(default_factory=list)
     log_levels: list[TopEntry] = field(default_factory=list)
@@ -160,6 +168,10 @@ def summarise_connection(conn: sqlite3.Connection, *, top: int, buckets: int) ->
      t_start, t_end) = md
 
     total = conn.execute("SELECT COUNT(*) FROM logs").fetchone()[0]
+    # Index-assisted equality probe on the indexed timestamp column.
+    unresolved = conn.execute(
+        "SELECT COUNT(*) FROM logs WHERE timestamp_unix_ns = 0"
+    ).fetchone()[0]
 
     has_kb = _has_table(conn, "log_annotations") and _has_table(conn, "kb_signatures")
     annotated_count = signature_count = 0
@@ -177,7 +189,8 @@ def summarise_connection(conn: sqlite3.Connection, *, top: int, buckets: int) ->
         ios_build_version=ios_build, ios_version=ios_version,
         log_start_time=t_start, log_end_time=t_end,
         total_entries=total, range_min_ns=None, range_max_ns=None,
-        range_seconds=0.0, has_kb=has_kb, annotated_count=annotated_count,
+        range_seconds=0.0, unresolved_timestamps=unresolved,
+        has_kb=has_kb, annotated_count=annotated_count,
         signature_count=signature_count, kb_versions=kb_versions,
     )
     if total == 0:

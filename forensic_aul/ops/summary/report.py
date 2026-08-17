@@ -23,6 +23,17 @@ def format_summary(s: Summary) -> str:
     out.append(f"  Time range    : {s.log_start_time}  →  {s.log_end_time}  "
                f"({_human_duration(s.range_seconds)})")
     out.append(f"  Total entries : {s.total_entries:,}")
+    if s.unresolved_timestamps:
+        # Stated, never silently absorbed: these rows are in the total but not on
+        # the timeline, and an analyst reading a time-filtered export needs to
+        # know some entries could not be placed in the window at all.
+        one = s.unresolved_timestamps == 1
+        out.append(
+            f"  Unresolved    : {s.unresolved_timestamps:,} "
+            f"{'entry has' if one else 'entries have'} no resolvable timestamp — "
+            "counted above, absent from the time range, the histogram and any "
+            "time-filtered export"
+        )
     if s.has_kb:
         pct = (s.annotated_count / s.total_entries * 100) if s.total_entries else 0
         kbv = ", ".join(s.kb_versions) if s.kb_versions else "—"

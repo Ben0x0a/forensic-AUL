@@ -259,3 +259,74 @@ def test_diff_hidden_keys_and_view_created_and_hiding_works(tmp_path):
     )}
     assert still_in_table == {"user tapped Camera", "another line"}
     conn.close()
+
+
+# ── The unix_ns=0 sentinel in identify (review item L8) ───────────────────────
+#
+# The cutoff is MAX(timestamp_unix_ns) over the baseline. A row whose timestamp
+# never resolved has unix_ns=0, which is *below* any real cutoff — so a naive
+# "newer than the cutoff" test would silently drop it from both outputs. It
+# cannot be proven to predate the action either, so the contract is: keep it,
+# mark it retained (excluded=0), and say why in the note column.
+
+def test_baseline_cutoff_ignores_unresolved_rows(tmp_path):
+    """An unresolved row in the BASELINE must not drag the cutoff down to 0.
+
+    MAX() over a column containing 0 is unaffected, but MIN()-style or
+    ordering-based cutoffs would be — and a cutoff of 0 would retain the entire
+    action database as "new".
+    """
+    base, action = tmp_path / "b.db", tmp_path / "a.db"
+    _db(base, [(0, "unresolved baseline", "p1"), (1_000, "baseline", "p1")])
+    _db(action, [(2_000, "after the action", "p1")])
+    out = tmp_path / "out.db"
+    result = run_diff(base, action, tmp_path / "out.csv", out)
+    assert result.retained == 1
+
+
+def test_unresolved_action_row_is_retained_with_a_note(tmp_path):
+    base, action = tmp_path / "b.db", tmp_path / "a.db"
+    _db(base, [(1_000, "baseline", "p1")])
+    _db(action, [(0, "UNRESOLVED", "p1"), (2_000, "after the action", "p1")])
+    out = tmp_path / "out.db"
+    run_diff(base, action, tmp_path / "out.csv", out)
+
+    conn = sqlite3.connect(str(out))
+    row = conn.execute(
+        "SELECT timestamp, timestamp_unix_ns, excluded, note FROM identified_logs "
+        "WHERE message = 'UNRESOLVED'"
+    ).fetchone()
+    conn.close()
+    assert row is not None, "an unresolved row must not be silently dropped"
+    timestamp, unix_ns, excluded, note = row
+    assert unix_ns == 0                  # the sentinel stays visible
+    assert timestamp in ("", None)       # never rendered as 1970
+    assert excluded == 0                 # retained: cannot be proven pre-cutoff
+    assert "unresolved" in (note or "").lower()
+
+
+def test_unresolved_action_row_reaches_the_csv(tmp_path):
+    base, action = tmp_path / "b.db", tmp_path / "a.db"
+    _db(base, [(1_000, "baseline", "p1")])
+    _db(action, [(0, "UNRESOLVED", "p1"), (2_000, "after", "p1")])
+    csv_out = tmp_path / "out.csv"
+    run_diff(base, action, csv_out, tmp_path / "out.db")
+
+    rows = list(csv.DictReader(csv_out.read_text(encoding="utf-8-sig").splitlines()))
+    hit = [r for r in rows if r["message"] == "UNRESOLVED"]
+    assert len(hit) == 1
+    assert hit[0]["timestamp"] == ""
+    assert "unresolved" in hit[0]["note"].lower()
+
+
+def test_unresolved_rows_are_counted_and_warned_about(tmp_path, caplog):
+    """The analyst must be told, not left to notice — these rows are unplaceable."""
+    import logging
+
+    base, action = tmp_path / "b.db", tmp_path / "a.db"
+    _db(base, [(1_000, "baseline", "p1")])
+    _db(action, [(0, "U1", "p1"), (0, "U2", "p1"), (2_000, "after", "p1")])
+    with caplog.at_level(logging.WARNING):
+        run_diff(base, action, tmp_path / "out.csv", tmp_path / "out.db")
+    warnings = " ".join(r.message for r in caplog.records if r.levelno >= logging.WARNING)
+    assert "2" in warnings and "unresolved" in warnings.lower()

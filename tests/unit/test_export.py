@@ -434,3 +434,67 @@ class TestResultObject:
         assert res.output_path == out
         assert res.rows == 3
         assert res.fmt == "jsonl"
+
+
+# ── The unix_ns=0 sentinel in exports (review item L8) ────────────────────────
+#
+# A failed timestamp resolution is persisted as unix_ns=0 — deliberately visible
+# rather than dropped. The contract these tests pin:
+#   * unfiltered: the row IS exported, with an EMPTY timestamp (never 1970);
+#   * any time bound: the row is excluded — it cannot be proven to fall inside
+#     the requested window, and claiming it does would be a fabrication.
+# The behaviour was correct but untested, which is how it would have regressed.
+
+def _db_with_unresolved(tmp_path) -> Path:
+    db = tmp_path / "sentinel.db"
+    _make_db(db)
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "INSERT INTO logs(id, timestamp_unix_ns, timestamp_mach, message, process_id) "
+        "VALUES (99, 0, 0, 'UNRESOLVED ENTRY', 1)"
+    )
+    conn.commit()
+    conn.close()
+    return db
+
+
+def _export_rows(db: Path, out: Path, **filters) -> list[dict]:
+    run_export(db, out, ExportFilters(**filters))
+    return list(csv.DictReader(out.read_text(encoding="utf-8-sig").splitlines()))
+
+
+def test_unresolved_row_is_exported_when_unfiltered(tmp_path):
+    db = _db_with_unresolved(tmp_path)
+    rows = _export_rows(db, tmp_path / "all.csv")
+    hit = [r for r in rows if r["message"] == "UNRESOLVED ENTRY"]
+    assert len(hit) == 1, "an unresolved row must not vanish from an unfiltered export"
+
+
+def test_unresolved_row_exports_an_empty_timestamp_not_1970(tmp_path):
+    db = _db_with_unresolved(tmp_path)
+    rows = _export_rows(db, tmp_path / "all.csv")
+    hit = next(r for r in rows if r["message"] == "UNRESOLVED ENTRY")
+    assert hit["timestamp"] == ""
+    assert "1970" not in hit["timestamp"]
+    assert hit["timestamp_unix_ns"] == "0"   # the sentinel itself stays visible
+
+
+@pytest.mark.parametrize("filters", [
+    {"time_from": "2024-01-15T12:00:00Z"},
+    {"time_to": "2024-01-16T00:00:00Z"},
+    {"time_from": "2024-01-15T12:00:00Z", "time_to": "2024-01-16T00:00:00Z"},
+    {"last": "1000d"},
+])
+def test_any_time_bound_excludes_the_unresolved_row(tmp_path, filters):
+    """Including it would assert a placement in time that was never resolved."""
+    db = _db_with_unresolved(tmp_path)
+    rows = _export_rows(db, tmp_path / "filtered.csv", **filters)
+    assert not [r for r in rows if r["message"] == "UNRESOLVED ENTRY"]
+    assert rows, "the time filter should still match the resolved rows"
+
+
+def test_non_time_filters_keep_the_unresolved_row(tmp_path):
+    """Only *time* bounds may exclude it — a process filter must not."""
+    db = _db_with_unresolved(tmp_path)
+    rows = _export_rows(db, tmp_path / "proc.csv", process=["syslogd"])
+    assert [r for r in rows if r["message"] == "UNRESOLVED ENTRY"]

@@ -90,10 +90,34 @@ Notes:
 - **No ISO timestamp column.** The human-readable string is derived on read from
   `timestamp_unix_ns` (`engine/utils/time.iso8601_from_unix_ns`), saving ~30 bytes
   per row. The read layer emits `""` — not a 1970 date — for the `0` sentinel.
+
 - All FK columns are nullable; an unresolved lookup simply leaves NULL.
 - `source_order` / `event_order` are assigned **after** the bulk load, so they are
   independent of insertion order (and therefore of how many parser processes ran).
   An interrupted extract can leave them NULL.
+
+### How the `0` sentinel behaves downstream
+
+An entry whose timestamp could not be resolved is stored with
+`timestamp_unix_ns = 0` rather than being dropped — the entry is real evidence
+and its message, process and ordering are all intact. What it lacks is a place on
+a timeline, and every derived surface treats that consistently:
+
+| Surface | Behaviour |
+|---|---|
+| ISO timestamp (`LogRow.timestamp_iso`, exports) | empty string, never a 1970 date |
+| `summary.total_entries` | **counted** — it is part of the corpus |
+| `summary` time range / histogram | **excluded** — it cannot be placed |
+| `summary.unresolved_timestamps` | how many there are, so the two figures above can be reconciled |
+| export / `query_logs`, no time filter | **included** |
+| export / `query_logs`, any of `--from` / `--to` / `--last` | **excluded** — it cannot be proven to fall inside the window, and claiming it does would be a fabrication |
+| non-time filters (process, subsystem, …) | **included** — only *time* bounds may exclude it |
+| `identify` baseline cutoff | ignores sentinel rows when computing `MAX(timestamp_unix_ns)` |
+| `identify` action rows | **retained** with `excluded = 0` and a `note`, since a sentinel row cannot be proven to predate the action; the count is logged as a WARNING |
+
+The rule throughout: never silently drop the row, and never invent a time for it.
+Regression tests live in `tests/unit/test_export.py`, `test_diff.py` and
+`test_summary_verify.py`.
 
 ### Ordering semantics
 

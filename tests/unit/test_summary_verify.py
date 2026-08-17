@@ -217,3 +217,74 @@ def test_seal_log_file_no_metadata_id(tmp_path):
     logf.write_text("x")
     # metadata_id None → returns digest but does not write.
     assert seal_log_file(db, logf, None) == compute_sha256(logf)
+
+
+# ── Unresolved timestamps in the summary (review item L8) ─────────────────────
+
+def _db_with_unresolved(path, n: int = 2):
+    """The standard fixture plus *n* entries whose timestamp never resolved."""
+    _extract_db(path)
+    conn = sqlite3.connect(str(path))
+    for i in range(n):
+        conn.execute(
+            "INSERT INTO logs(id, timestamp_unix_ns, timestamp_mach, message, process_id) "
+            "VALUES (?, 0, 0, ?, 1)",
+            (100 + i, f"unresolved {i}"),
+        )
+    conn.commit()
+    conn.close()
+
+
+def test_summary_counts_unresolved_timestamps(tmp_path):
+    db = tmp_path / "unresolved.db"
+    _db_with_unresolved(db, n=2)
+    s = summarise(db)
+    assert s.unresolved_timestamps == 2
+    # They are part of the corpus…
+    assert s.total_entries == 5
+    # …but cannot be placed on a timeline, so they are absent from both the
+    # wall-clock range and the histogram. Without unresolved_timestamps a reader
+    # could not explain why those two figures disagree with the total.
+    assert sum(b.total for b in s.histogram) == 3
+    assert s.range_min_ns > 0
+
+
+def test_summary_range_is_not_dragged_to_1970(tmp_path):
+    db = tmp_path / "unresolved.db"
+    _db_with_unresolved(db, n=1)
+    s = summarise(db)
+    assert s.log_start_time == "2024-01-15T12:00:01Z"   # from case_metadata
+    assert s.range_seconds == 2.0                        # 3 resolved rows, 1s apart
+
+
+def test_unresolved_count_is_zero_on_a_clean_database(tmp_path):
+    db = tmp_path / "clean.db"
+    _extract_db(db)
+    assert summarise(db).unresolved_timestamps == 0
+
+
+def test_unresolved_count_round_trips_through_the_cache(tmp_path):
+    db = tmp_path / "cached.db"
+    _db_with_unresolved(db, n=3)
+    conn = sqlite3.connect(str(db))
+    store_summary(conn, summarise(db), top=5, buckets=10)
+    conn.commit()
+    conn.close()
+    assert load_summary(db).unresolved_timestamps == 3
+
+
+def test_report_states_the_unresolved_count(tmp_path):
+    """It has to be said in the report, not left for the analyst to infer."""
+    from forensic_aul.ops.summary.report import format_summary
+
+    db = tmp_path / "unresolved.db"
+    _db_with_unresolved(db, n=1)
+    text = format_summary(summarise(db))
+    assert "Unresolved" in text
+    assert "1 entry" in text            # inflected
+    # And says what the consequence is.
+    assert "time-filtered export" in text
+
+    clean = tmp_path / "clean.db"
+    _extract_db(clean)
+    assert "Unresolved" not in format_summary(summarise(clean))

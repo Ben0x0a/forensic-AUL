@@ -195,6 +195,7 @@ def _summary_to_dict(s: Summary) -> dict:
         "range_min_ns": s.range_min_ns,
         "range_max_ns": s.range_max_ns,
         "range_seconds": s.range_seconds,
+        "unresolved_timestamps": s.unresolved_timestamps,
         "has_kb": s.has_kb,
         "annotated_count": s.annotated_count,
         "signature_count": s.signature_count,
@@ -228,6 +229,8 @@ def _summary_from_dict(d: dict) -> Summary:
         range_min_ns=d["range_min_ns"],
         range_max_ns=d["range_max_ns"],
         range_seconds=d["range_seconds"],
+        # .get: a payload written before this field existed.
+        unresolved_timestamps=d.get("unresolved_timestamps", 0),
         has_kb=d["has_kb"],
         annotated_count=d["annotated_count"],
         signature_count=d["signature_count"],
