@@ -35,21 +35,16 @@ from typing import Any
 
 from forensic_aul import AcquisitionAborted, load_kb, run_identify_workflow
 from forensic_aul.engine.utils.system import resolve_auto_jobs
+from gui.paths import DEFAULT_KB_DIR
+from gui.controllers import last_line
 from gui.recent_store import RecentStore
 
 log = logging.getLogger(__name__)
 
-# Directory holding the shipped knowledge base; annotation is enrichment only, so
-# a missing/unloadable KB never blocks the run (see start()). Resolved relative
-# to the project root (three levels above this file), NOT the working directory:
-# a GUI launched from the Dock/Finder has cwd "/" and a cwd-relative path would
-# silently skip annotation on every run.
-_KB_DIR = Path(__file__).resolve().parents[2] / "knowledge_base"
-
-
-def _last_line(tb: str) -> str:
-    """The most informative single line of a traceback string, for the UI."""
-    return tb.strip().splitlines()[-1] if tb.strip() else ""
+# The shipped knowledge base (see gui/paths.py for why the path is resolved
+# there rather than relative to the working directory). Annotation is enrichment
+# only, so a missing/unloadable KB never blocks the run — see start().
+_KB_DIR = DEFAULT_KB_DIR
 
 
 def _is_aborted(tb: str) -> bool:
@@ -60,7 +55,7 @@ def _is_aborted(tb: str) -> bool:
     the whole text — an unrelated error whose message merely mentions the word
     must not be misreported as an operator abort.
     """
-    exc_type = _last_line(tb).split(":", 1)[0].strip()
+    exc_type = last_line(tb).split(":", 1)[0].strip()
     return exc_type.rsplit(".", 1)[-1] == "AcquisitionAborted"
 
 
@@ -103,7 +98,7 @@ class IdentifyController:
 
     def on_scan_failed(self, tb: str) -> None:
         self._view.set_device_scan_failed()
-        self._view.show_result(False, _last_line(tb) or "scan failed")
+        self._view.show_result(False, last_line(tb) or "scan failed")
 
     # ── Run ─────────────────────────────────────────────────────────────────────
 
@@ -217,4 +212,4 @@ class IdentifyController:
                 False, "Aborted — nothing was written beyond the collected archives."
             )
         else:
-            self._view.show_result(False, _last_line(tb) or "identify failed")
+            self._view.show_result(False, last_line(tb) or "identify failed")

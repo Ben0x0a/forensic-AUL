@@ -1,7 +1,7 @@
 """Preferences screen: Settings + About.
 
-Defines : SettingsScreen — workstation display preferences (recent-DB list,
-          appearance, reduce-motion, preferred timezone) backed by
+Defines : SettingsScreen — workstation preferences (recents, timezone,
+          analysis limits, knowledge-base path and pipeline defaults) backed by
           :class:`gui.settings_store.SettingsStore`, plus an About panel with the
           wordmark and version/platform rows.
 Used by : gui.views.shell (stacked screen, reached via the Preferences submenu).
@@ -23,13 +23,15 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
 from forensic_aul import __version__
+from gui.paths import DEFAULT_KB_DIR
 from gui.settings_store import SettingsStore
-from gui.views.screen_base import ScrollScreen
+from gui.views.screen_base import WIDTH_FORM, ScrollScreen
 from gui.widgets.components import (
     ComboBox,
     Divider,
@@ -44,6 +46,7 @@ from gui.widgets.components import (
     style_combo,
     subtitle,
 )
+from gui.widgets.path_picker import PathPicker
 
 
 class SettingsScreen(ScrollScreen):
@@ -52,7 +55,7 @@ class SettingsScreen(ScrollScreen):
     screen_id = "settings"
 
     def __init__(self, settings: SettingsStore) -> None:
-        super().__init__(max_width=860)
+        super().__init__(max_width=WIDTH_FORM)
         self._settings = settings
 
         self.content.addWidget(eyebrow("Preferences"))
@@ -72,9 +75,9 @@ class SettingsScreen(ScrollScreen):
         ))
         interface.add(Divider())
         interface.body.addLayout(self._pref_row(
-            "Reduce motion",
-            "Suppress non-essential transitions in the log panel and timeline.",
-            self._checkbox("reduceMotion"),
+            "Recent entries kept",
+            "How many paths each recents list remembers.",
+            self._spin("recentsLimit", 1, 50),
         ))
         self.content.addWidget(interface)
 
@@ -83,11 +86,46 @@ class SettingsScreen(ScrollScreen):
         time_panel.add(h2("Time"))
         time_panel.body.addLayout(self._pref_row(
             "Preferred timezone",
-            "UTC keeps cases portable. Local converts for display. Raw keeps each "
-            "row's source zone — mixed-zone cases stay mixed.",
+            "Display only — stored and exported timestamps are always UTC, so a "
+            "case stays portable between examiners. Local converts for reading; "
+            "Raw shows the stored nanosecond integer.",
             self._combo("tz", [("utc", "UTC"), ("local", _local_label()), ("raw", "Raw")]),
         ))
         self.content.addWidget(time_panel)
+
+        # ── Analysis ──────────────────────────────────────────────────────────
+        analysis = Panel()
+        analysis.add(h2("Analysis"))
+        analysis.body.addLayout(self._pref_row(
+            "Context window",
+            "Rows shown either side of a line when you ask for its context.",
+            self._spin("contextSize", 1, 500),
+        ))
+        analysis.add(Divider())
+        analysis.body.addLayout(self._pref_row(
+            "Row cap",
+            "Most rows the analysis table will load at once. Raising it does not "
+            "lose data — the count above the table always reports the true total.",
+            self._spin("rowCap", 100, 1_000_000, step=500),
+        ))
+        self.content.addWidget(analysis)
+
+        # ── Paths & defaults ──────────────────────────────────────────────────
+        paths = Panel()
+        paths.add(h2("Paths & defaults"))
+        paths.body.addLayout(self._pref_row(
+            "Knowledge base",
+            f"Signatures used when annotating. Empty uses the one shipped with "
+            f"FAUL ({DEFAULT_KB_DIR}).",
+            self._path_picker("kbPath"),
+        ))
+        paths.add(Divider())
+        paths.body.addLayout(self._pref_row(
+            "Default parser jobs",
+            "Pre-selected on the Extract screen. 0 lets FAUL pick one per core.",
+            self._spin("extractJobs", 0, 256),
+        ))
+        self.content.addWidget(paths)
         self.content.addWidget(mono(f"{self._settings.path} · sync: off"))
 
         # ── About ──────────────────────────────────────────────────────────────
@@ -101,6 +139,35 @@ class SettingsScreen(ScrollScreen):
         box.setCursor(Qt.CursorShape.PointingHandCursor)
         box.toggled.connect(lambda v, k=key: self._settings.set(k, v))
         return box
+
+    def _spin(self, key: str, low: int, high: int, *, step: int = 1) -> QSpinBox:
+        """A bounded integer control bound to *key*.
+
+        The bounds mirror ``settings_store._INT_BOUNDS`` so a value typed here and
+        a value hand-edited into settings.json are constrained the same way.
+        """
+        box = QSpinBox()
+        box.setRange(low, high)
+        box.setSingleStep(step)
+        box.setValue(self._settings.get_int(key))
+        box.setFixedWidth(120)
+        box.valueChanged.connect(lambda v, k=key: self._settings.set(k, v))
+        return box
+
+    def _path_picker(self, key: str) -> PathPicker:
+        """A folder picker bound to *key* (empty string = "use the default").
+
+        Bound to the line edit's own textChanged so a dragged, typed or browsed
+        path all persist the same way — PathPicker exposes the edit rather than a
+        signal of its own.
+        """
+        picker = PathPicker("dir", placeholder="(use the shipped knowledge base)")
+        picker.set_path(self._settings.get_str(key))
+        picker.edit.textChanged.connect(
+            lambda value, k=key: self._settings.set(k, value.strip())
+        )
+        picker.setFixedWidth(380)
+        return picker
 
     def _combo(self, key: str, options: list[tuple[str, str]]) -> ComboBox:
         """A native picker bound to *key*; *options* are ``(value, label)`` pairs."""
@@ -167,7 +234,7 @@ class SettingsScreen(ScrollScreen):
             ("version", __version__),
             ("platform", f"{platform.system()} {platform.release()} · {platform.machine()}"),
             ("python", platform.python_version()),
-            ("license", "forensic-aul · open source · MIT"),
+            ("license", "forensic-aul · open source · GPL-3.0-or-later"),
         ]
         for i, (key, value) in enumerate(rows):
             key_label = QLabel(key.upper())

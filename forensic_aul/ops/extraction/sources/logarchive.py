@@ -25,9 +25,18 @@ def matches(path: Path) -> bool:
 
 
 def prepare(
-    path: Path, *, work_dir: Path | None = None, integrity: str = "full"
+    path: Path,
+    *,
+    work_dir: Path | None = None,
+    integrity: str = "full",
+    reset_work_dir: bool = False,
 ) -> PreparedSource:
-    """Use *path* in place as a logarchive; hash it per the integrity mode."""
+    """Use *path* in place as a logarchive; hash it per the integrity mode.
+
+    *work_dir* / *reset_work_dir* are accepted for signature parity with the other
+    handlers and ignored: nothing is materialised, so there is no work root to
+    allocate or contaminate.
+    """
     check_integrity_mode(integrity)
     path = Path(path)
     content_sha256, file_hashes = hash_for_mode(path, integrity)

@@ -21,15 +21,11 @@ import time
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from forensic_aul.engine.database.access import open_analysis_database
 from forensic_aul.ops.knowledge_base.models import KnowledgeBase, Signature
-from forensic_aul.ops.summary.cache import clear_summary, store_summary
-from forensic_aul.ops.summary.summary import (
-    DEFAULT_BUCKETS,
-    DEFAULT_TOP,
-    summarise_connection,
-)
+from forensic_aul.ops.summary.cache import refresh_summary
 from forensic_aul.outcomes import AnnotateResult
 
 log = logging.getLogger(__name__)
@@ -38,13 +34,31 @@ log = logging.getLogger(__name__)
 # ── Schema for annotation tables ──────────────────────────────────────────────
 
 _DDL = """
+-- The signature AS APPLIED, not merely a reference to one. WHY the whole rule
+-- and not just its id: an annotated database is the artefact an analyst reports
+-- from, and "why is this line flagged?" must be answerable from the database
+-- alone — after the knowledge base has moved on, or on a machine that never had
+-- it. Every column below is a copy taken at annotate time; the KB's own version
+-- + digest identify which knowledge base it was copied from.
 CREATE TABLE IF NOT EXISTS kb_signatures (
     id                  INTEGER PRIMARY KEY,
     signature_id        TEXT NOT NULL,        -- e.g. "sb.app_foreground"
     action              TEXT NOT NULL,
     description         TEXT,
+    interpretation      TEXT,                 -- what one may conclude
+    caveats             TEXT,                 -- when that conclusion does not hold
     confidence          TEXT,
     tags                TEXT,                 -- JSON list
+    references_json     TEXT,                 -- JSON list of sources/evidence
+    platform            TEXT,
+    ios_min             TEXT,
+    ios_max             TEXT,
+    match_json          TEXT,                 -- JSON of the match rule that fired
+    extract_json        TEXT,                 -- JSON of the extraction spec
+    author              TEXT,
+    created             TEXT,                 -- ISO date the rule was written
+    sig_version         TEXT,                 -- per-signature semver
+    status              TEXT,                 -- draft | validated | deprecated
     source_file         TEXT,                 -- KB-relative YAML path
     kb_version          TEXT NOT NULL,        -- semver from VERSION
     kb_sha256           TEXT NOT NULL,        -- digest of KB tree
@@ -148,6 +162,16 @@ def annotate_connection(
     init_annotation_schema(conn)
 
     selected = _select_signatures(kb.signatures, only_ids, only_tags)
+    # Version gating: a signature declaring ios_min/ios_max/platform is a claim
+    # about which OS it was reverse-engineered against, and applying it outside
+    # that range would attach a conclusion the author never supported.
+    case = _case_platform(conn)
+    selected, skipped = _apply_version_gates(selected, case)
+    if skipped:
+        log.info(
+            f"Skipped {len(skipped)} signature(s) not applicable to "
+            f"{case[0]} {case[1] or '(unknown version)'}: {', '.join(skipped)}"
+        )
     log.info(f"Annotating with {len(selected)} signature(s)")
 
     # Microsecond precision (not seconds): the UNIQUE(signature_id, kb_sha256,
@@ -163,7 +187,7 @@ def annotate_connection(
         log.info(f"  {sig.id:<30}  {n:6} match(es)  ({time.monotonic() - t0:.2f}s)")
 
     conn.commit()
-    refresh_summary_cache(conn)
+    refresh_summary(conn)
     return AnnotateResult(
         counts=counts,
         total_matches=sum(counts.values()),
@@ -172,25 +196,92 @@ def annotate_connection(
     )
 
 
-def refresh_summary_cache(conn: sqlite3.Connection) -> None:
-    """Recompute the cached summary after annotations changed (best-effort).
+def clear_annotations(db: Path | str | sqlite3.Connection) -> int:
+    """Remove every annotation from *db*; return how many were removed.
 
-    Annotating moves ``annotated_count``, ``signature_count``, the per-action
-    rollup and the histogram's annotated series, so a summary cached at extract
-    time is stale the moment this runs. WHY recompute rather than clear it: the
-    connection is already open and the tables are hot, and the alternative —
-    leaving the analyst with "not evaluated" after every annotate — would make
-    the statistics useless exactly when they became interesting.
+    Deletes ``extracted_values`` → ``log_annotations`` → ``kb_signatures`` in
+    foreign-key order, then refreshes the cached statistics so the counts an
+    analyst sees match the database again.
 
-    Never raises: statistics are a convenience, and a failure here must not undo
-    a successful annotation.
+    WHY this exists: ``annotate`` is append-only by design (running two KB
+    versions side by side is a legitimate comparison), which means re-running it
+    over the same database silently duplicates every annotation and inflates the
+    statistics and exports. Removing first is the way to genuinely re-annotate,
+    and it is a deliberate act rather than a hidden side effect of the second run.
+
+    Returns 0 when the database has never been annotated (no tables to clear).
     """
+    if isinstance(db, sqlite3.Connection):
+        return _clear_annotations(db)
+    conn = open_analysis_database(db)
     try:
-        summary = summarise_connection(conn, top=DEFAULT_TOP, buckets=DEFAULT_BUCKETS)
-        store_summary(conn, summary, top=DEFAULT_TOP, buckets=DEFAULT_BUCKETS)
-    except Exception as exc:  # noqa: BLE001 — never fail an annotation over its statistics
-        log.warning(f"Could not refresh summary statistics: {exc}")
-        clear_summary(conn)
+        conn.execute("PRAGMA foreign_keys = ON")
+        return _clear_annotations(conn)
+    finally:
+        conn.close()
+
+
+def _clear_annotations(conn: sqlite3.Connection) -> int:
+    if not _has_annotation_tables(conn):
+        return 0
+    removed = conn.execute("SELECT COUNT(*) FROM log_annotations").fetchone()[0]
+    with conn:
+        # FK order: values reference annotations, annotations reference signatures.
+        conn.execute("DELETE FROM extracted_values")
+        conn.execute("DELETE FROM log_annotations")
+        conn.execute("DELETE FROM kb_signatures")
+    refresh_summary(conn)
+    log.info(f"Removed {removed} annotation(s)")
+    return removed
+
+
+def _has_annotation_tables(conn: sqlite3.Connection) -> bool:
+    rows = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' "
+        "AND name IN ('log_annotations', 'kb_signatures', 'extracted_values')"
+    ).fetchall()
+    return len(rows) == 3
+
+
+def annotation_state(db: Path | str | sqlite3.Connection) -> dict[str, Any]:
+    """Describe the annotations already on *db*, for a UI to decide what to offer.
+
+    Returns ``{"annotated": int, "signatures": int, "kb_versions": [...],
+    "applied_at": [...]}``. All zero/empty when the database has never been
+    annotated. Read-only.
+    """
+    if isinstance(db, sqlite3.Connection):
+        return _annotation_state(db)
+    conn = open_analysis_database(db)
+    try:
+        return _annotation_state(conn)
+    finally:
+        conn.close()
+
+
+def no_annotations() -> dict[str, Any]:
+    """The :func:`annotation_state` shape for a never-annotated database.
+
+    Exposed so a caller that cannot reach the database (a closed store, an
+    unreadable file) can show the same "not annotated" state without inventing
+    a second copy of this dict.
+    """
+    return {"annotated": 0, "signatures": 0, "kb_versions": [], "applied_at": []}
+
+
+def _annotation_state(conn: sqlite3.Connection) -> dict[str, Any]:
+    if not _has_annotation_tables(conn):
+        return no_annotations()
+    return {
+        "annotated": conn.execute(
+            "SELECT COUNT(DISTINCT log_id) FROM log_annotations").fetchone()[0],
+        "signatures": conn.execute(
+            "SELECT COUNT(*) FROM kb_signatures").fetchone()[0],
+        "kb_versions": [r[0] for r in conn.execute(
+            "SELECT DISTINCT kb_version FROM kb_signatures ORDER BY kb_version")],
+        "applied_at": [r[0] for r in conn.execute(
+            "SELECT DISTINCT applied_at FROM kb_signatures ORDER BY applied_at")],
+    }
 
 
 def _select_signatures(
@@ -208,6 +299,78 @@ def _select_signatures(
         if only_tags is not None and (set(s.tags) & only_tags):
             out.append(s)
     return out
+
+
+# ── Applicability gating (platform + iOS version range) ───────────────────────
+
+def _case_platform(conn: sqlite3.Connection) -> tuple[str, str | None]:
+    """Return ``(platform, ios_version)`` for the database under annotation.
+
+    The platform is "ios" for every database this tool currently produces; the
+    version comes from ``case_metadata.ios_version``, which extract fills from
+    SystemVersion.plist when the source carried one. ``None`` when unknown.
+    """
+    try:
+        row = conn.execute(
+            "SELECT ios_version FROM case_metadata ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    except sqlite3.DatabaseError:
+        return ("ios", None)
+    return ("ios", (row[0] if row else None) or None)
+
+
+def _apply_version_gates(
+    sigs: list[Signature], case: tuple[str, str | None]
+) -> tuple[list[Signature], list[str]]:
+    """Split *sigs* into (applicable, skipped-ids) for this case.
+
+    WHY an unknown case version applies EVERY signature rather than none: the
+    version is often genuinely absent (a bare .logarchive carries no
+    SystemVersion.plist), and silently withholding annotations there would be a
+    far worse failure than showing one that may not apply — the analyst can see
+    a signature's declared range, but cannot see annotations that never appeared.
+    """
+    platform, version = case
+    keep: list[Signature] = []
+    skipped: list[str] = []
+    for sig in sigs:
+        if sig.platform and sig.platform.lower() != platform:
+            skipped.append(sig.id)
+            continue
+        if version is not None and not _version_in_range(version, sig.ios_min, sig.ios_max):
+            skipped.append(sig.id)
+            continue
+        keep.append(sig)
+    return keep, skipped
+
+
+def _version_in_range(version: str, low: str | None, high: str | None) -> bool:
+    """True when *version* falls within [*low*, *high*] (either bound optional).
+
+    An unparseable version on either side is treated as "no constraint": a
+    malformed bound in the knowledge base must not silently suppress a signature.
+    """
+    parsed = _version_tuple(version)
+    if parsed is None:
+        return True
+    if low is not None:
+        low_parsed = _version_tuple(low)
+        if low_parsed is not None and parsed < low_parsed:
+            return False
+    if high is not None:
+        high_parsed = _version_tuple(high)
+        if high_parsed is not None and parsed > high_parsed:
+            return False
+    return True
+
+
+def _version_tuple(value: str) -> tuple[int, ...] | None:
+    """Parse a dotted version ("17.5.1") into a comparable tuple, or None."""
+    parts = value.strip().split(".")
+    try:
+        return tuple(int(p) for p in parts)
+    except ValueError:
+        return None
 
 
 # ── Per-signature implementation ──────────────────────────────────────────────
@@ -253,6 +416,23 @@ def _annotate_one(
         if lvl_id is _NO_MATCH:
             return 0
         where.append("log_level_id = ?"); params.append(lvl_id)
+    if sig.match.event_type is not None:
+        # Same normalised-lookup shape as log_level; also a non-indexed residual
+        # refinement, applied on the already-narrowed candidate set.
+        et_id = _resolve_lookup_id(conn, "event_types", sig.match.event_type)
+        if et_id is _NO_MATCH:
+            return 0
+        where.append("event_type_id = ?"); params.append(et_id)
+    if sig.match.library is not None:
+        # WHY every matching id and not one: `libraries` is UNIQUE(name, uuid), so
+        # the same path legitimately recurs under several UUIDs (one per build of
+        # the binary). Resolving to a single id would silently match only one of
+        # them and under-report.
+        lib_ids = _resolve_lookup_ids(conn, "libraries", sig.match.library)
+        if lib_ids is _NO_MATCH:
+            return 0
+        where.append(f"library_id IN ({','.join('?' * len(lib_ids))})")
+        params.extend(lib_ids)
 
     # Dynamic signatures with no indexed refinement at all would scan every
     # row — refuse rather than silently melt the disk.
@@ -347,6 +527,16 @@ def _resolve_lookup_id(conn: sqlite3.Connection, table: str, name: str | None):
 
 # ── Insert helpers ────────────────────────────────────────────────────────────
 
+def _resolve_lookup_ids(conn: sqlite3.Connection, table: str, name: str):
+    """Return every id in *table* whose ``name`` is *name*, or :data:`_NO_MATCH`.
+
+    The multi-valued counterpart of :func:`_resolve_lookup_id`, for lookup tables
+    whose name is not unique on its own (see the `libraries` note at the call site).
+    """
+    rows = conn.execute(f"SELECT id FROM {table} WHERE name = ?", (name,)).fetchall()
+    return [r[0] for r in rows] if rows else _NO_MATCH
+
+
 def _insert_kb_signature(
     conn: sqlite3.Connection,
     sig: Signature,
@@ -356,13 +546,18 @@ def _insert_kb_signature(
     cur = conn.execute(
         """
         INSERT INTO kb_signatures
-            (signature_id, action, description, confidence, tags,
+            (signature_id, action, description, interpretation, caveats,
+             confidence, tags, references_json, platform, ios_min, ios_max,
+             match_json, extract_json, author, created, sig_version, status,
              source_file, kb_version, kb_sha256, applied_at, match_count)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
         """,
         (
-            sig.id, sig.action, sig.description, sig.confidence,
-            json.dumps(list(sig.tags)),
+            sig.id, sig.action, sig.description, sig.interpretation, sig.caveats,
+            sig.confidence, json.dumps(list(sig.tags)),
+            json.dumps(list(sig.references)), sig.platform, sig.ios_min, sig.ios_max,
+            json.dumps(_match_to_dict(sig.match)), json.dumps(_extract_to_dict(sig)),
+            sig.author, sig.created, sig.version, sig.status,
             sig.source_file, kb.version, kb.sha256, applied_at,
         ),
     )
@@ -370,6 +565,40 @@ def _insert_kb_signature(
     if rid is None:
         raise RuntimeError("kb_signatures insert returned no rowid")
     return rid
+
+
+def _match_to_dict(match: Any) -> dict[str, Any]:
+    """The match rule as a plain dict, omitting the fields it does not set.
+
+    Stored per applied signature so a reader can see exactly which constraints
+    selected a line, without needing the YAML the rule came from.
+    """
+    return {
+        name: value
+        for name, value in (
+            ("format_str", match.format_str),
+            ("format_str_any", list(match.format_str_any) if match.format_str_any else None),
+            ("dynamic", match.dynamic or None),
+            ("process", match.process),
+            ("subsystem", match.subsystem),
+            ("category", match.category),
+            ("log_level", match.log_level),
+            ("event_type", match.event_type),
+            ("library", match.library),
+            ("message_regex", match.message_regex),
+        )
+        if value is not None
+    }
+
+
+def _extract_to_dict(sig: Signature) -> dict[str, Any]:
+    """The extraction spec as a plain dict (empty when the signature extracts nothing)."""
+    out: dict[str, Any] = {}
+    if sig.extract_regex:
+        out["extract_regex"] = sig.extract_regex
+    if sig.extract_fields:
+        out["extract_fields"] = dict(sig.extract_fields)
+    return out
 
 
 def _flush_annotations(

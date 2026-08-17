@@ -42,6 +42,7 @@ from gui.widgets.components import (
     mono,
     mono_input,
     primary_button,
+    repolish,
     result_panel,
     style_combo,
     subtitle,
@@ -148,8 +149,7 @@ class IdentifyScreen(OperationScreen):
         """Give *step*'s pill the 'ok' role, all others the neutral default."""
         for name, pill in self._steps.items():
             pill.setProperty("pill", "ok" if name == step else "neutral")
-            pill.style().unpolish(pill)
-            pill.style().polish(pill)
+            repolish(pill)
 
     # ── Setup section ─────────────────────────────────────────────────────────────
 

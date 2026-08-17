@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
 
 from gui.recent_store import RecentStore
 from gui.settings_store import SettingsStore
-from gui.theme import build_stylesheet
+from gui.theme import DARK_TOKENS, build_stylesheet
 from gui.views.screen_exploit import ExploitScreen
 from gui.views.screen_identify_hub import IdentifyHub
 from gui.views.screens_data import ExportScreen, VerifyHashScreen
@@ -120,7 +120,10 @@ class MainWindow(QWidget):
         self.setMinimumSize(980, 640)
 
         self._settings = SettingsStore(self)
-        self._recents = RecentStore()
+        self._recents = RecentStore(self._settings.get_int("recentsLimit"))
+        # Preferences that other objects own must follow a live change, not
+        # wait for a restart (review item G3).
+        self._settings.changed.connect(self._on_setting_changed)
 
         self._nav_buttons: dict[str, QPushButton] = {}
         self._nav_group = QButtonGroup(self)
@@ -178,12 +181,15 @@ class MainWindow(QWidget):
 
     def _set_title(self, screen_id: str) -> None:
         label = _SCREEN_LABELS.get(screen_id, "")
+        # Colours sourced from DARK_TOKENS (not literals) so the breadcrumb stays
+        # in lock-step with the rest of the palette (review item G8).
+        t = DARK_TOKENS
         self._title_label.setText(
-            "<span id='titleApp' style='color:#e6e9ef;font-weight:600'>FAUL</span>"
-            "<span style='color:#3f4452'> · </span>"
-            "<span style='color:#7a8090'>forensic-aul</span>"
-            "<span style='color:#3f4452'> &nbsp;—&nbsp; </span>"
-            f"<span style='color:#b8bdc7'>{label}</span>"
+            f"<span id='titleApp' style='color:{t['text_hi']};font-weight:600'>FAUL</span>"
+            f"<span style='color:{t['text_mute']}'> · </span>"
+            f"<span style='color:{t['text_dim']}'>forensic-aul</span>"
+            f"<span style='color:{t['text_mute']}'> &nbsp;—&nbsp; </span>"
+            f"<span style='color:{t['text']}'>{label}</span>"
         )
 
     def toggle_maximise(self) -> None:
@@ -455,6 +461,11 @@ class MainWindow(QWidget):
     @property
     def log_panel(self) -> LogPanel:
         return self._log_panel
+
+    @Slot(str, object)
+    def _on_setting_changed(self, key: str, _value: object) -> None:
+        if key == "recentsLimit":
+            self._recents.set_limit(self._settings.get_int("recentsLimit"))
 
     # ── Navigation ──────────────────────────────────────────────────────────────
 

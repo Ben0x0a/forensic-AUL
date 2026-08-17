@@ -27,7 +27,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QProgressBar,
-    QVBoxLayout,
     QWidget,
 )
 
@@ -40,6 +39,7 @@ from gui.widgets.components import (
     ComboBox,
     Divider,
     Panel,
+    _repolish,
     clear_layout,
     eyebrow,
     ghost_button,
@@ -189,6 +189,13 @@ class AcquireScreen(OperationScreen):
 
     def set_continue_visible(self, visible: bool) -> None:
         self._continue_btn.setVisible(visible)
+        # One button language: only the row's forward action may be primary
+        # (violet). Once "Continue to Extract" appears as that forward action,
+        # demote "Start acquisition" to ghost so the two don't compete; restore
+        # it to primary when the shortcut is hidden again (a fresh run or a
+        # form reset — see AcquireController.reset()).
+        self._start_btn.setProperty("variant", "ghost" if visible else "primary")
+        _repolish(self._start_btn)
 
     def clear_form(self) -> None:
         for edit in (self._case, self._exhibit, self._analyst, self._notes):
@@ -205,8 +212,10 @@ class ExtractScreen(OperationScreen):
 
     def __init__(self, settings: SettingsStore, recents: RecentStore) -> None:
         super().__init__()
+        # This screen deliberately has no "Recent databases" list — see the
+        # Output section below. It reads *settings* for the default parser-job
+        # count only.
         self._settings = settings
-        self._recents = recents
         self.navigate = None
         self._ctrl = ExtractController(self, recents)
         self.progressChanged.connect(self._on_progress)
@@ -218,14 +227,6 @@ class ExtractScreen(OperationScreen):
             "full-file-system .zip into a normalised SQLite database. The source is "
             "picked explicitly; a .faul auto-fills the case fields from its sidecar."
         ))
-
-        self._recent_list: RecentList | None = None
-        if self._settings.get("recentDb"):
-            recent_panel = Panel()
-            recent_panel.add(h2("Recent databases"))
-            self._recent_list = RecentList(self._recents.get("database"), on_pick=self._pick_db)
-            recent_panel.add(self._recent_list)
-            self.content.addWidget(recent_panel)
 
         form = Panel()
         form.add(h2("Archive to extract"))
@@ -243,6 +244,13 @@ class ExtractScreen(OperationScreen):
         form.add(Divider())
 
         form.add(h2("Output"))
+        # WHY no "Recent databases" picker here (review item G8): the Acquire
+        # and Export screens' recents list an existing path to *reopen*; on this
+        # screen a recent entry is a finished case.sqlite, which is never a
+        # sensible autofill for a *destination* path — one Overwrite tick away
+        # from clobbering a previous case. It is not a sensible Source pick
+        # either (a finished SQLite DB, not a raw logarchive/.tar.gz/.zip).
+        # Least-surprising fix: this screen has no recents list at all.
         self._out = PathPicker("save", placeholder="case.sqlite", name_filter=_DB_FILTER)
         form.add(field_row("SQLite DB", self._out, required=True))
         form.add(Divider())
@@ -252,10 +260,13 @@ class ExtractScreen(OperationScreen):
         self._imei = mono_input("device IMEI")
         self._exhibit = mono_input()
         self._analyst = QLineEdit()
+        self._notes = QLineEdit()
+        self._notes.setPlaceholderText("Context, collection conditions…")
         form.add(field_row("Case no.", self._case, required=True))
         form.add(field_row("IMEI", self._imei, required=True))
         form.add(field_row("Exhibit", self._exhibit))
         form.add(field_row("Analyst", self._analyst))
+        form.add(field_row("Notes", self._notes))
         form.add(Divider())
 
         form.add(h2("Options"))
@@ -266,6 +277,14 @@ class ExtractScreen(OperationScreen):
         self._jobs.addItem("Auto (recommended)", 0)
         for n in _job_options():
             self._jobs.addItem("1 core (serial)" if n == 1 else f"{n} cores", n)
+        # Pre-select the analyst's default (0 = Auto). A configured value the
+        # host cannot offer — a settings file carried from a bigger machine —
+        # simply leaves Auto selected rather than inventing a core count.
+        preferred = self._settings.get_int("extractJobs")
+        if preferred:
+            index = self._jobs.findData(preferred)
+            if index >= 0:
+                self._jobs.setCurrentIndex(index)
         style_combo(self._jobs)
         form.add(field_row("Parser jobs", self._jobs))
         self._fast_fts = QCheckBox("Defer full-text index (faster, builds on first search)")
@@ -333,6 +352,9 @@ class ExtractScreen(OperationScreen):
     def analyst_text(self) -> str:
         return self._analyst.text().strip()
 
+    def notes_text(self) -> str:
+        return self._notes.text().strip()
+
     def jobs_value(self) -> int:
         return self._jobs.currentData()
 
@@ -357,7 +379,11 @@ class ExtractScreen(OperationScreen):
     def show_running_actions(self) -> None:
         clear_layout(self._actions)
         self._actions.addStretch(1)
-        running = ghost_button("Extracting…")
+        # One button language: keep the row's forward action primary (violet)
+        # and just relabel + disable it while running, mirroring how
+        # AcquireScreen.set_running treats its own primary button — not a swap
+        # to a disabled ghost, which reads as unstyled.
+        running = primary_button("Extracting…")
         running.setEnabled(False)
         self._actions.addWidget(running)
 
@@ -368,7 +394,9 @@ class ExtractScreen(OperationScreen):
         new.clicked.connect(self._reset)
         export = ghost_button("Export", "export")
         export.clicked.connect(lambda: self.navigate and self.navigate("export"))
-        exploit = ghost_button("Open in Exploit", "right")
+        # The row's forward action — the natural next step after a successful
+        # extract — is primary; "Extract new" and "Export" stay ghost.
+        exploit = primary_button("Open in Exploit", "right")
         exploit.clicked.connect(
             lambda: self.navigate and self.navigate(
                 "exploit", prefill={"db": self.output_path()}
@@ -378,16 +406,6 @@ class ExtractScreen(OperationScreen):
             self._actions.addWidget(btn)
 
     # ── Display methods ───────────────────────────────────────────────────────────
-
-    def showEvent(self, event: Any) -> None:  # noqa: N802 — Qt override
-        # Recents grow during the session; refresh on show so the list is live
-        # history, not a construction-time snapshot.
-        super().showEvent(event)
-        if self._recent_list is not None:
-            self._recent_list.set_items(self._recents.get("database"))
-
-    def _pick_db(self, path: str) -> None:
-        self._out.set_path(path)
 
     def prefill(self, data: dict[str, Any]) -> None:
         """Populate the form from an upstream step (e.g. a finished acquisition).

@@ -42,11 +42,15 @@ def _extract(archive: Path, root: Path) -> ExtractOutcome:
 
 
 def prepare(
-    path: Path, *, work_dir: Path | None = None, integrity: str = "full"
+    path: Path,
+    *,
+    work_dir: Path | None = None,
+    integrity: str = "full",
+    reset_work_dir: bool = False,
 ) -> PreparedSource:
     return prepare_archive(
         Path(path), SourceType.FAUL, _extract,
-        work_dir=work_dir, integrity=integrity,
+        work_dir=work_dir, integrity=integrity, reset_work_dir=reset_work_dir,
     )
 
 

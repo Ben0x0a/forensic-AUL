@@ -463,10 +463,10 @@ class TestSourceHandlerRegistry:
             (root / "Persist" / "0.tracev3").write_bytes(b"trace")
             return ExtractOutcome(product_version="18.0")
 
-        def fake_prepare(path, *, work_dir=None, integrity="full"):
+        def fake_prepare(path, *, work_dir=None, integrity="full", reset_work_dir=False):
             return prepare_archive(
                 path, SourceType.SYSDIAGNOSE, fake_extract,
-                work_dir=work_dir, integrity=integrity,
+                work_dir=work_dir, integrity=integrity, reset_work_dir=reset_work_dir,
             )
 
         handler = SourceHandler(
@@ -490,3 +490,148 @@ class TestSourceHandlerRegistry:
             raise AssertionError("should have raised")
         except ValueError as exc:  # SourceError is a ValueError
             assert "sysdiagnose" in str(exc) and "full-file-system" in str(exc)
+
+
+# ── Work-root contamination guard (review item L9) ────────────────────────────
+#
+# Source preparation hashes and parses EVERYTHING under the work root, so a root
+# left behind by a previous run would fold that run's evidence into this
+# acquisition. These tests pin the guard that prevents it.
+
+def test_reused_work_root_is_refused(tmp_path):
+    """A non-empty work root must stop the run, not be silently reused."""
+    from forensic_aul.ops.extraction.sources.base import SourceError
+
+    arc = tmp_path / "sd.tar.gz"
+    _build_sysdiagnose(arc)
+    work = tmp_path / "work"
+
+    with prepare_source(arc, work_dir=work, integrity="off") as first:
+        assert (first.logarchive_root / "Persist" / "0.tracev3").is_file()
+
+    with pytest.raises(SourceError) as exc:
+        prepare_source(arc, work_dir=work, integrity="off")
+    message = str(exc.value)
+    assert "not empty" in message
+    assert "--reset-work-dir" in message          # names the way forward
+    assert str(work) in message                   # names the directory
+
+
+def test_stale_evidence_cannot_enter_a_new_acquisition(tmp_path):
+    """The contamination this guard exists to prevent, demonstrated.
+
+    A file from a previous run sits in the work root. Without the guard it would
+    be hashed into content_sha256 and registered as a source file of THIS case.
+    """
+    from forensic_aul.ops.extraction.sources.base import SourceError
+
+    arc = tmp_path / "sd.tar.gz"
+    _build_sysdiagnose(arc)
+    work = tmp_path / "work"
+    stale_root = work / "sd.tar.logarchive"       # the root this source maps to
+    (stale_root / "Persist").mkdir(parents=True)
+    (stale_root / "Persist" / "OTHER_CASE.tracev3").write_bytes(b"other device")
+
+    with pytest.raises(SourceError):
+        prepare_source(arc, work_dir=work, integrity="off")
+
+    # Refused means untouched: the operator's data is still there to inspect.
+    assert (stale_root / "Persist" / "OTHER_CASE.tracev3").is_file()
+
+
+def test_reset_work_dir_starts_clean(tmp_path):
+    """--reset-work-dir deletes the stale root, so nothing carries over."""
+    arc = tmp_path / "sd.tar.gz"
+    _build_sysdiagnose(arc)
+    work = tmp_path / "work"
+    stale_root = work / "sd.tar.logarchive"
+    (stale_root / "Persist").mkdir(parents=True)
+    (stale_root / "Persist" / "OTHER_CASE.tracev3").write_bytes(b"other device")
+
+    with prepare_source(arc, work_dir=work, integrity="full", reset_work_dir=True) as p:
+        root = p.logarchive_root
+        assert (root / "Persist" / "0.tracev3").is_file()
+        assert not (root / "Persist" / "OTHER_CASE.tracev3").exists()
+        # And it is absent from the chain of custody, not merely off disk.
+        assert not any("OTHER_CASE" in name for name in p.file_hashes)
+
+
+def test_reset_only_removes_faul_s_own_root(tmp_path):
+    """Reset must never delete the operator's --work-dir, only the root inside it."""
+    arc = tmp_path / "sd.tar.gz"
+    _build_sysdiagnose(arc)
+    work = tmp_path / "work"
+    work.mkdir()
+    keepsake = work / "analyst-notes.txt"
+    keepsake.write_text("do not delete me", encoding="utf-8")
+    (work / "sd.tar.logarchive").mkdir()
+    (work / "sd.tar.logarchive" / "stale").write_bytes(b"x")
+
+    with prepare_source(arc, work_dir=work, integrity="off", reset_work_dir=True):
+        pass
+    assert keepsake.read_text(encoding="utf-8") == "do not delete me"
+
+
+def test_empty_work_root_is_accepted(tmp_path):
+    """An existing but empty root is fine — nothing can carry over from it."""
+    arc = tmp_path / "sd.tar.gz"
+    _build_sysdiagnose(arc)
+    work = tmp_path / "work"
+    (work / "sd.tar.logarchive").mkdir(parents=True)
+
+    with prepare_source(arc, work_dir=work, integrity="off") as p:
+        assert (p.logarchive_root / "Persist" / "0.tracev3").is_file()
+
+
+def test_work_root_path_occupied_by_a_file_is_refused(tmp_path):
+    from forensic_aul.ops.extraction.sources.base import SourceError
+
+    arc = tmp_path / "sd.tar.gz"
+    _build_sysdiagnose(arc)
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "sd.tar.logarchive").write_bytes(b"not a directory")
+
+    with pytest.raises(SourceError, match="not a directory"):
+        prepare_source(arc, work_dir=work, integrity="off")
+
+
+def test_loose_dirs_runs_collide_on_a_shared_work_dir(tmp_path):
+    """Loose-dirs uses a FIXED root name, so any two runs collide — and are caught.
+
+    This is the sharpest case: the two runs need not share a source name, or even
+    a device.
+    """
+    from forensic_aul.ops.extraction.sources.base import SourceError
+
+    def _make_pair(tag: str) -> tuple[Path, Path]:
+        diag = tmp_path / tag / "diagnostics"
+        uuid = tmp_path / tag / "uuidtext"
+        (diag / "Persist").mkdir(parents=True)
+        (diag / "Persist" / f"{tag}.tracev3").write_bytes(b"trace")
+        (uuid / "12").mkdir(parents=True)
+        (uuid / "12" / "ABCDEF").write_bytes(b"uuid")
+        return diag, uuid
+
+    work = tmp_path / "work"
+    diag_a, uuid_a = _make_pair("caseA")
+    with prepare_source({"diagnostics": diag_a, "uuidtext": uuid_a},
+                        work_dir=work, integrity="off"):
+        pass
+
+    diag_b, uuid_b = _make_pair("caseB")
+    with pytest.raises(SourceError, match="not empty"):
+        prepare_source({"diagnostics": diag_b, "uuidtext": uuid_b},
+                       work_dir=work, integrity="off")
+
+
+def test_temp_work_root_is_always_fresh(tmp_path):
+    """Without --work-dir there is no reuse to guard against — twice must work."""
+    arc = tmp_path / "sd.tar.gz"
+    _build_sysdiagnose(arc)
+    roots = []
+    for _ in range(2):
+        with prepare_source(arc, integrity="off") as p:
+            roots.append(p.logarchive_root)
+            assert (p.logarchive_root / "Persist" / "0.tracev3").is_file()
+    assert roots[0] != roots[1]

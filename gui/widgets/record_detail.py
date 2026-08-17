@@ -32,7 +32,6 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QPushButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -43,7 +42,7 @@ from gui.widgets.components import (
     clear_layout,
     eyebrow,
     help_label,
-    make_icon,
+    icon_button,
     mono,
 )
 
@@ -135,10 +134,8 @@ class RecordDetailPanel(QWidget):
         row.setSpacing(4)
 
         if self._on_step is not None:
-            self._prev_button = self._icon_button("left", "Previous record",
-                                                  lambda: self._on_step(-1))
-            self._next_button = self._icon_button("right", "Next record",
-                                                  lambda: self._on_step(1))
+            self._prev_button = icon_button("left", "Previous record", lambda: self._on_step(-1), size=12)
+            self._next_button = icon_button("right", "Next record", lambda: self._on_step(1), size=12)
             row.addWidget(self._prev_button)
             row.addWidget(self._next_button)
 
@@ -147,20 +144,10 @@ class RecordDetailPanel(QWidget):
         row.addWidget(title)
         row.addStretch(1)
 
-        row.addWidget(self._icon_button("copy", "Copy record", self._copy))
+        row.addWidget(icon_button("copy", "Copy record", self._copy, size=12))
         if self._on_close is not None:
-            row.addWidget(self._icon_button("x", "Close", self._on_close))
+            row.addWidget(icon_button("x", "Close", self._on_close, size=12))
         return row
-
-    @staticmethod
-    def _icon_button(icon: str, tooltip: str, slot: Callable[[], None]) -> QPushButton:
-        button = QPushButton()
-        button.setProperty("iconbtn", "true")
-        button.setIcon(make_icon(icon, 12))
-        button.setToolTip(tooltip)
-        button.setCursor(Qt.CursorShape.PointingHandCursor)
-        button.clicked.connect(lambda _checked=False: slot())
-        return button
 
     def set_step_enabled(self, *, previous: bool, next_: bool) -> None:
         """Grey out stepping at the ends of the result set."""

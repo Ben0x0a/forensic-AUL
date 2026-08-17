@@ -129,6 +129,16 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
         ),
     )
     src.add_argument(
+        "--reset-work-dir",
+        action="store_true",
+        help=(
+            "Delete the work root inside --work-dir before extracting. Without "
+            "this, a work root left by a previous run is refused rather than "
+            "reused: its files would be hashed and parsed as part of this "
+            "acquisition."
+        ),
+    )
+    src.add_argument(
         "--integrity",
         choices=("full", "fingerprint", "off"),
         default="full",
@@ -351,6 +361,7 @@ def run(args: argparse.Namespace) -> int:
         notes=notes,
         batch_size=args.batch_size,
         work_dir=args.work_dir,
+        reset_work_dir=args.reset_work_dir,
         # --fast is a CLI-only shortcut for both fast-fts and fast-write.
         fast_fts=args.fast_fts or args.fast,
         fast_write=args.fast_write or args.fast,

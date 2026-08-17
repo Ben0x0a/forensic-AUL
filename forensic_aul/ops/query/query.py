@@ -260,11 +260,53 @@ class LogStore:
             self._conn, max(0, eo - before), eo + after, has_kb=self.has_kb,
         )
 
+    def annotations_for(self, log_id: int) -> list[dict]:
+        """The signatures that annotated *log_id*, as they were applied.
+
+        Each dict carries the rule the annotation recorded — action,
+        interpretation, caveats, confidence, references, the match block that
+        fired, its status and the knowledge-base version — so a consumer can
+        explain *why* a line is flagged without the knowledge base on disk. See
+        the ``kb_signatures`` DDL in ops/annotation/matcher.py for why the whole
+        rule is copied rather than referenced.
+
+        Returns an empty list when the row has no annotations, when the database
+        has never been annotated, or when it was annotated by a build that
+        predates these columns — a caller showing provenance must degrade, not
+        fail, on an older artefact.
+        """
+        if not self.has_kb:
+            return []
+        try:
+            rows = self._conn.execute(_ANNOTATIONS_SQL, (log_id,)).fetchall()
+        except sqlite3.DatabaseError as exc:
+            log.debug("annotations_for(%d): %s", log_id, exc)
+            return []
+        return [dict(zip(_ANNOTATION_KEYS, row)) for row in rows]
+
     def _where(self, f: LogFilters) -> tuple[str, list]:
         """Shared filters → WHERE step behind :meth:`count` and :meth:`fetch`."""
         _require_kb_filters(self.has_kb, f)
         time_from_ns, time_to_ns = resolve_time_bounds(f)
         return build_where(self._conn, f, time_from_ns, time_to_ns)
+
+
+# Columns returned by LogStore.annotations_for, and the keys they map to. Kept
+# beside each other so a column added to one is obvious in the other.
+_ANNOTATION_KEYS = (
+    "signature_id", "action", "description", "interpretation", "caveats",
+    "confidence", "references", "match", "status", "kb_version", "applied_at",
+)
+
+_ANNOTATIONS_SQL = """
+    SELECT kbs.signature_id, kbs.action, kbs.description, kbs.interpretation,
+           kbs.caveats, kbs.confidence, kbs.references_json, kbs.match_json,
+           kbs.status, kbs.kb_version, kbs.applied_at
+    FROM log_annotations la
+    JOIN kb_signatures kbs ON kbs.id = la.kb_signature_id
+    WHERE la.log_id = ?
+    ORDER BY kbs.signature_id
+"""
 
 
 def count_logs(database: Path | str, filters: LogFilters | None = None) -> int:

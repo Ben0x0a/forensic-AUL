@@ -127,6 +127,7 @@ def prepare_source(
     *,
     work_dir: Path | None = None,
     integrity: str = "full",
+    reset_work_dir: bool = False,
 ) -> PreparedSource:
     """Normalise *source* into a logarchive-laid-out directory ready for parsing.
 
@@ -145,9 +146,14 @@ def prepare_source(
     ``"full"`` (default) hashes every file for chain of custody; ``"fingerprint"``
     keeps only the cheap archive fingerprint; ``"off"`` takes no attestation.
 
+    A kept *work_dir* must not already hold a work root for this source: reusing
+    one would fold the previous run's files into this acquisition. Set
+    *reset_work_dir* to delete it first (see ``claim_work_root``).
+
     Raises:
         SourceError: the source is unrecognised, lacks the expected content, is a
-            mapping missing the required keys, or *integrity* is not a valid mode.
+            mapping missing the required keys, *integrity* is not a valid mode, or
+            the work root already exists with content and *reset_work_dir* is false.
     """
     check_integrity_mode(integrity)
     if isinstance(source, Mapping):
@@ -160,9 +166,12 @@ def prepare_source(
                 f"and {LOOSE_UUIDTEXT_KEY!r}; got {sorted(source)}"
             ) from exc
         return prepare_loose_dirs(
-            Path(diagnostics), Path(uuidtext), work_dir=work_dir, integrity=integrity
+            Path(diagnostics), Path(uuidtext),
+            work_dir=work_dir, integrity=integrity, reset_work_dir=reset_work_dir,
         )
 
     path = Path(source)
     handler = _handler_for(path)
-    return handler.prepare(path, work_dir=work_dir, integrity=integrity)
+    return handler.prepare(
+        path, work_dir=work_dir, integrity=integrity, reset_work_dir=reset_work_dir,
+    )

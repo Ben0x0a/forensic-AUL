@@ -152,17 +152,32 @@ Known keys and defaults:
 | Key | Default | Meaning |
 |---|---|---|
 | `recentDb` | `True` | show the recent-databases list atop pipeline steps |
+| `recentsLimit` | `5` | entries each recents list keeps |
 | `tz` | `"utc"` | timestamp rendering — `"utc"` / `"local"` / `"raw"` |
-| `reduceMotion` | `False` | suppress non-essential transitions |
+| `contextSize` | `20` | rows either side of a line in "view context" |
+| `rowCap` | `5000` | most rows the analysis table loads at once |
+| `kbPath` | `""` | knowledge base to annotate with (empty = the shipped one) |
+| `extractJobs` | `0` | default parser jobs on Extract (0 = one per core) |
 
-Unknown keys in the file are ignored on load, so a hand-edited or stray file cannot
-inject state. The store never raises on I/O problems: a missing or corrupt file
-falls back to defaults, because a forensic tool must still open when its
-non-essential preferences file is unreadable.
+Every key has a consumer. A preference that changes nothing is worse than no
+preference, because it tells the analyst the tool behaves in a way it does not —
+`reduceMotion` was removed for exactly that reason, and `tz` was wired up rather
+than removed (see `format_timestamp` in `forensic_aul/engine/utils/time.py`).
+
+`tz` is **display only**. Stored and exported timestamps are always UTC so a case
+stays portable between examiners; the preference changes what the Exploit table
+and record drawer render, nothing else.
+
+Integer keys are read through `get_int`, which coerces and clamps to a bounded
+range — values arrive from a JSON file a user can hand-edit, and a string where an
+int belongs must not reach a spin box. Unknown keys are ignored on load, so a
+stray file cannot inject state. The store never raises on I/O problems: a missing
+or corrupt file falls back to defaults, because a forensic tool must still open
+when its non-essential preferences file is unreadable.
 
 **`RecentStore`** (`gui/recent_store.py`) → `~/.config/faul/recents.json`.
-Per-category lists (most recent first, de-duplicated, capped at 8 entries per
-category) of paths the user actually acquired / extracted / exported. Nothing is
+Per-category lists (most recent first, de-duplicated, capped by the
+`recentsLimit` preference) of paths the user actually acquired / extracted / exported. Nothing is
 fabricated — a forensic tool showing invented case rows would be misleading — and
 display is gated by the `recentDb` preference.
 

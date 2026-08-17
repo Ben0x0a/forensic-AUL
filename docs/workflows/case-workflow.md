@@ -96,7 +96,7 @@ Flags worth knowing:
 | `--overwrite` | required to write into an existing database; without it the run refuses, because merging two acquisitions into one file silently is unacceptable |
 | `--jobs N` | parser process budget (default: auto, capped at the physical core count). The result is identical for any N |
 | `--no-fts` | skip the full-text index — markedly smaller and faster, at the cost of keyword search |
-| `--work-dir DIR` | for archive sources, keep the unpacked logarchive instead of using a temp dir |
+| `--work-dir DIR` | for archive sources, keep the unpacked logarchive instead of using a temp dir (a non-empty work root is refused — add `--reset-work-dir` to clear it) |
 | `--fast-write`, `--fast` | faster, less crash-durable — disposable, re-runnable extractions only |
 
 **Check before moving on:**

@@ -217,21 +217,75 @@ def safe_target(root: Path, rel: PurePosixPath) -> Path:
 
 
 def make_work_root(
-    name: str, work_dir: Path | None
+    name: str, work_dir: Path | None, *, reset: bool = False
 ) -> tuple[Path, tempfile.TemporaryDirectory | None]:
     """Return (root, tempdir-handle). With *work_dir* the root is kept; else temp.
 
     *name* is the stem of the kept ``<name>.logarchive`` directory — derived from
     the evidence so a retained --work-dir is self-describing.
+
+    A kept root that already holds files is **refused** unless *reset* is set, in
+    which case it is deleted and recreated — see :func:`claim_work_root` for why.
+    The temp path is always a fresh directory, so it is never affected.
     """
     if work_dir is not None:
         work_dir = Path(work_dir)
         work_dir.mkdir(parents=True, exist_ok=True)
         root = work_dir / f"{name}.logarchive"
-        root.mkdir(parents=True, exist_ok=True)
+        claim_work_root(root, reset=reset)
         return root, None
     tmp = tempfile.TemporaryDirectory(prefix="faul_source_")
     return Path(tmp.name), tmp
+
+
+def claim_work_root(root: Path, *, reset: bool) -> None:
+    """Take exclusive ownership of *root*, creating it empty.
+
+    WHY this guard exists — it prevents silent evidence cross-contamination.
+    Source preparation materialises the evidence into this directory and then
+    hashes and parses **everything under it**. A root left behind by an earlier
+    run therefore contributes its files to the next acquisition: they are hashed
+    into ``content_sha256``, registered in ``source_files``, and their log entries
+    are parsed into the case. Nothing downstream can tell them apart from the
+    evidence actually being examined.
+
+    That is not a hypothetical collision. The root is named after the source's
+    stem, so two sysdiagnose archives from two different devices that happen to
+    share a filename (``sysdiagnose_2026-08-01.tar.gz`` is not a distinctive
+    name) map to the same root — and the loose-dirs handler uses a *fixed* name,
+    so every loose-dirs run sharing a work dir collides regardless of source.
+
+    So a non-empty root is refused by default. *reset* deletes it first, which is
+    the deliberate "I know, start clean" path. Note it removes only the
+    ``<name>.logarchive`` root FAUL created, never the operator's *work_dir*
+    itself — the analyst may keep other things beside it.
+
+    Raises:
+        SourceError: *root* exists with content and *reset* is false, or *root*
+            exists but is not a directory.
+    """
+    if root.exists() and not root.is_dir():
+        raise SourceError(
+            f"Work root path exists but is not a directory: {root}. "
+            "Point --work-dir somewhere else."
+        )
+    if root.is_dir() and any(root.iterdir()):
+        if not reset:
+            entries = sum(1 for _ in root.rglob("*"))
+            raise SourceError(
+                f"Work root already exists and is not empty: {root} "
+                f"({entries} entr{'y' if entries == 1 else 'ies'}). Re-using it "
+                "would hash and parse those files as part of THIS acquisition — "
+                "evidence from a previous run would silently enter this case. "
+                "Point --work-dir at an empty directory, or pass "
+                "--reset-work-dir to delete this root first."
+            )
+        log.warning(
+            f"--reset-work-dir: deleting the existing work root {root} before "
+            "extraction (its previous contents are NOT part of this acquisition)"
+        )
+        shutil.rmtree(root)
+    root.mkdir(parents=True, exist_ok=True)
 
 
 def mirror_tree(src_dir: Path, dest_root: Path) -> tuple[int, int]:
@@ -348,6 +402,7 @@ def prepare_archive(
     *,
     work_dir: Path | None,
     integrity: str,
+    reset_work_dir: bool = False,
 ) -> PreparedSource:
     """The common single-file-archive path: snapshot → extract → hash → assemble.
 
@@ -360,7 +415,7 @@ def prepare_archive(
     """
     check_integrity_mode(integrity)
     fingerprint = quick_fingerprint(path) if integrity != "off" else None
-    root, tmp = make_work_root(path.stem, work_dir)
+    root, tmp = make_work_root(path.stem, work_dir, reset=reset_work_dir)
     try:
         outcome = extract(path, root)
         if not isinstance(outcome, ExtractOutcome):

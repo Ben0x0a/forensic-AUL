@@ -142,6 +142,7 @@ def run_extract(
     notes: str | None = None,
     batch_size: int = BATCH_SIZE,
     work_dir: Path | None = None,
+    reset_work_dir: bool = False,
     fast_fts: bool = False,
     fast_write: bool = False,
     fts: bool = True,
@@ -159,7 +160,9 @@ def run_extract(
     ``{"diagnostics": dir, "uuidtext": dir}`` — the source-preparation layer
     normalises all of them to a logarchive layout before parsing (see
     forensic_aul/ops/extraction/source.py). Archives / loose dirs are materialised
-    into *work_dir* (kept) or an auto-cleaned temp dir.
+    into *work_dir* (kept) or an auto-cleaned temp dir. A kept work root that
+    already holds files is **refused** — reusing it would parse the previous run's
+    evidence into this case; pass *reset_work_dir* to delete it first.
 
     Alternatively pass an already-built :class:`PreparedSource` (from
     ``prepare_source``, e.g. to inspect the type/hashes before committing to a
@@ -267,7 +270,10 @@ def run_extract(
             log.debug("Source dirs : %s", {k: str(v) for k, v in logarchive.items()})
         else:
             log.debug("Source path : %s", Path(logarchive).resolve())
-        prepared = prepare_source(logarchive, work_dir=work_dir, integrity=opts.integrity)
+        prepared = prepare_source(
+            logarchive, work_dir=work_dir, integrity=opts.integrity,
+            reset_work_dir=reset_work_dir,
+        )
     log.info(f"Source type        : {prepared.source_type.value}")
     if prepared.archive_fingerprint is not None:
         log.info(f"Archive fingerprint: {prepared.archive_fingerprint}  (pre-run snapshot)")

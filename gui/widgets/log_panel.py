@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from gui.widgets.components import make_icon
+from gui.widgets.components import icon_button, make_icon, repolish
 
 # Most records to retain — caps memory on long extraction runs. Consumed by:
 # LogPanel._append_record.
@@ -169,7 +169,13 @@ class LogPanel(QFrame):
 
         row.addWidget(self._separator())
 
-        self._auto_button = self._icon_button("down", "Auto-scroll", self._toggle_auto, row=row)
+        # "to-bottom" (arrow onto a baseline), NOT the plain "down" chevron:
+        # the collapse button beside it shows a down chevron whenever the panel
+        # is collapsed, so the two controls were the same glyph meaning
+        # different things.
+        self._auto_button = self._icon_button(
+            "to-bottom", "Auto-scroll to newest", self._toggle_auto, row=row,
+        )
         self._pause_button = self._icon_button("stop", "Pause", self._toggle_pause, row=row)
         self._icon_button("x", "Clear display", self.clear, row=row)
         self._collapse_button = self._icon_button("up", "Collapse", self._toggle_collapsed, row=row)
@@ -177,12 +183,8 @@ class LogPanel(QFrame):
         return header
 
     def _icon_button(self, name, tooltip, slot, row=None) -> QPushButton:
-        button = QPushButton()
-        button.setProperty("iconbtn", "true")
-        button.setIcon(make_icon(name, 13, "#545a68"))
-        button.setToolTip(tooltip)
-        button.setCursor(Qt.CursorShape.PointingHandCursor)
-        button.clicked.connect(slot)
+        """The shared icon button, added to *row* — the header builds four of them."""
+        button = icon_button(name, tooltip, slot)
         if row is not None:
             row.addWidget(button)
         return button
@@ -261,8 +263,7 @@ class LogPanel(QFrame):
     def _refresh_level_buttons(self) -> None:
         for key, button in self._level_buttons.items():
             button.setProperty("on", "true" if self._enabled[key] else "false")
-            button.style().unpolish(button)
-            button.style().polish(button)
+            repolish(button)
 
     def _toggle_auto(self) -> None:
         self._auto_scroll = not self._auto_scroll
@@ -300,8 +301,7 @@ class LogPanel(QFrame):
 
     def _sync_toggle(self, button: QPushButton, on: bool) -> None:
         button.setProperty("on", "true" if on else "false")
-        button.style().unpolish(button)
-        button.style().polish(button)
+        repolish(button)
 
     def clear(self) -> None:
         self._records.clear()

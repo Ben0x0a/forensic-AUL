@@ -36,6 +36,7 @@ def prepare_loose_dirs(
     uuidtext: Path,
     *,
     work_dir: Path | None = None,
+    reset_work_dir: bool = False,
     integrity: str = "full",
 ) -> PreparedSource:
     """Normalise two already-uncompressed folders into a logarchive layout.
@@ -60,7 +61,10 @@ def prepare_loose_dirs(
         if not d.is_dir():
             raise SourceError(f"Loose-dirs {label} source is not a directory: {d}")
 
-    root, tmp = make_work_root("EXTRACTION_LOOSE", work_dir)
+    # NOTE the fixed name: unlike the archive handlers, every loose-dirs run
+    # maps to the SAME root inside a given --work-dir, so the emptiness guard
+    # in claim_work_root is the only thing standing between two runs.
+    root, tmp = make_work_root("EXTRACTION_LOOSE", work_dir, reset=reset_work_dir)
     try:
         files_d, copied_d = mirror_tree(diagnostics, root)
         files_u, copied_u = mirror_tree(uuidtext, root)

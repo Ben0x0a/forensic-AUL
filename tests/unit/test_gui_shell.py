@@ -79,3 +79,53 @@ def test_report_entry_caption_follows_the_error_reports(qapp, tmp_path, monkeypa
         diagnostics.capture_exception(cfg=diagnostics.CrashConfig(crash_dir=tmp_path))
     w._sync_report_entry()
     assert w._report_label.text() == report_actions.caption(report_actions.OPEN_ERRORS)
+
+
+# ── Preferences ─────────────────────────────────────────────────────────────────
+
+def test_every_settings_key_has_a_control(qapp, tmp_path, monkeypatch):
+    """A preference with no control is unreachable; one with no consumer is a lie.
+
+    This guards the first half: every key in _DEFAULTS must be bound to a widget
+    on the Settings screen.
+    """
+    import gui.settings_store as settings_store
+    from gui.settings_store import _DEFAULTS, SettingsStore
+    from gui.views.screens_prefs import SettingsScreen
+
+    monkeypatch.setattr(settings_store, "_SETTINGS_PATH", tmp_path / "settings.json")
+    store = SettingsStore()
+    screen = SettingsScreen(store)
+
+    touched: set[str] = set()
+    store.changed.connect(lambda key, _v: touched.add(key))
+    # Drive each control and confirm it writes its key.
+    from PySide6.QtWidgets import QCheckBox, QSpinBox
+
+    for widget in screen.findChildren(QSpinBox):
+        widget.setValue(widget.value() + widget.singleStep())
+    for widget in screen.findChildren(QCheckBox):
+        widget.setChecked(not widget.isChecked())
+    combos = screen.findChildren(type(screen._combo("tz", [("utc", "UTC")])))
+    for combo in combos:
+        if combo.count() > 1:
+            combo.setCurrentIndex((combo.currentIndex() + 1) % combo.count())
+
+    # kbPath is a path picker (driven separately); everything else must be covered.
+    expected = set(_DEFAULTS) - {"kbPath"}
+    assert expected <= touched, f"no control writes: {sorted(expected - touched)}"
+    screen.deleteLater()
+
+
+def test_recents_limit_is_applied_live(qapp, tmp_path, monkeypatch):
+    import gui.recent_store as recent_store
+    from gui.recent_store import RecentStore
+
+    monkeypatch.setattr(recent_store, "_RECENTS_PATH", tmp_path / "recents.json")
+    store = RecentStore(limit=5)
+    for i in range(10):
+        store.add("database", f"/case/{i}.db")
+    assert len(store.get("database")) == 5
+
+    store.set_limit(2)
+    assert len(store.get("database")) == 2

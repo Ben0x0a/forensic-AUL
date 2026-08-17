@@ -34,14 +34,10 @@ from forensic_aul.ops.acquisition.acquire import acquire
 from forensic_aul.ops.acquisition.device import list_connected_devices
 from forensic_aul.ops.acquisition.report import load_sidecar_for
 from forensic_aul.ops.extraction.extract import run_extract
+from gui.controllers import last_line
 from gui.recent_store import RecentStore
 
 log = logging.getLogger(__name__)
-
-
-def _last_line(tb: str) -> str:
-    """The most informative single line of a traceback string, for the UI."""
-    return tb.strip().splitlines()[-1] if tb.strip() else ""
 
 
 class AcquireController:
@@ -73,7 +69,7 @@ class AcquireController:
 
     def on_scan_failed(self, tb: str) -> None:
         self._view.set_device_scan_failed()
-        self._view.show_result(False, _last_line(tb) or "scan failed")
+        self._view.show_result(False, last_line(tb) or "scan failed")
 
     # ── Collection ──────────────────────────────────────────────────────────────
 
@@ -122,7 +118,7 @@ class AcquireController:
 
     def on_failed(self, tb: str) -> None:
         self._view.set_running(False)
-        self._view.show_result(False, _last_line(tb) or "acquisition failed")
+        self._view.show_result(False, last_line(tb) or "acquisition failed")
 
     def continue_to_extract(self) -> None:
         """Open Extract pre-filled with this acquisition's path and case metadata."""
@@ -205,6 +201,7 @@ class ExtractController:
             imei=self._view.imei_text(),
             exhibit_number=self._view.exhibit_text() or None,
             analyst_name=self._view.analyst_text() or None,
+            notes=self._view.notes_text() or None,
             jobs=jobs,
             fast_fts=self._view.fast_fts(),
             fast_write=self._view.fast_write(),
@@ -231,5 +228,5 @@ class ExtractController:
 
     def on_failed(self, tb: str) -> None:
         self._view.hide_progress()
-        self._view.show_result(False, _last_line(tb) or "extraction failed")
+        self._view.show_result(False, last_line(tb) or "extraction failed")
         self._view.show_idle_actions()

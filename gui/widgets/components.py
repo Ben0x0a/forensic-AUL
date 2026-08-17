@@ -5,7 +5,9 @@ Defines : the small building blocks every screen reuses — stroke icons rendere
           ``subtitle`` …), :class:`Pill`, :class:`Panel`, :class:`Divider`,
           :class:`Stat`, :func:`field_row`, and :class:`TrafficLights`.
 Used by : gui.views.shell and gui.views.screens.* (composition only).
-Uses    : PySide6 (QtWidgets/QtGui/QtCore, QtSvg when available). No business logic.
+Uses    : PySide6 (QtWidgets/QtGui/QtCore, QtSvg when available); gui.theme
+          (DARK_TOKENS, so colours are sourced from the palette, never literals).
+          No business logic.
 
 WHY a primitives module: QSS styles *appearance* but not structure; the mockup's
 look comes as much from consistent spacing/composition as from colour. Centralising
@@ -32,6 +34,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from gui.theme import DARK_TOKENS
+
 try:  # QtSvg ships with the standard PySide6 wheel, but degrade gracefully.
     from PySide6.QtSvg import QSvgRenderer
 
@@ -39,8 +43,10 @@ try:  # QtSvg ships with the standard PySide6 wheel, but degrade gracefully.
 except ImportError:  # pragma: no cover - environment-dependent
     _HAVE_SVG = False
 
-# Default icon tint — matches the mockup's "text-dim". Consumed by: make_icon().
-_ICON_COLOUR = "#7a8090"
+# Default icon tint — matches the mockup's "text-dim". Sourced from DARK_TOKENS
+# (not a literal) so it stays in lock-step with the rest of the palette.
+# Consumed by: make_icon().
+_ICON_COLOUR = DARK_TOKENS["text_dim"]
 
 # ── Icon path data (ported verbatim from project/ui.jsx) ──────────────────────
 # Each entry is the inner markup of a 24×24 stroke icon; ``make_icon`` wraps it in
@@ -63,6 +69,10 @@ _ICON_PATHS: dict[str, str] = {
     "search": '<circle cx="11" cy="11" r="6"/><path d="M16 16l4 4"/>',
     "filter": '<path d="M3 5h18l-7 9v6l-4-2v-4L3 5z"/>',
     "down": '<path d="M6 9l6 6 6-6"/>',
+    # Arrow onto a baseline — "follow the end of the stream". Distinct from the
+    # bare "down" chevron, which means "expand/collapse"; the log panel had both
+    # meanings on the same glyph and neither was readable.
+    "to-bottom": '<path d="M12 3v11M7 10l5 5 5-5M5 20h14"/>',
     "up": '<path d="M6 15l6-6 6 6"/>',
     "right": '<path d="M9 6l6 6-6 6"/>',
     "left": '<path d="M15 6l-6 6 6 6"/>',
@@ -343,10 +353,20 @@ class TrafficLights(QWidget):
         painter.end()
 
 
-def _repolish(widget: QWidget) -> None:
-    """Force a style re-evaluation after a dynamic property changes."""
+def repolish(widget: QWidget) -> None:
+    """Force a style re-evaluation after a dynamic property changes.
+
+    QSS selectors on dynamic properties (``variant``, ``pill``, ``chipOn``…) are
+    only re-matched when the widget is re-polished, so setting the property alone
+    changes nothing on screen. Public because five widgets across the GUI need it
+    and were each open-coding the unpolish/polish pair.
+    """
     widget.style().unpolish(widget)
     widget.style().polish(widget)
+
+
+# Back-compat alias for the in-module call sites that predate the rename.
+_repolish = repolish
 
 
 # ── Shared inputs / buttons / result panel ─────────────────────────────────────
@@ -381,12 +401,36 @@ def ghost_button(text: str, icon: str | None = None) -> QPushButton:
     return button
 
 
+def icon_button(
+    icon: str,
+    tooltip: str,
+    slot: Callable[[], None],
+    *,
+    size: int = 13,
+    colour: str | None = None,
+) -> QPushButton:
+    """A borderless, icon-only button (log-panel controls, drawer header).
+
+    One definition rather than one per panel: the two that existed had drifted on
+    icon size and cursor, so the same control looked different depending on which
+    panel it sat in.
+    """
+    button = QPushButton()
+    button.setProperty("iconbtn", "true")
+    button.setIcon(make_icon(icon, size, colour or DARK_TOKENS["text_faint"]))
+    button.setToolTip(tooltip)
+    button.setCursor(Qt.CursorShape.PointingHandCursor)
+    button.clicked.connect(lambda _checked=False: slot())
+    return button
+
+
 def result_panel(ok: bool, message: str) -> Panel:
     """An elevated panel showing an operation outcome (done/failed + message)."""
     panel = Panel(elev=True)
     header = QHBoxLayout()
     icon = QLabel()
-    icon.setPixmap(make_icon("check" if ok else "warn", 14, "#4ade80" if ok else "#f87171").pixmap(14, 14))
+    colour = DARK_TOKENS["ok"] if ok else DARK_TOKENS["err"]
+    icon.setPixmap(make_icon("check" if ok else "warn", 14, colour).pixmap(14, 14))
     header.addWidget(icon)
     header.addWidget(Pill("done" if ok else "failed", "ok" if ok else "err"))
     header.addStretch(1)
@@ -394,7 +438,7 @@ def result_panel(ok: bool, message: str) -> Panel:
     label = QLabel(message)
     label.setTextFormat(Qt.TextFormat.RichText)
     label.setWordWrap(True)
-    label.setStyleSheet("color:#e6e9ef;")
+    label.setStyleSheet(f"color:{DARK_TOKENS['text_hi']};")
     panel.add(label)
     return panel
 

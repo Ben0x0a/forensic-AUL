@@ -28,13 +28,12 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
     QHBoxLayout,
-    QPushButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
 )
 
-from gui.widgets.components import ghost_button, mono_input
+from gui.widgets.components import ghost_button, mono_input, repolish
 
 # How many values the popup lists before it starts scrolling, and its width.
 _POPUP_H = 300
@@ -148,8 +147,7 @@ class FacetFilter(QWidget):
         else:
             self._button.setText(f"{self._label}: {n} selected")
         self._button.setProperty("chipOn", "true" if n else "false")
-        self._button.style().unpolish(self._button)
-        self._button.style().polish(self._button)
+        repolish(self._button)
         self._button.setToolTip(
             f"{len(self._entries)} distinct values. Counts are for the whole "
             "database, not the current filters."

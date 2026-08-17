@@ -23,12 +23,19 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QCheckBox, QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QDialog,
+    QFileDialog,
+    QHBoxLayout,
+    QWidget,
+)
 
 from forensic_aul import IdentifyResults
 from gui.recent_store import RecentStore
 from gui.settings_store import SettingsStore
 from gui.theme import DARK_TOKENS
+from gui.views.dialog_signature import SignatureDialog, signature_kb_dir
 from gui.views.screen_base import OpenDbPanel, ScrollScreen
 from gui.widgets.components import (
     Panel,
@@ -144,6 +151,7 @@ class IdentifyResultsScreen(ScrollScreen):
         for widget in (self._noise_check, self._kb_check, self._hidden_btn, self._export_btn):
             self._table_panel.add_toolbar_widget(widget)
         self._table_panel.add_context_action("Hide identical lines", self._hide_row)
+        self._table_panel.add_context_action("Create signature…", self._create_signature)
         self.content.addWidget(self._table_panel, 1)
 
         # Hidden-rules panel (built lazily, toggled by the button).
@@ -310,6 +318,30 @@ class IdentifyResultsScreen(ScrollScreen):
         self._rebuild_hidden_panel()
 
     # ── Context action: hide identical lines ──────────────────────────────────────
+
+    def _create_signature(self, row: Mapping[str, Any]) -> None:
+        """Author a knowledge-base signature from *row*.
+
+        The rows currently in the model are handed to the dialog so its Test
+        button can report how many of them a draft pattern would match — a check
+        the analyst can reason about without a database scan.
+        """
+        sample = []
+        if self._model is not None:
+            sample = [
+                r for i in range(self._model.rowCount())
+                if (r := self._model.row_dict(i)) is not None
+            ]
+        dialog = SignatureDialog(
+            row, sample_rows=sample, kb_dir=signature_kb_dir(self._settings), parent=self,
+        )
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            path = dialog.written_path()
+            self.show_result(
+                True,
+                f"Wrote {path.name} — run `faul kb validate` to check the whole "
+                "knowledge base." if path else "Signature written.",
+            )
 
     def _hide_row(self, row: Mapping[str, Any]) -> None:
         if self._store is None:
