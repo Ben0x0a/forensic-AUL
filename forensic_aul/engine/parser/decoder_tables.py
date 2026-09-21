@@ -3,7 +3,7 @@
 DO NOT EDIT BY HAND. Regenerate with `python scripts/gen_decoders.py`.
 
 Ported from the Mandiant *macos-unifiedlogs* Rust library
-(version 0.6.0, Apache-2.0): https://github.com/mandiant/macos-UnifiedLogs
+(version 0.7.0, Apache-2.0): https://github.com/mandiant/macos-UnifiedLogs
 Only pure value→name lookup tables are ported here; byte-parsing decoders
 (sockaddr, IPv4/6, DNS headers, timestamps) remain hand-written in message.py.
 See THIRD_PARTY_NOTICES.md for the full attribution and licence.
@@ -317,9 +317,11 @@ DECODER_TABLES: dict[str, dict[str, str]] = {
     },
     'mdns:gaiopts': {
         '0': '0x0 {}',
+        '4': '0x4 {in-app-browser}',
         '8': '0x8 {use-failover}',
         '12': '0xC {in-app-browser, use-failover}',
         '24': '0x18 {use-failover, prohibit-encrypted-dns}',
+        '32': '0x20 {use-cache-only}',
     },
     'mdns:nreason': {
         '1': 'no-data',

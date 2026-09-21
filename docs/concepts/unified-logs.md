@@ -332,9 +332,10 @@ consumed **sequentially, one per non-`%%` specifier**:
 | `%%` | a literal percent (consumes no item) |
 
 `parser/decoder_tables.py` holds the pure value→name lookup tables (the
-`os_log` annotation decoders) ported from the Rust reference v0.6.0. **It is
+`os_log` annotation decoders) ported from the Rust reference. **It is
 auto-generated** — regenerate with `python scripts/gen_decoders.py`, never edit
-by hand. Decoders that parse bytes (sockaddr, IPv4/6, DNS headers, timestamps)
+by hand; the upstream version it was generated from is recorded in the
+generated module's own header, which is the copy that cannot go stale. Decoders that parse bytes (sockaddr, IPv4/6, DNS headers, timestamps)
 remain hand-written in `message.py`.
 
 ---
