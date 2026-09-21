@@ -7,7 +7,8 @@ Defines : MainWindow — a macOS-style frameless window with a draggable titleba
           sidebar greyed-out with a "available in vN" tooltip.
 Used by : gui.app.build_main_window().
 Uses    : PySide6, the v1 screens (gui.views.screens_*), gui.widgets.components,
-          gui.widgets.log_panel, gui.settings_store, gui.recent_store, gui.theme.
+          gui.widgets.log_panel, gui.settings_store, gui.recent_store, gui.theme,
+          gui.shutdown (the non-blocking close/drain sequence).
 
 WHY frameless: the design is explicitly a macOS window; a custom titlebar with
 traffic lights is core to its identity. Native resize is preserved with a corner
@@ -35,6 +36,7 @@ from PySide6.QtWidgets import (
 
 from gui.recent_store import RecentStore
 from gui.settings_store import SettingsStore
+from gui.shutdown import ShutdownCoordinator
 from gui.theme import DARK_TOKENS, build_stylesheet
 from gui.views.screen_exploit import ExploitScreen
 from gui.views.screen_identify_hub import IdentifyHub
@@ -155,6 +157,9 @@ class MainWindow(QWidget):
         # rounded frame so it sits inside the visible window area).
         self._grip = QSizeGrip(self._app_root)
         self._grip.resize(16, 16)
+
+        # Built after the stack exists — it questions the screens in it.
+        self._shutdown = ShutdownCoordinator(self, self._stacked_screens)
 
         self.apply_theme()
         self.set_current("acquire")
@@ -504,17 +509,32 @@ class MainWindow(QWidget):
         # Keep the resize grip pinned to the bottom-right corner.
         self._grip.move(self.width() - self._grip.width(), self.height() - self._grip.height())
 
+    # ── Shutdown ──────────────────────────────────────────────────────────────
+
+    def _stacked_screens(self) -> list[QWidget]:
+        """Every screen in the stack — what the shutdown coordinator questions."""
+        return [self._stack.widget(i) for i in range(self._stack.count())]
+
+    def request_shutdown(self, *, raise_window: bool = False) -> None:
+        """Ask to quit, draining any running operation first.
+
+        The single entry point for "the analyst wants to stop": the window's
+        close button, and Ctrl+C from the launching terminal (which passes
+        *raise_window*, since the interrupt is typed in a terminal but the prompt
+        appears here).
+        """
+        if self._shutdown.request(raise_window=raise_window):
+            self.close()
+
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
-        # WHY block on close: a worker thread destroyed mid-run aborts the
-        # process (and could leave a half-written database). For a forensic tool
-        # it is safer to wait for the in-flight operation to finish than to risk
-        # corrupting its output, so we drain any running worker before closing.
-        for index in range(self._stack.count()):
-            screen = self._stack.widget(index)
-            thread = getattr(screen, "_thread", None)
-            try:
-                if thread is not None and thread.isRunning():
-                    thread.wait()
-            except RuntimeError:
-                pass  # the C++ thread object was already finalised — nothing to wait on
-        super().closeEvent(event)
+        # WHY this never blocks: a worker thread destroyed mid-run aborts the
+        # process and could leave a half-written database, so an in-flight
+        # operation must be stopped before the window goes. The old code did that
+        # with a blocking thread.wait(), which froze the whole UI for as long as
+        # the extract had left to run. Instead we refuse the close, let the
+        # coordinator ask and drain through the event loop, and close for real
+        # when it says so — the window stays responsive the entire time.
+        if self._shutdown.request():
+            super().closeEvent(event)
+            return
+        event.ignore()

@@ -57,6 +57,8 @@ def run(args: argparse.Namespace) -> int:
             skip_files=args.skip_files,
         )
     except (FileNotFoundError, ValueError) as exc:
+        # IncompleteDatabaseError is a ValueError, so this already catches the
+        # refusal on a `.partial`; its message says to re-run the extract.
         log.error(f"error: {exc}")
         return 2
 

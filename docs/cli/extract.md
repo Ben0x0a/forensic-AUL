@@ -200,6 +200,31 @@ faul.py extract evidence.logarchive -o /tmp/triage.db --fast --integrity off \
 
 ---
 
+## Interrupting a run
+
+`extract` writes to `<OUTPUT>.partial` and renames it to `OUTPUT` only when the
+run completes. **A file at the output path therefore means a finished extract —
+always.** No code has to run for an interrupted one to be marked, so a cancel, a
+crash, a power loss and a `kill -9` all leave the same evidence: a `.partial`.
+
+Press **Ctrl+C** to stop a run. The first one cancels cooperatively — the current
+file finishes, the database is closed cleanly and the audit log is sealed — and
+`extract` exits **130**. A second Ctrl+C is left to Python's default handler, so
+an unresponsive run can still be interrupted the usual way.
+
+The partial database records what happened:
+
+| Where | What it says |
+|---|---|
+| the filename | `.partial` — never promoted, so it cannot be mistaken for an extract |
+| `case_metadata.extract_status` | `cancelled` (or `running` if the process died without a chance to write) |
+| `case_metadata.extract_ended_at` | when it stopped |
+| `extract_phases` | which phases completed and which one it died in |
+| `source_files.parse_completed_at` | which source files were fully parsed |
+
+Every reader refuses a partial, `verify-hash` included. There is no resume and no
+inspection flag: a cancelled run is a discarded run. Re-run the extract.
+
 ## Outputs
 
 | Artefact | Path |

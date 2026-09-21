@@ -17,7 +17,13 @@ __version__ = "0.1.0"
 # Common exception hierarchy: every purposeful library error derives from
 # ForensicAULError (operation-specific errors like AcquisitionError and
 # KnowledgeBaseError included), so `except ForensicAULError` catches them all.
-from forensic_aul.errors import ForensicAULError, InvalidDatabaseError, SourceError
+from forensic_aul.errors import (
+    ForensicAULError,
+    IncompleteDatabaseError,
+    InvalidDatabaseError,
+    OperationCancelled,
+    SourceError,
+)
 
 # Core pipeline
 from forensic_aul.ops.extraction.extract import open_or_extract, run_extract
@@ -73,6 +79,11 @@ from forensic_aul.engine.utils.progress import (
     tty_bar_sink,
 )
 
+# Cancellation: the token a caller owns and cancels, plus the null object every
+# ``cancel`` parameter defaults to. Paired with progress above — a long operation
+# reports through one and is stopped through the other.
+from forensic_aul.engine.utils.cancellation import NEVER_CANCELLED, CancelToken
+
 # Input-source preparation (logarchive dir / sysdiagnose .tar.gz / FFS .zip).
 # The loose-dirs case goes through prepare_source / run_extract with the
 # {"diagnostics": …, "uuidtext": …} mapping — no separate entry point needed.
@@ -102,6 +113,10 @@ __all__ = [
     "ForensicAULError",
     "SourceError",
     "InvalidDatabaseError",
+    "IncompleteDatabaseError",
+    "OperationCancelled",
+    "CancelToken",
+    "NEVER_CANCELLED",
     "run_extract",
     "open_or_extract",
     "load_kb",

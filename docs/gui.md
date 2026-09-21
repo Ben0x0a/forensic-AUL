@@ -201,8 +201,13 @@ Honest limits as the code stands:
   database can still feel sluggish there. Keyword search is FTS-index-backed or
   absent — there is deliberately no silent `LIKE` fallback, so the search box is
   disabled on a database extracted with `fts=False`.
-- Long operations are cancellable only where the underlying operation offers it;
-  the Identify wizard's pauses are the interactive control points.
+- Acquire and Extract are cancellable: a **Cancel** button sits beside the
+  running-state button, and closing the window or pressing Ctrl+C in the
+  launching terminal asks the same question. Cancelling is cooperative — the
+  current file finishes and the database closes cleanly — so it takes a moment
+  rather than being instant, and the window stays responsive while it drains.
+  A cancelled extract leaves `<name>.sqlite.partial`, never a file at the output
+  path. The Identify wizard's pauses remain its own interactive control points.
 - The window is frameless by design and styled for macOS; it runs on other
   platforms but that is where it looks intended.
 

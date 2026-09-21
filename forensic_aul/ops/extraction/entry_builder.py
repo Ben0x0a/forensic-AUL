@@ -266,7 +266,6 @@ def _firehose_to_log_entry(
         tracev3_firehose_inner_offset=firehose_inner_offset,
         tracev3_entry_inner_offset=firehose.entry_inner_offset,
         format_string_file_offset=None,  # exposed by resolve_format_string in a later pass
-        timestamp_iso=resolution.iso,
         timestamp_unix_ns=resolution.unix_ns,
         timestamp_mach=continuous_time,
         timesync_anchor_id=timesync_anchor_id,
@@ -341,7 +340,6 @@ def _statedump_to_log_entry(
         tracev3_firehose_inner_offset=firehose_inner_offset,
         tracev3_entry_inner_offset=None,
         format_string_file_offset=None,
-        timestamp_iso=resolution.iso,
         timestamp_unix_ns=resolution.unix_ns,
         timestamp_mach=sd.continuous_time,
         timesync_anchor_id=anchor_id,
@@ -390,7 +388,6 @@ def _simpledump_to_log_entry(
         tracev3_firehose_inner_offset=firehose_inner_offset,
         tracev3_entry_inner_offset=None,
         format_string_file_offset=None,
-        timestamp_iso=resolution.iso,
         timestamp_unix_ns=resolution.unix_ns,
         timestamp_mach=sd.continuous_time,
         timesync_anchor_id=anchor_id,

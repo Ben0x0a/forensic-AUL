@@ -12,6 +12,7 @@ import shutil
 import tarfile
 from pathlib import Path, PurePosixPath
 
+from forensic_aul.engine.utils.cancellation import NEVER_CANCELLED, CancelToken
 from forensic_aul.errors import SourceError
 from forensic_aul.ops.extraction.sources.base import (
     ExtractOutcome,
@@ -41,17 +42,20 @@ def matches(path: Path) -> bool:
         return fh.read(len(_GZIP_MAGIC)) == _GZIP_MAGIC
 
 
-def _extract(archive: Path, root: Path) -> ExtractOutcome:
+def _extract(archive: Path, root: Path, cancel: CancelToken) -> ExtractOutcome:
     """Extract ``system_logs.logarchive/`` from a sysdiagnose tarball into *root*.
 
     The marker prefix (wrapper folder + ``system_logs.logarchive/``) is stripped
     so *root* itself becomes the logarchive. Captures the iOS ``ProductVersion``
-    during the same pass when a ``SystemVersion.plist`` is present.
+    during the same pass when a ``SystemVersion.plist`` is present. *cancel* is
+    checked per archive member — the finest granularity available in a
+    single-pass streaming read of a gzip tarball.
     """
     n = 0
     version: str | None = None
     with tarfile.open(archive, "r:gz") as tf:
         for member in tf:
+            cancel.check()
             norm = member.name.replace("\\", "/")
             if version is None and member.isfile() and norm.lower().endswith(_SYSVERSION_SD):
                 src = tf.extractfile(member)
@@ -91,10 +95,12 @@ def prepare(
     work_dir: Path | None = None,
     integrity: str = "full",
     reset_work_dir: bool = False,
+    cancel: CancelToken = NEVER_CANCELLED,
 ) -> PreparedSource:
     return prepare_archive(
         Path(path), SourceType.SYSDIAGNOSE, _extract,
         work_dir=work_dir, integrity=integrity, reset_work_dir=reset_work_dir,
+        cancel=cancel,
     )
 
 

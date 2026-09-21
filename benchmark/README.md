@@ -17,9 +17,55 @@ For the current CP validation suite:
   /path/to/case.logarchive
 ```
 
+## Hot-path micro-benchmarks
+
+`bench_hotpath.py` times the individual functions that run **once per log
+entry**. It needs no evidence, no database and no logarchive — every input is
+synthesised — so it runs anywhere in a couple of seconds.
+
+```bash
+uv run python benchmark/bench_hotpath.py
+```
+
+```bash
+uv run python benchmark/bench_hotpath.py anchor iso --entries 500000 --no-save
+```
+
+Use it to decide *what* to optimise; use `aul_extract_benchmark.py` above to
+confirm a real extract actually got faster. The per-entry µs figure is the honest
+number — the extrapolated column is single-core and ignores `--jobs`, so read it
+as an upper bound on what a fix can save.
+
+Workflow for a performance task: run it, make the change, run it again, and paste
+both tables into the task note. Reports are written to `results/` (git-ignored)
+as `<UTC timestamp>_hotpath.md`; pass `--no-save` to print instead.
+
+Adding a case is a decorated function returning elapsed seconds — see the module
+docstring. Keep setup outside the timed region and time one function per
+benchmark, or a regression cannot be attributed.
+
+### Baseline — 2026-08-17, after the timestamp hot-path fixes
+
+Python 3.12.2, darwin, 200k samples, 130 timesync records per boot:
+
+| benchmark | before | after | change |
+|---|---:|---:|---|
+| `anchor` (`_select_anchor`) | 4.590 µs | 0.809 µs | linear scan → `bisect` on a cached key list |
+| `resolve` (`resolve_mach_timestamp`) | 7.420 µs | 1.329 µs | the above, plus no per-entry ISO formatting |
+| `header` (firehose entry header) | 1.408 µs | 0.159 µs | 8 read+unpack pairs → one precompiled `struct.Struct` |
+
+`iso` (`_format_iso8601`, ~1.7 µs) is unchanged but is no longer called per
+entry: the ISO string was built for every row and then discarded by the writer,
+which stores the integer only.
+
+The `header` before/after was measured against a copy of the old code rather than
+this harness (the old implementation no longer exists to benchmark); the two
+implementations were asserted to return identical tuples on the same bytes.
+
 ## Shipped Files
 
-- `aul_extract_benchmark.py`: benchmark runner.
+- `aul_extract_benchmark.py`: full-extract benchmark runner (needs a real case).
+- `bench_hotpath.py`: per-entry micro-benchmarks (needs nothing).
 - `README.md`: preserved benchmark summary and operating notes.
 
 Generated output is intentionally ignored by git:

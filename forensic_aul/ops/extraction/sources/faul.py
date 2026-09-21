@@ -14,6 +14,7 @@ import logging
 from pathlib import Path
 
 from forensic_aul.engine import faul_format
+from forensic_aul.engine.utils.cancellation import NEVER_CANCELLED, CancelToken
 from forensic_aul.ops.extraction.sources.base import (
     ExtractOutcome,
     PreparedSource,
@@ -30,13 +31,20 @@ def matches(path: Path) -> bool:
     return faul_format.is_faul(path)
 
 
-def _extract(archive: Path, root: Path) -> ExtractOutcome:
+def _extract(archive: Path, root: Path, cancel: CancelToken) -> ExtractOutcome:
     """Extract the bundled logarchive into *root*; surface the embedded sidecar.
 
     A ``.faul`` bundles a plain logarchive (no ``SystemVersion.plist``), so the
     iOS version is left unresolved here — extract falls back to the tracev3 build
     code exactly as it does for a bare ``.logarchive`` directory.
+
+    *cancel* is checked once, before the unpack: a ``.faul`` is a STORED zip, so
+    extracting it is a straight sequential copy with no decompression, and the
+    hashing pass that follows (which does check per file) dominates the wall
+    clock. Pushing a check inside ``faul_format.extract_logarchive`` would put
+    cancellation plumbing into the container format for no measurable gain.
     """
+    cancel.check()
     faul_format.extract_logarchive(archive, root)
     return ExtractOutcome(product_version=None, sidecar=faul_format.read_sidecar(archive))
 
@@ -47,10 +55,12 @@ def prepare(
     work_dir: Path | None = None,
     integrity: str = "full",
     reset_work_dir: bool = False,
+    cancel: CancelToken = NEVER_CANCELLED,
 ) -> PreparedSource:
     return prepare_archive(
         Path(path), SourceType.FAUL, _extract,
         work_dir=work_dir, integrity=integrity, reset_work_dir=reset_work_dir,
+        cancel=cancel,
     )
 
 

@@ -8,7 +8,8 @@ Uses    : forensic_aul.ops.extraction.entry_builder (_firehose_to_log_entry),
           forensic_aul.engine.models (CatalogChunk, LogEntry, TimesyncBoot),
           forensic_aul.engine.parser.catalog, .chunkset, .firehose, .header,
           .reader, .tracev3 (chunk/subchunk iterators + parsers),
-          forensic_aul.engine.parser.string_cache (StringCacheProvider)
+          forensic_aul.engine.parser.string_cache (StringCacheProvider),
+          forensic_aul.engine.utils.cancellation (CancelToken)
 """
 
 from __future__ import annotations
@@ -45,6 +46,8 @@ from forensic_aul.ops.extraction.entry_builder import (
     _simpledump_to_log_entry,
     _statedump_to_log_entry,
 )
+from forensic_aul.engine.utils.cancellation import NEVER_CANCELLED, CancelToken
+from forensic_aul.errors import OperationCancelled
 from forensic_aul.ops.extraction.oversize_pass import OversizeCache
 
 log = logging.getLogger(__name__)
@@ -64,6 +67,7 @@ def process_tracev3(
     emit: "Callable[[LogEntry], None]",
     *,
     keep_raw: bool,
+    cancel: CancelToken = NEVER_CANCELLED,
 ) -> tuple[str, str, str, int, int]:
     """Parse one tracev3 file, passing every resolved LogEntry to *emit*.
 
@@ -71,7 +75,19 @@ def process_tracev3(
     and anchors are pre-inserted (``anchor_id_map``), so this runs identically in
     the main process (``emit=writer.add``) and in a worker (``emit=list.append``).
 
+    *cancel* is checked once per top-level chunk. That is the tightest boundary
+    that is still free: a chunkset is decompressed and walked as a unit, so a
+    finer check would have to sit inside the entry loop and be paid millions of
+    times per file for no useful gain. Worst-case latency is therefore one
+    chunkset (see the parse-cancel latency note in docs/internal/performance.md).
+
     Returns (boot_uuid, ios_model, ios_build_version, entries_written, parse_errors).
+
+    Raises:
+        OperationCancelled: *cancel* was cancelled mid-file. Whatever was emitted
+            before that point has already been handed to *emit*; the caller
+            decides what to do with it (``run_extract`` keeps it — the rows are
+            genuine — and marks the database incomplete).
     """
     rel = path.relative_to(logarchive_root)
     boot_uuid = ""
@@ -92,6 +108,7 @@ def process_tracev3(
 
     try:
         for raw in iter_chunks(path):
+            cancel.check()
             n_chunks += 1
             log.debug(
                 "%s  chunk #%d  tag=0x%04x  size=%d B  offset=0x%x",
@@ -277,6 +294,13 @@ def process_tracev3(
                     rel, n_chunksets, n_sub,
                 )
 
+    except OperationCancelled:
+        # WHY ahead of the broad handler: the catch-all below turns any failure
+        # into a counted parse error and returns normally, so a cancellation
+        # swallowed there would look like a successfully parsed file and the
+        # pipeline would carry straight on to the next one.
+        log.info(f"{rel}  parse cancelled after {n_entries_written} entries")
+        raise
     except Exception as exc:
         n_parse_errors += 1
         log.error(f"{rel}  fatal error after {n_entries_written} entries: {exc}")

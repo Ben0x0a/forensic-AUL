@@ -7,18 +7,58 @@ Defines : the ``extract`` command's argument parser (``add_subcommand``) and its
           helper backs ``acquire --extract`` so both produce a sealed log.
 Used by : launcher/cli.py (registers the parser, dispatches to ``run``).
 Uses    : app.extract_session, forensic_aul.ops.extraction.source,
-          forensic_aul.engine.utils.progress.
+          forensic_aul.engine.utils.progress,
+          forensic_aul.engine.utils.cancellation (the SIGINT → cancel bridge).
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import logging
+import signal
 from pathlib import Path
 
 from forensic_aul.config import BATCH_SIZE
+from forensic_aul.engine.utils.cancellation import CancelToken
 
 log = logging.getLogger(__name__)
+
+
+@contextlib.contextmanager
+def _sigint_cancels(cancel: CancelToken):
+    """Route the first Ctrl+C to *cancel*; let a second one kill the process.
+
+    WHY route it at all: the default handler raises ``KeyboardInterrupt`` from
+    wherever the interpreter happens to be — quite possibly mid-write — and the
+    run then dies with no chance to record what it had done. Cancelling instead
+    stops at the next check point, marks the database, and leaves a ``.partial``
+    the analyst can account for. That is the same outcome the GUI's Cancel button
+    produces, which is the point: both layers must agree on what an interrupted
+    extract leaves behind.
+
+    WHY the second Ctrl+C restores the default: an operator hammering Ctrl+C
+    wants OUT, and a tool that refuses to die is worse than one that leaves a
+    ``.partial`` — which a SIGINT-killed run leaves anyway, by construction.
+
+    The previous handler is restored on exit, so importing this command never
+    changes the process's signal disposition beyond the run itself.
+    """
+    def _on_sigint(_signum, _frame) -> None:
+        signal.signal(signal.SIGINT, previous)   # next Ctrl+C behaves normally
+        log.warning("Ctrl+C — cancelling the extraction (press Ctrl+C again to force quit)…")
+        cancel.cancel()
+
+    try:
+        previous = signal.signal(signal.SIGINT, _on_sigint)
+    except ValueError:
+        # Not the main thread (e.g. an embedding host): no signal handling here.
+        yield
+        return
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGINT, previous)
 
 
 # ── Argument parser ───────────────────────────────────────────────────────────
@@ -351,28 +391,36 @@ def run(args: argparse.Namespace) -> int:
 
     # The session helper owns logging setup, the pipeline call, and sealing the
     # operational log on every exit path (shared with `acquire --extract`).
-    return run_extract_session(
-        logarchive=source,
-        db_path=output,
-        case_number=case_number,
-        imei=imei,
-        exhibit_number=exhibit,
-        analyst_name=analyst,
-        notes=notes,
-        batch_size=args.batch_size,
-        work_dir=args.work_dir,
-        reset_work_dir=args.reset_work_dir,
-        # --fast is a CLI-only shortcut for both fast-fts and fast-write.
-        fast_fts=args.fast_fts or args.fast,
-        fast_write=args.fast_write or args.fast,
-        fts=args.fts,
-        keep_raw=args.keep_raw,
-        jobs=jobs,
-        overwrite=args.overwrite,
-        integrity=args.integrity,
-        verbose=args.verbose,
-        # Live bar on an interactive terminal; no-op when piped/redirected
-        # (the per-phase INFO log lines remain the recorded trail).
-        progress=tty_bar_sink(),
-        source_label=source_label,
-    )
+    cancel = CancelToken()
+    with _sigint_cancels(cancel):
+        return run_extract_session(
+            logarchive=source,
+            db_path=output,
+            case_number=case_number,
+            imei=imei,
+            exhibit_number=exhibit,
+            analyst_name=analyst,
+            notes=notes,
+            batch_size=args.batch_size,
+            work_dir=args.work_dir,
+            reset_work_dir=args.reset_work_dir,
+            # --fast is a CLI-only shortcut for both fast-fts and fast-write.
+            # WHY fast_fts is NOT or'd with --fast: deferred FTS is already the
+            # default, so the only way args.fast_fts is False here is an explicit
+            # --no-fast-fts — and or'ing would silently discard that opt-out for
+            # anyone who wrote `--no-fast-fts --fast`. An explicit flag wins over
+            # a shorthand.
+            fast_fts=args.fast_fts,
+            fast_write=args.fast_write or args.fast,
+            fts=args.fts,
+            keep_raw=args.keep_raw,
+            jobs=jobs,
+            overwrite=args.overwrite,
+            integrity=args.integrity,
+            verbose=args.verbose,
+            # Live bar on an interactive terminal; no-op when piped/redirected
+            # (the per-phase INFO log lines remain the recorded trail).
+            progress=tty_bar_sink(),
+            source_label=source_label,
+            cancel=cancel,
+        )

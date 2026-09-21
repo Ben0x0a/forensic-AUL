@@ -7,7 +7,8 @@ Used by : forensic_aul.ops.extraction.entry_builder (types),
           forensic_aul.ops.extraction.extract (collect_oversize)
 Uses    : forensic_aul.engine.models (CatalogChunk, Oversize),
           forensic_aul.engine.parser.catalog, .chunkset, .tracev3 (iterators),
-          forensic_aul.engine.parser.string_cache (StringCacheProvider, type only)
+          forensic_aul.engine.parser.string_cache (StringCacheProvider, type only),
+          forensic_aul.engine.utils.cancellation (CancelToken)
 """
 
 from __future__ import annotations
@@ -28,6 +29,8 @@ from forensic_aul.engine.parser.tracev3 import (
     CHUNK_TAG_CHUNKSET,
     iter_chunks,
 )
+from forensic_aul.engine.utils.cancellation import NEVER_CANCELLED, CancelToken
+from forensic_aul.errors import OperationCancelled
 
 log = logging.getLogger(__name__)
 
@@ -40,15 +43,27 @@ OversizeCache = dict[OversizeKey, Oversize]
 def collect_oversize(
     tracev3_files: list[Path],
     strings: StringCacheProvider,
+    *,
+    cancel: CancelToken = NEVER_CANCELLED,
 ) -> OversizeCache:
-    """Pass 1: scan all tracev3 files and collect Oversize sub-chunks."""
+    """Pass 1: scan all tracev3 files and collect Oversize sub-chunks.
+
+    *cancel* is checked once per chunk. WHY inside the per-file ``try`` rather
+    than outside it: the surrounding handler catches ``Exception`` to keep one
+    malformed file from sinking the pass, and ``OperationCancelled`` is an
+    ``Exception`` — checking here means the cancellation reaches the raise site
+    at the top of the loop body, where nothing swallows it, on the next
+    iteration. (It is re-raised explicitly below for the same reason.)
+    """
     from forensic_aul.engine.parser.oversize import parse_oversize_chunk
 
     cache: OversizeCache = {}
     for path in tracev3_files:
+        cancel.check()
         catalog: CatalogChunk | None = None
         try:
             for raw in iter_chunks(path):
+                cancel.check()
                 if raw.tag == CHUNK_TAG_CATALOG:
                     try:
                         catalog = parse_catalog_chunk(raw.data)
@@ -73,6 +88,11 @@ def collect_oversize(
                             cache[key] = ov
                         except Exception as exc:
                             log.debug("oversize parse error: %s", exc)
+        except OperationCancelled:
+            # WHY re-raised ahead of the broad handler: a cancellation is not a
+            # malformed-file problem to log and carry on from — swallowing it
+            # here would silently continue scanning every remaining file.
+            raise
         except Exception as exc:
             log.warning(f"oversize pass: error in {path.name}: {exc}")
     log.info(f"oversize pass: found {len(cache)} oversize entries")

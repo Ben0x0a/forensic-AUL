@@ -32,6 +32,7 @@ from enum import Enum
 from pathlib import Path, PurePosixPath
 
 from forensic_aul.engine.integrity import hash_logarchive
+from forensic_aul.engine.utils.cancellation import NEVER_CANCELLED, CancelToken
 from forensic_aul.errors import SourceError
 
 log = logging.getLogger(__name__)
@@ -162,7 +163,8 @@ class SourceHandler:
 
     ``matches(path)`` is the full content-first detector (a directory check, a
     magic-byte read, or a deeper content probe); ``prepare(path, work_dir=…,
-    integrity=…)`` normalises the source into a :class:`PreparedSource`.
+    integrity=…, cancel=…)`` normalises the source into a
+    :class:`PreparedSource`.
     ``priority`` orders detection — a *more specific* handler (e.g. a ``.faul``,
     which is a zip carrying a marker) must be probed **before** a broader one
     (a plain ``.zip``); lower numbers run first. ``describe`` feeds the
@@ -288,7 +290,9 @@ def claim_work_root(root: Path, *, reset: bool) -> None:
     root.mkdir(parents=True, exist_ok=True)
 
 
-def mirror_tree(src_dir: Path, dest_root: Path) -> tuple[int, int]:
+def mirror_tree(
+    src_dir: Path, dest_root: Path, *, cancel: CancelToken = NEVER_CANCELLED
+) -> tuple[int, int]:
     """Recreate *src_dir*'s tree under *dest_root*, hard-linking each regular file.
 
     Returns ``(files, copied)`` — the total files materialised and how many of them
@@ -314,6 +318,7 @@ def mirror_tree(src_dir: Path, dest_root: Path) -> tuple[int, int]:
     for dirpath, _dirnames, filenames in os.walk(src_dir):
         rel_dir = Path(dirpath).relative_to(src_dir)
         for filename in filenames:
+            cancel.check()
             src_file = Path(dirpath) / filename
             if src_file.is_symlink():
                 continue
@@ -381,14 +386,16 @@ def check_integrity_mode(integrity: str) -> None:
         )
 
 
-def hash_for_mode(root: Path, integrity: str) -> tuple[str | None, dict[str, str]]:
+def hash_for_mode(
+    root: Path, integrity: str, *, cancel: CancelToken = NEVER_CANCELLED
+) -> tuple[str | None, dict[str, str]]:
     """Content hash + per-file hashes for *root*, honouring the integrity mode.
 
     "full" runs :func:`hash_logarchive`; the other modes return ``(None, {})`` so
     every downstream consumer records NULL hashes instead of a fabricated baseline.
     """
     if integrity == "full":
-        return hash_logarchive(root)
+        return hash_logarchive(root, cancel=cancel)
     log.info(f"Integrity mode {integrity!r}: per-file hashing skipped — no chain-of-custody attestation")
     return None, {}
 
@@ -398,11 +405,12 @@ def hash_for_mode(root: Path, integrity: str) -> tuple[str | None, dict[str, str
 def prepare_archive(
     path: Path,
     source_type: SourceType,
-    extract: Callable[[Path, Path], ExtractOutcome | str | None],
+    extract: Callable[[Path, Path, CancelToken], ExtractOutcome | str | None],
     *,
     work_dir: Path | None,
     integrity: str,
     reset_work_dir: bool = False,
+    cancel: CancelToken = NEVER_CANCELLED,
 ) -> PreparedSource:
     """The common single-file-archive path: snapshot → extract → hash → assemble.
 
@@ -412,15 +420,20 @@ def prepare_archive(
     *extract* callable materialises the logarchive files under the given root and
     returns an :class:`ExtractOutcome` (or, for convenience, a bare product-version
     string / None). Shared by the sysdiagnose, FFS and ``.faul`` handlers.
+
+    *cancel* is handed to *extract* (which checks it per archive member) and to
+    the hashing pass. A cancellation propagates as ``OperationCancelled`` after
+    the temp work root has been cleaned up, exactly as any other failure does —
+    so an aborted preparation leaves nothing behind.
     """
     check_integrity_mode(integrity)
     fingerprint = quick_fingerprint(path) if integrity != "off" else None
     root, tmp = make_work_root(path.stem, work_dir, reset=reset_work_dir)
     try:
-        outcome = extract(path, root)
+        outcome = extract(path, root, cancel)
         if not isinstance(outcome, ExtractOutcome):
             outcome = ExtractOutcome(product_version=outcome)
-        content_sha256, file_hashes = hash_for_mode(root, integrity)
+        content_sha256, file_hashes = hash_for_mode(root, integrity, cancel=cancel)
     except BaseException:
         # Don't leak a temp dir if extraction/hashing fails partway.
         if tmp is not None:

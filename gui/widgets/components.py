@@ -388,6 +388,7 @@ def primary_button(text: str, icon: str = "play") -> QPushButton:
     button.setProperty("variant", "primary")
     button.setIcon(make_icon(icon, 12, "#ffffff"))
     button.setCursor(Qt.CursorShape.PointingHandCursor)
+    _no_default(button)
     return button
 
 
@@ -398,7 +399,21 @@ def ghost_button(text: str, icon: str | None = None) -> QPushButton:
     if icon:
         button.setIcon(make_icon(icon, 12))
     button.setCursor(Qt.CursorShape.PointingHandCursor)
+    _no_default(button)
     return button
+
+
+def _no_default(button: QPushButton) -> None:
+    """Stop Qt painting its own "default button" highlight over our styling.
+
+    Under Fusion a focused push button gets a native default-button indicator —
+    a filled accent rectangle drawn *outside* the stylesheet. On a ghost button
+    that renders as a solid violet block beside the real primary, so the row
+    appears to have two call-to-action buttons. The same workaround already
+    existed one-off on PathPicker's Browse button; it belongs on the factories.
+    """
+    button.setAutoDefault(False)
+    button.setDefault(False)
 
 
 def icon_button(
@@ -444,11 +459,21 @@ def result_panel(ok: bool, message: str) -> Panel:
 
 
 def clear_layout(layout: QVBoxLayout | QHBoxLayout) -> None:
-    """Remove and delete every item in *layout* (widgets and nested layouts)."""
+    """Remove and delete every item in *layout* (widgets and nested layouts).
+
+    WHY ``setParent(None)`` as well as ``deleteLater()``: taking a widget out of
+    a layout does not detach it from its parent, and ``deleteLater`` only runs
+    when the event loop next processes deferred deletions. Until then the widget
+    is still a live child and still paints at its old geometry — so swapping an
+    action row left the previous row's buttons showing underneath the new ones.
+    Unparenting makes the removal immediate; deleteLater still owns the actual
+    destruction, which must stay deferred (the widget may be mid-signal).
+    """
     while layout.count():
         item = layout.takeAt(0)
         widget = item.widget()
         if widget is not None:
+            widget.setParent(None)
             widget.deleteLater()
         else:
             child = item.layout()

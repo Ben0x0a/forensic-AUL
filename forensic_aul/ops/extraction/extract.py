@@ -14,8 +14,26 @@ Pipeline steps
 8. Finalise case_metadata (timestamps, ios_model, ios_build_version)
 
 The stages share one :class:`~forensic_aul.ops.extraction.options.RunContext`
-(connection, prepared source, options, reporter) instead of long parameter
-lists; the user-tunable knobs live in ``ExtractOptions`` (same module).
+(connection, prepared source, options, reporter, cancellation token) instead of
+long parameter lists; the user-tunable knobs live in ``ExtractOptions`` (same
+module).
+
+Interruption
+------------
+The pipeline is cancellable and, more importantly, **always says whether it
+finished**. Two independent markers carry that, deliberately:
+
+* out of band — the output is written as ``<name>.partial`` and only renamed to
+  ``<name>`` on success, so an interrupted run is obvious from the filename with
+  no code having had to run (see :data:`PARTIAL_SUFFIX`);
+* in band — ``case_metadata.extract_status`` goes ``running`` → ``complete`` /
+  ``cancelled``, which is what ``open_analysis_database`` checks before letting a
+  reader treat the store as a full parse.
+
+``extract_phases`` records each phase's start and end as the run progresses, so
+an interrupted database can say which phase it died in — and a future resume can
+read the same ledger (together with ``source_files.parse_completed_at``) to know
+where to restart.
 """
 
 from __future__ import annotations
@@ -28,20 +46,28 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from forensic_aul import __version__
-from forensic_aul.config import BATCH_SIZE
+from forensic_aul.config import BATCH_SIZE, PARTIAL_SUFFIX
 from forensic_aul.engine.database.ordering import assign_ordering
 from forensic_aul.engine.database.schema import (
+    EXTRACT_STATUS_CANCELLED,
+    EXTRACT_STATUS_COMPLETE,
     apply_pragmas,
     finalize_deferred_fts,
     finalize_indexes,
     init_schema,
 )
-from forensic_aul.engine.database.writer import BatchWriter, register_source_file
+from forensic_aul.engine.database.writer import (
+    BatchWriter,
+    now_iso,
+    register_source_file,
+)
 from forensic_aul.engine.integrity import verify_source_files
 from forensic_aul.engine.ios_builds import ios_version_for_build
 from forensic_aul.engine.parser.string_cache import StringCacheProvider
+from forensic_aul.engine.utils.cancellation import NEVER_CANCELLED, CancelToken
 from forensic_aul.engine.utils.progress import ProgressReporter, ProgressSink
 from forensic_aul.engine.utils.time import iso8601_from_unix_ns
+from forensic_aul.errors import OperationCancelled
 from forensic_aul.ops.extraction.discovery import find_tracev3_files
 from forensic_aul.ops.extraction.options import CaseInfo, ExtractOptions, RunContext
 from forensic_aul.ops.extraction.oversize_pass import OversizeCache, collect_oversize
@@ -64,7 +90,34 @@ _EXTRACT_PHASES = [
     ("stats", 0.05),     # summary statistics, cached into the database
 ]
 
+# How often SQLite asks the cancellation handler whether to abort, measured in
+# virtual-machine steps. It is the ONLY way to interrupt the three monolithic
+# statements in the finaliser (ordering phase 1, the index builds, the FTS
+# rebuild), each of which can run for minutes with no Python code executing in
+# between. Measured: an abort lands in well under a millisecond, and the
+# connection stays usable afterwards — which is what lets the cancel handler go
+# on to record the run's status in the very database it just interrupted.
+_CANCEL_VM_STEPS = 50_000
+
 log = logging.getLogger(__name__)
+
+
+def partial_path_for(db_path: Path) -> Path:
+    """Return the ``.partial`` working path ``run_extract`` writes for *db_path*.
+
+    One definition so the pipeline, the overwrite guard and any caller inspecting
+    an interrupted run cannot disagree about the name.
+    """
+    return db_path.with_name(db_path.name + PARTIAL_SUFFIX)
+
+
+def _db_sidecars(path: Path) -> tuple[Path, ...]:
+    """The SQLite file *path* plus its WAL/SHM sidecars, in delete-safe order."""
+    return (
+        path,
+        path.with_name(path.name + "-wal"),
+        path.with_name(path.name + "-shm"),
+    )
 
 
 @dataclass
@@ -102,7 +155,10 @@ def _ingest_shutdown_log(
     live outside the logs/event_order timeline (see extraction/shutdown_log.py).
     Returns the number of shutdown events ingested.
     """
-    from forensic_aul.ops.extraction.shutdown_log import find_shutdown_log, parse_shutdown_log
+    from forensic_aul.ops.extraction.shutdown_log import (
+        find_shutdown_log,
+        parse_shutdown_log,
+    )
 
     path = find_shutdown_log(logarchive_root)
     if path is None:
@@ -143,7 +199,7 @@ def run_extract(
     batch_size: int = BATCH_SIZE,
     work_dir: Path | None = None,
     reset_work_dir: bool = False,
-    fast_fts: bool = False,
+    fast_fts: bool = True,
     fast_write: bool = False,
     fts: bool = True,
     keep_raw: bool = False,
@@ -151,6 +207,7 @@ def run_extract(
     overwrite: bool = False,
     integrity: str = "full",
     progress: ProgressSink | None = None,
+    cancel: CancelToken = NEVER_CANCELLED,
 ) -> ExtractResult:
     """Full extract pipeline: source → SQLite.
 
@@ -199,10 +256,30 @@ def run_extract(
     (process / subsystem / format string / message prefix — see ``query_logs``)
     should pass ``fts=False``.
 
-    If *db_path* already exists the call refuses to proceed unless *overwrite* is
-    True — extracting into an existing database would silently merge two
-    acquisitions into one file. With *overwrite* the existing database (and its
-    ``-wal`` / ``-shm`` sidecars) is removed first so the run starts clean.
+    If *db_path* (or the ``.partial`` of a previous interrupted run) already
+    exists the call refuses to proceed unless *overwrite* is True — extracting
+    into an existing database would silently merge two acquisitions into one
+    file. With *overwrite* both (and their ``-wal`` / ``-shm`` sidecars) are
+    removed first so the run starts clean.
+
+    **The output is written to ``<db_path>.partial`` and renamed to *db_path*
+    only once the run has succeeded.** So a file at *db_path* means a complete
+    extract, and a ``.partial`` beside it means an interrupted one — a
+    cancellation, a crash, a ``SIGKILL`` and a power cut all leave the same
+    unambiguous artefact, because no code has to run for the name to say so. The
+    rename is atomic within a filesystem. The same fact is recorded *in band* as
+    ``case_metadata.extract_status`` (``running`` → ``complete`` / ``cancelled``),
+    which is what the readers check (see ``open_analysis_database``).
+
+    *cancel* makes the run interruptible: pass a
+    :class:`~forensic_aul.engine.utils.cancellation.CancelToken` and call
+    ``cancel()`` on it from another thread. The pipeline stops at its next check
+    point (per archive member / per source file / per tracev3 chunk, and inside
+    the finaliser's long SQL statements via SQLite's progress handler), records
+    ``cancelled`` in the database, leaves the ``.partial`` in place and raises
+    :class:`~forensic_aul.errors.OperationCancelled` with ``partial_db_path``
+    set. Rows already parsed are kept — they are genuine evidence; the database
+    is simply marked as not being the complete parse of its source.
 
     Returns:
         An :class:`~forensic_aul.outcomes.ExtractResult` bundling the output
@@ -211,7 +288,9 @@ def run_extract(
         UUID, time range, source type and SHA-256).
 
     Raises:
-        FileExistsError: *db_path* exists and *overwrite* is False.
+        FileExistsError: *db_path* (or its ``.partial``) exists and *overwrite*
+            is False.
+        OperationCancelled: *cancel* was cancelled during the run.
     """
     # For a caller-supplied PreparedSource the integrity mode was decided at
     # preparation time; derive it from the prepared state so the finaliser's
@@ -242,15 +321,24 @@ def run_extract(
     # a second acquisition into an existing database. The actual removal is
     # deferred until just before we open the connection (see below), so a failure
     # during source preparation cannot destroy a pre-existing database.
-    if db_path.exists() and not opts.overwrite:
-        raise FileExistsError(
-            f"{db_path} already exists; pass overwrite=True to replace it "
-            "(extracting into an existing database would merge two acquisitions)"
-        )
+    # BOTH names are guarded: a leftover `.partial` is the previous run's
+    # evidence, and writing this acquisition into it would merge two cases just
+    # as surely as writing into a finished database would.
+    work_path = partial_path_for(db_path)
+    for existing in (db_path, work_path):
+        if existing.exists() and not opts.overwrite:
+            raise FileExistsError(
+                f"{existing} already exists; pass overwrite=True to replace it "
+                "(extracting into an existing database would merge two acquisitions)"
+            )
 
     _t0 = time.monotonic()
+    # Wall-clock start of preparation, kept so the phase can be entered into the
+    # extract_phases ledger later — the database it belongs in does not exist yet.
+    _prepare_started_at = now_iso()
     reporter = ProgressReporter(progress, _EXTRACT_PHASES)
     reporter.phase("prepare", "hashing source")
+    cancel.check()
 
     # ── Step 1: Source preparation + forensic hashing ─────────────────────
     log.info("─── Step 1/7 : Source preparation + hashing ──────────────────")
@@ -272,7 +360,7 @@ def run_extract(
             log.debug("Source path : %s", Path(logarchive).resolve())
         prepared = prepare_source(
             logarchive, work_dir=work_dir, integrity=opts.integrity,
-            reset_work_dir=reset_work_dir,
+            reset_work_dir=reset_work_dir, cancel=cancel,
         )
     log.info(f"Source type        : {prepared.source_type.value}")
     if prepared.archive_fingerprint is not None:
@@ -294,25 +382,32 @@ def run_extract(
 
     # ── Step 2: Database setup ────────────────────────────────────────────
     log.info("─── Step 2/7 : Database initialisation ─────────────────────────")
-    log.debug("Output database : %s", db_path.resolve())
+    log.debug("Output database : %s  (written as %s)", db_path.resolve(), work_path.name)
     # Source preparation succeeded, so it is now safe to clear any existing DB
     # (and its WAL/SHM sidecars) and start clean — deferred from the entry guard
-    # so a prep failure could not have destroyed a pre-existing database.
+    # so a prep failure could not have destroyed a pre-existing database. Both
+    # names go, for the same reason the guard above checks both.
     if opts.overwrite:
-        for sidecar in (db_path, db_path.with_name(db_path.name + "-wal"),
-                        db_path.with_name(db_path.name + "-shm")):
-            sidecar.unlink(missing_ok=True)
-    conn = sqlite3.connect(str(db_path))
+        for stale in (*_db_sidecars(db_path), *_db_sidecars(work_path)):
+            stale.unlink(missing_ok=True)
+    conn = sqlite3.connect(str(work_path))
+    ctx = RunContext(
+        conn=conn,
+        db_path=work_path,
+        final_db_path=db_path,
+        prepared=prepared,
+        case=case,
+        opts=opts,
+        reporter=reporter,
+        t0=_t0,
+        cancel=cancel,
+        prepare_started_at=_prepare_started_at,
+    )
+    # Arm the only interrupt that reaches inside a running SQL statement. Done
+    # once, here, so it covers every statement the pipeline issues on this
+    # connection — including the finaliser's three monolithic ones.
+    _arm_sqlite_cancel(conn, cancel)
     try:
-        ctx = RunContext(
-            conn=conn,
-            db_path=db_path,
-            prepared=prepared,
-            case=case,
-            opts=opts,
-            reporter=reporter,
-            t0=_t0,
-        )
         result = _run_extract_inner(ctx)
         reporter.finish("complete")
         # ── Integrity attestation (after) ─────────────────────────────────
@@ -324,7 +419,9 @@ def run_extract(
                 log.info("Archive integrity re-check : PASS — unchanged since pre-run snapshot")
             else:
                 log.warning(f"Archive integrity re-check : FAIL — {prepared.original_path} changed during the run!")
-        return result
+    except BaseException as exc:
+        _handle_interruption(ctx, exc)
+        raise
     finally:
         conn.close()
         # A caller-supplied PreparedSource is cleaned up by its owner (typically
@@ -332,6 +429,149 @@ def run_extract(
         # a temp extraction the caller may still want to inspect or reuse.
         if not caller_prepared:
             prepared.cleanup()
+
+    # ── Promote the artefact to its final name ────────────────────────────
+    # Only reached on success, and only after the connection is closed (so WAL
+    # is checkpointed and the file on disk is self-contained). From this instant
+    # the presence of db_path is the proof that the extract finished.
+    _promote_partial(work_path, db_path)
+    return result
+
+
+# ── Phase ledger (extract_phases) ─────────────────────────────────────────────
+
+def _enter_phase(ctx: RunContext, name: str, detail: str = "") -> None:
+    """Advance the progress bar to *name*, open its ledger row, and check *cancel*.
+
+    Progress and ledger are driven from one call so the bar an operator watches
+    and the record a future resume reads can never disagree about which phase is
+    running. The previous phase is closed first; a phase left open in the table is
+    therefore exactly the phase an interrupted run died in.
+
+    WHY the cancel check comes LAST — after the row is opened: a phase boundary
+    is the cheapest possible check point, and stopping here (rather than one
+    statement into the phase) is the difference between an operator's Cancel
+    landing at once and it waiting out a whole index build. Opening the row first
+    means the ledger still names the phase the run was entering, which is what
+    resume needs to know.
+    """
+    _leave_phase(ctx)
+    ctx.reporter.phase(name, detail)
+    if ctx.writer is not None:
+        ctx.phase_id = ctx.writer.begin_phase(name)
+    ctx.cancel.check()
+
+
+def _leave_phase(ctx: RunContext) -> None:
+    """Close the currently-open ``extract_phases`` row, if any."""
+    if ctx.writer is not None and ctx.phase_id is not None:
+        ctx.writer.complete_phase(ctx.phase_id)
+    ctx.phase_id = None
+
+
+def _record_prepare_phase(ctx: RunContext) -> None:
+    """Enter the already-finished source-preparation phase into the ledger.
+
+    Source preparation runs before the database it would be recorded in exists,
+    so it is the one phase written after the fact — with the time it really
+    started, captured by ``run_extract``. Without this the ledger would begin
+    mid-run and could not account for the minutes a large archive spends being
+    extracted and hashed.
+    """
+    if ctx.writer is None or not ctx.prepare_started_at:
+        return
+    ctx.writer.complete_phase(ctx.writer.begin_phase("prepare", ctx.prepare_started_at))
+
+
+# ── Cancellation plumbing ─────────────────────────────────────────────────────
+
+def _arm_sqlite_cancel(conn: sqlite3.Connection, cancel: CancelToken) -> None:
+    """Let *cancel* abort a statement already running on *conn*.
+
+    HOW: SQLite calls the registered handler every ``_CANCEL_VM_STEPS`` virtual
+    machine instructions and aborts the current statement (raising
+    ``sqlite3.OperationalError``) when it returns a non-zero value.
+
+    WHY this is not optional: three of the pipeline's steps — ``assign_ordering``
+    phase 1, ``finalize_indexes`` and ``finalize_deferred_fts`` — are *single*
+    statements that can run for minutes on a large extract. No Python executes
+    while they do, so a token check between phases would leave Cancel doing
+    nothing at all for the whole of the finaliser.
+
+    Installed only for a real token: with the null token the handler could never
+    fire, so registering it would be pure per-statement overhead.
+    """
+    if cancel is NEVER_CANCELLED:
+        return
+    conn.set_progress_handler(lambda: 1 if cancel.cancelled else 0, _CANCEL_VM_STEPS)
+
+
+def _mark_cancelled(ctx: RunContext) -> None:
+    """Record ``extract_status='cancelled'`` in the interrupted database.
+
+    Best-effort by design: the ``.partial`` filename already marks the artefact,
+    so failing to write the in-band flag must never replace the operator's
+    cancellation with a confusing secondary error.
+    """
+    if ctx.writer is None or ctx.metadata_id is None:
+        # The run never got as far as inserting case_metadata — there is no row
+        # to flag. The `.partial` name carries the whole message on its own.
+        return
+    try:
+        # An aborted statement can leave a transaction open; drop it first so the
+        # status UPDATE is not rolled back with it.
+        ctx.conn.rollback()
+        ctx.writer.set_extract_status(ctx.metadata_id, EXTRACT_STATUS_CANCELLED)
+        log.info(f"Run marked cancelled in {ctx.db_path.name} (extract_status=cancelled)")
+    except Exception:  # noqa: BLE001 — never mask the cancellation itself
+        log.warning("Could not record the cancelled status in the database", exc_info=True)
+
+
+def _handle_interruption(ctx: RunContext, exc: BaseException) -> None:
+    """React to whatever ended the run early; translate a cancel-driven abort.
+
+    Returns normally for a genuine failure (leaving ``extract_status='running'``,
+    which is the truth: the run died). Raises
+    :class:`~forensic_aul.errors.OperationCancelled` — carrying
+    ``partial_db_path`` — when the operator cancelled, including the case where
+    the cancellation surfaced as SQLite aborting a statement rather than as a
+    token check.
+    """
+    # FIRST, before anything else touches the connection: the progress handler is
+    # still armed and still sees a cancelled token, so it would abort the very
+    # UPDATE that records the cancellation.
+    try:
+        ctx.conn.set_progress_handler(None, 0)
+    except Exception:  # noqa: BLE001 — a dead connection is not worth a new error
+        log.debug("could not disarm the sqlite cancel handler", exc_info=True)
+
+    if isinstance(exc, OperationCancelled):
+        _mark_cancelled(ctx)
+        exc.partial_db_path = ctx.db_path
+        return
+    # A statement aborted by our own progress handler arrives as a bare
+    # OperationalError; only the token can say whether that was us.
+    if ctx.cancel.cancelled and isinstance(exc, sqlite3.OperationalError):
+        _mark_cancelled(ctx)
+        cancelled = OperationCancelled(
+            "operation cancelled by the operator (SQLite statement aborted)"
+        )
+        cancelled.partial_db_path = ctx.db_path
+        raise cancelled from exc
+
+
+def _promote_partial(work_path: Path, db_path: Path) -> None:
+    """Rename the finished ``.partial`` to its final name (the success marker).
+
+    Any WAL/SHM sidecar that outlived the close is moved with it: leaving one
+    behind under the old stem would orphan it next to a database it no longer
+    belongs to. A clean close normally removes both, so this is defence in depth.
+    """
+    for suffix in ("-wal", "-shm"):
+        sidecar = work_path.with_name(work_path.name + suffix)
+        if sidecar.exists():
+            sidecar.replace(db_path.with_name(db_path.name + suffix))
+    work_path.replace(db_path)
 
 
 def open_or_extract(
@@ -376,9 +616,12 @@ def _run_extract_inner(ctx: RunContext) -> ExtractResult:
     log.info(f'Schema created  : WAL mode (sync={"OFF" if opts.fast_write else "NORMAL"}), indexes deferred, FTS5={"enabled" if ctx.fts5_ok else ("disabled" if not opts.fts else "unavailable")}{" (deferred rebuild)" if opts.fast_fts and ctx.fts5_ok else ""}, raw_data={"kept" if opts.keep_raw else "dropped"}, batch_size={opts.batch_size}')
 
     ctx.writer = BatchWriter(ctx.conn, batch_size=opts.batch_size)
+    _record_prepare_phase(ctx)
 
     stats = _run_parse(ctx)
-    return _finalise(ctx, stats)
+    result = _finalise(ctx, stats)
+    _leave_phase(ctx)
+    return result
 
 
 def _run_parse(ctx: RunContext) -> _ParseStats:
@@ -405,6 +648,9 @@ def _run_parse(ctx: RunContext) -> _ParseStats:
         tool_version=__version__,
     )
     conn.commit()
+    # Publish the id at once: from here on the cancel path can flag this exact
+    # row, and it must not depend on _run_parse returning normally to learn it.
+    ctx.metadata_id = stats.metadata_id
     log.info(f"Case metadata inserted  : id={stats.metadata_id}  case={ctx.case.case_number}  imei={ctx.case.imei}")
     if ctx.case.exhibit_number:
         log.info(f"  Exhibit  : {ctx.case.exhibit_number}")
@@ -413,10 +659,12 @@ def _run_parse(ctx: RunContext) -> _ParseStats:
 
     # ── Step 4: Timesync ──────────────────────────────────────────────────
     log.info("─── Step 4/7 : Timesync files ───────────────────────────────────")
+    ctx.cancel.check()
     ts = setup_timesync(writer, logarchive, file_hashes)
 
     # ── Step 5: String cache (UUIDText + DSC) ─────────────────────────────
     log.info("─── Step 5/7 : String cache (UUIDText + DSC) ───────────────────")
+    ctx.cancel.check()
     strings = StringCacheProvider(logarchive)
     strings.load(writer, logarchive, file_hashes)
     # StringCacheProvider already logs its summary at INFO
@@ -441,7 +689,9 @@ def _run_parse(ctx: RunContext) -> _ParseStats:
     # keeps the on-disk state consistent and the WAL small).
     conn.commit()
 
-    oversize_cache: OversizeCache = collect_oversize(tracev3_files, strings)
+    oversize_cache: OversizeCache = collect_oversize(
+        tracev3_files, strings, cancel=ctx.cancel
+    )
     log.info(f"Oversize cache  : {len(oversize_cache)} entry(ies) collected")
 
     # ── Step 7: Pass 2 — Main parse ───────────────────────────────────────
@@ -450,7 +700,7 @@ def _run_parse(ctx: RunContext) -> _ParseStats:
 
     # Progress: weight the parse by tracev3 byte size (files vary ~1000x in entry
     # count, so byte size advances the bar far more smoothly than file count).
-    ctx.reporter.phase("parse")
+    _enter_phase(ctx, "parse")
     _sizes = {rel: max(1, p.stat().st_size) for p, rel in zip(tracev3_files, rels)}
     _total_bytes = sum(_sizes.values()) or 1
     _done_bytes = 0
@@ -463,8 +713,13 @@ def _run_parse(ctx: RunContext) -> _ParseStats:
                 path, logarchive, strings, oversize_cache,
                 ts.timesync_data, ts.boot_uuid_to_timesync_file_id,
                 tracev3_file_ids[rel], ts.anchor_id_map, writer.add,
-                keep_raw=opts.keep_raw,
+                keep_raw=opts.keep_raw, cancel=ctx.cancel,
             ))
+            # Flush BEFORE marking: parse_completed_at asserts that every row of
+            # this file is in the database, and rows still in the batch buffer
+            # would make that assertion false (see BatchWriter.mark_file_parsed).
+            writer.flush()
+            writer.mark_file_parsed(tracev3_file_ids[rel])
             _done_bytes += _sizes[rel]
             ctx.reporter.update(_done_bytes / _total_bytes, f"{i}/{len(tracev3_files)}")
     else:
@@ -476,6 +731,8 @@ def _run_parse(ctx: RunContext) -> _ParseStats:
             nonlocal done, _done_bytes
             # Single writer (this process) — one DB connection, no contention.
             writer.add_batch(entries)
+            writer.flush()                              # see the serial path
+            writer.mark_file_parsed(tracev3_file_ids[rel])
             stats.absorb(file_stats)
             done += 1
             _done_bytes += _sizes[rel]
@@ -491,6 +748,7 @@ def _run_parse(ctx: RunContext) -> _ParseStats:
                 tracev3_file_ids, strings.uuid_file_ids(), opts.keep_raw,
             ),
             handle_result=_handle_result,
+            cancel=ctx.cancel,
         )
 
     writer.flush()
@@ -533,7 +791,7 @@ def _finalise(ctx: RunContext, stats: _ParseStats) -> ExtractResult:
     # Assign source_order (per-file physical) + event_order (boot, monotonic mach)
     # now that every row is loaded — independent of insertion order, so it is
     # identical whether the parse ran serially or across worker processes.
-    ctx.reporter.phase("ordering", "merging timeline")
+    _enter_phase(ctx, "ordering", "merging timeline")
     log.info("Assigning forensic ordering (source_order + event_order)…")
     assign_ordering(conn)
 
@@ -541,7 +799,7 @@ def _finalise(ctx: RunContext, stats: _ParseStats) -> ExtractResult:
     # One sorted build per index over the finished table — far cheaper than
     # maintaining every index on each INSERT during the load. Runs after ordering
     # so the event_order / source_order indexes build on their final values.
-    ctx.reporter.phase("index", "building indexes")
+    _enter_phase(ctx, "index", "building indexes")
     log.info("Building secondary indexes…")
     _t_idx = time.monotonic()
     finalize_indexes(conn)
@@ -552,7 +810,7 @@ def _finalise(ctx: RunContext, stats: _ParseStats) -> ExtractResult:
     # The bulk load ran without FTS maintenance triggers; build the index once
     # now and install the triggers for subsequent mutations.
     if opts.fast_fts and ctx.fts5_ok:
-        ctx.reporter.phase("fts", "full-text index")
+        _enter_phase(ctx, "fts", "full-text index")
         log.info("Building FTS5 index (deferred rebuild)…")
         _t_fts = time.monotonic()
         finalize_deferred_fts(conn)
@@ -570,7 +828,7 @@ def _finalise(ctx: RunContext, stats: _ParseStats) -> ExtractResult:
         log.info("Re-verifying per-file integrity (end-of-run re-hash)…")
         _t_intg = time.monotonic()
         files_ok, files_changed, files_unverifiable = verify_source_files(
-            conn, ctx.prepared.logarchive_root
+            conn, ctx.prepared.logarchive_root, cancel=ctx.cancel
         )
         log.info(f"Integrity re-check : {files_ok} unchanged, {files_changed} changed, {files_unverifiable} unverifiable  ({time.monotonic() - _t_intg:.1f} s)")
         if files_changed:
@@ -629,8 +887,16 @@ def _finalise(ctx: RunContext, stats: _ParseStats) -> ExtractResult:
     # freezing for tens of seconds on open. A failure is logged and swallowed: the
     # extraction itself succeeded, and a missing cache degrades to "not evaluated",
     # never to a lost database.
-    ctx.reporter.phase("stats", "summary statistics")
+    _enter_phase(ctx, "stats", "summary statistics")
     refresh_summary(conn)
+    _leave_phase(ctx)
+
+    # ── Declare the run complete ───────────────────────────────────────────
+    # The LAST thing written, so no ordering of failures can leave a store
+    # claiming to be finished when it is not. Its counterpart is the rename of
+    # the .partial file, done by run_extract once the connection is closed.
+    assert stats.metadata_id, "Invariant violated: _run_parse must insert case_metadata"
+    writer.set_extract_status(stats.metadata_id, EXTRACT_STATUS_COMPLETE)
 
     elapsed = time.monotonic() - ctx.t0
     log.info("═" * 72)
@@ -642,13 +908,15 @@ def _finalise(ctx: RunContext, stats: _ParseStats) -> ExtractResult:
     log.info(f"  Time range        : {first_ts}  →  {last_ts}")
     log.info(f"  Parse errors      : {stats.total_errors}")
     log.info(f"  Elapsed           : {elapsed:.1f} s")
-    log.info(f"  Output database   : {ctx.db_path.resolve()}")
+    log.info(f"  Output database   : {ctx.final_db_path.resolve()}")
     log.info(f"  Logarchive SHA-256: {ctx.prepared.content_sha256}")
     log.info("  Log file SHA-256  : (computed after log is closed)")
     log.info("═" * 72)
 
     return ExtractResult(
-        db_path=ctx.db_path,
+        # The FINAL name: this is only reached on success, and run_extract
+        # promotes the .partial to it moments later.
+        db_path=ctx.final_db_path,
         metadata_id=stats.metadata_id,
         entry_count=stats.total_entries,
         parse_errors=stats.total_errors,

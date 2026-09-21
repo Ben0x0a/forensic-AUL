@@ -22,12 +22,15 @@ that triggered the filter.
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Iterator
 
 from forensic_aul.engine.utils.time import iso8601_from_unix_ns, parse_duration_seconds
+
+log = logging.getLogger(__name__)
 
 # ── Filters ───────────────────────────────────────────────────────────────────
 
@@ -280,11 +283,33 @@ def _lookup_ids(
     names: list[str],
     column: str = "name",
 ) -> list[int]:
+    """Resolve filter *names* to their ids in *table*, warning about any that miss.
+
+    WHY warn rather than raise: a name that this database never recorded is a
+    legitimate thing to ask for — an analyst applying one saved filter set across
+    several devices will routinely name a process one of them never ran. An empty
+    result is a real answer.
+
+    WHY warn rather than stay silent: an unmatched name is otherwise
+    indistinguishable from "no rows matched", so a typo (``--process syslgod``)
+    reads as *evidence of absence*. That is the dangerous failure in a forensic
+    tool, and it applies per name — dropping one of several names silently
+    narrows the filter without saying so.
+    """
     out: list[int] = []
+    missing: list[str] = []
     for n in names:
         row = conn.execute(f"SELECT id FROM {table} WHERE {column} = ?", (n,)).fetchone()
         if row is not None:
             out.append(row[0])
+        else:
+            missing.append(n)
+    if missing:
+        log.warning(
+            f"Filter on {table}.{column}: "
+            f"{', '.join(repr(m) for m in missing)} not present in this database — "
+            f"{'no rows can match' if not out else 'ignored; the remaining value(s) still apply'}"
+        )
     if not out:
         # Force a no-match. -1 is never an inserted id (PK starts at 1).
         return [-1]

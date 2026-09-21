@@ -27,8 +27,10 @@ from pathlib import Path
 from forensic_aul import __version__
 from forensic_aul.config import BATCH_SIZE
 from forensic_aul.engine.integrity import seal_log_file
+from forensic_aul.engine.utils.cancellation import NEVER_CANCELLED, CancelToken
 from forensic_aul.engine.utils.logging_setup import close_file_handler, setup_logging
 from forensic_aul.engine.utils.progress import ProgressSink
+from forensic_aul.errors import OperationCancelled
 from forensic_aul.ops.extraction.extract import run_extract
 
 log = logging.getLogger(__name__)
@@ -58,12 +60,18 @@ def run_extract_session(
     verbose: bool = False,
     progress: ProgressSink | None = None,
     source_label: str | None = None,
+    cancel: CancelToken = NEVER_CANCELLED,
 ) -> int:
     """Run one extraction session and return a process exit code (0 / 1 / 130).
 
     Sets up the forensic log file, runs :func:`run_extract`, and seals the log on
     every exit path. *source_label* is a short description of the input shown in
     the banner (e.g. ``"logarchive"``); the caller does any pre-flight validation.
+
+    *cancel* is forwarded to the pipeline. A cancellation is reported like an
+    interrupt (exit 130) and the operational log is sealed against the ``.partial``
+    the run left behind — the interrupted database is still an audit artefact, and
+    naming it here is the only way the analyst learns where it is.
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     log_path = setup_logging(
@@ -97,8 +105,19 @@ def run_extract_session(
             overwrite=overwrite,
             integrity=integrity,
             progress=progress,
+            cancel=cancel,
         )
         metadata_id = result.metadata_id
+    except OperationCancelled as exc:
+        # An expected outcome, not a failure: no traceback, and point the analyst
+        # at what the run did leave behind.
+        partial = exc.partial_db_path or db_path
+        log.warning("Extraction cancelled by the operator.")
+        log.warning(f"Partial database kept at : {partial}")
+        log.warning("It is marked incomplete (case_metadata.extract_status='cancelled') "
+                    "and every reader refuses it. Re-run the extract.")
+        _seal(log_path, partial, metadata_id)
+        return 130
     except KeyboardInterrupt:
         log.warning("Session interrupted by user (SIGINT).")
         _seal(log_path, db_path, metadata_id)
@@ -164,8 +183,18 @@ def _seal(log_path: Path, db_path: Path, metadata_id: int | None) -> None:
 
     Runs on every exit path. Closing the handler first flushes all bytes so the
     file is complete before it is hashed.
+
+    WHY the existence guard: ``seal_log_file`` opens *db_path* with
+    ``sqlite3.connect``, which CREATES the file when it is absent. On a failed or
+    cancelled run the database is still a ``.partial``, so an unguarded call
+    would conjure an empty file at the FINAL name — destroying the one property
+    the whole ``.partial`` scheme rests on, that a file at the final name means a
+    completed extract.
     """
     close_file_handler()
+    if metadata_id is not None and not db_path.exists():
+        log.warning(f"Database {db_path} is absent — log hash not stored (log still hashed below)")
+        metadata_id = None
     try:
         digest = seal_log_file(db_path, log_path, metadata_id)
     except OSError as exc:

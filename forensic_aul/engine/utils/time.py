@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import re
+from bisect import bisect_right
 from datetime import datetime, timezone
 
 from forensic_aul.engine.models import (
@@ -71,8 +72,8 @@ def resolve_mach_timestamp(
 
     Returns:
         :class:`TimestampResolution`. On failure (unknown boot, no anchor),
-        the returned object has ``unix_ns == 0``, an epoch ISO string and
-        ``anchor is None`` so callers can persist the failure visibly.
+        the returned object has ``unix_ns == 0`` and ``anchor is None`` so
+        callers can persist the failure visibly.
     """
     boot = timesync_data.get(boot_uuid)
     if boot is None:
@@ -103,14 +104,42 @@ def resolve_mach_timestamp(
     delta_ns = (delta_raw * timebase_num) // timebase_den
     unix_ns = anchor.walltime_unix_ns + delta_ns
 
-    return TimestampResolution(
-        unix_ns=unix_ns,
-        iso=_format_iso8601(unix_ns),
-        anchor=anchor,
-    )
+    return TimestampResolution(unix_ns=unix_ns, anchor=anchor)
 
 
 # ── Anchor selection ──────────────────────────────────────────────────────────
+
+def _kernel_index(boot: TimesyncBoot) -> list[int] | None:
+    """Ascending ``kernel_time`` keys for *boot*, or None if it is not sorted.
+
+    Cached on *boot* itself (see TimesyncBoot._kernel_keys for why not in a
+    module-level dict) and rebuilt whenever the record list grows, which is what
+    ``merge_timesync_dicts`` does when two .timesync files describe one boot.
+
+    WHY the sortedness check rather than trusting the parser: the linear walk
+    this replaces stops at the *first* record that overshoots, which for
+    out-of-order records is not the same answer a binary search gives. Timesync
+    records are written chronologically, so in practice the check always passes —
+    but "in practice" is not good enough to silently change which anchor a
+    forensic timestamp resolves against. When it fails the old walk still runs
+    and the timestamps stay bit-identical to what they were.
+    """
+    count = len(boot.timesync)
+    if boot._kernel_keys_count == count:
+        return boot._kernel_keys
+
+    keys = [record.kernel_time for record in boot.timesync]
+    index: list[int] | None = keys
+    if any(keys[i] > keys[i + 1] for i in range(len(keys) - 1)):
+        log.warning(
+            f"timesync records for boot {boot.boot_uuid} are not in ascending "
+            "kernel_time order; falling back to a linear anchor scan"
+        )
+        index = None
+    boot._kernel_keys = index
+    boot._kernel_keys_count = count
+    return index
+
 
 def _select_anchor(
     boot: TimesyncBoot,
@@ -157,17 +186,33 @@ def _select_anchor(
         chosen_tz = 0
         chosen_file_id = 0
 
-    for record in boot.timesync:
-        if record.kernel_time > firehose_log_delta_time:
-            # Overshoot. Fall back to this record only when nothing else has
-            # been chosen so far (no boot fallback either).
-            if chosen_kernel is None:
-                chosen_kernel = record.kernel_time
-                chosen_walltime = record.walltime
-                chosen_offset = record.file_offset
-                chosen_tz = record.timezone
-                chosen_file_id = record.timesync_file_id
-            break
+    # HOW the record is found: the walk described above keeps the LAST record
+    # with ``kernel_time <= target``, which on ascending keys is exactly
+    # ``bisect_right(keys, target) - 1`` — one O(log n) probe in C instead of
+    # O(n) Python comparisons per log entry. _kernel_index returns None when the
+    # records are not ascending, in which case the original walk still runs.
+    keys = _kernel_index(boot)
+    record = None
+    if keys is None:
+        for candidate in boot.timesync:
+            if candidate.kernel_time > firehose_log_delta_time:
+                # Overshoot. Fall back to this record only when nothing else has
+                # been chosen so far — neither an earlier record (``record``) nor
+                # the boot fallback (``chosen_kernel``).
+                if record is None and chosen_kernel is None:
+                    record = candidate
+                break
+            record = candidate
+    else:
+        position = bisect_right(keys, firehose_log_delta_time) - 1
+        if position >= 0:
+            record = boot.timesync[position]
+        elif keys and chosen_kernel is None:
+            # Every record overshoots and there is no boot fallback: surface the
+            # first so the result stays consistent with the timesync data.
+            record = boot.timesync[0]
+
+    if record is not None:
         chosen_kernel = record.kernel_time
         chosen_walltime = record.walltime
         chosen_offset = record.file_offset
@@ -216,11 +261,7 @@ def _format_iso8601(unix_ns: int) -> str:
 
 
 def _failure_resolution() -> TimestampResolution:
-    return TimestampResolution(
-        unix_ns=0,
-        iso=_DEFAULT_ISO_ON_FAILURE,
-        anchor=None,
-    )
+    return TimestampResolution(unix_ns=0, anchor=None)
 
 
 # ── Backwards-compatible thin wrappers ────────────────────────────────────────
@@ -297,6 +338,6 @@ def mach_to_iso8601(
     firehose_preamble_time: int,
 ) -> str:
     """Convenience wrapper returning only the ISO string."""
-    return resolve_mach_timestamp(
+    return _format_iso8601(resolve_mach_timestamp(
         timesync_data, boot_uuid, firehose_log_delta_time, firehose_preamble_time,
-    ).iso
+    ).unix_ns)

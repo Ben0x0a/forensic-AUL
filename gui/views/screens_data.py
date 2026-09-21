@@ -6,7 +6,8 @@ Defines : ExportScreen — export filtered rows to CSV / JSON / JSONL via
           value, keeping a session table of results.
 Used by : gui.views.shell (stacked screens).
 Uses    : PySide6, gui.views.screen_base, gui.widgets.components,
-          gui.widgets.path_picker, forensic_aul.ops.export, hashlib.
+          gui.widgets.path_picker, gui.controllers (phrase_failure),
+          forensic_aul.ops.export, hashlib.
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from PySide6.QtWidgets import (
 
 from forensic_aul.ops.acquisition.report import load_sidecar_for
 from forensic_aul.ops.export.exporter import ExportFilters, run_export
+from gui.controllers import phrase_failure
 from gui.recent_store import RecentStore
 from gui.settings_store import SettingsStore
 from gui.views.screen_base import OperationScreen, RecentList
@@ -242,8 +244,7 @@ class ExportScreen(OperationScreen):
 
     def _on_failed(self, tb: str) -> None:
         self._reset_button()
-        last = tb.strip().splitlines()[-1] if tb.strip() else "export failed"
-        self.show_result(False, last)
+        self.show_result(False, phrase_failure(tb) or "export failed")
 
     def _reset_button(self) -> None:
         self._export_btn.setEnabled(True)
@@ -343,38 +344,62 @@ class VerifyHashScreen(OperationScreen):
         if not path:
             return
         algo = self._algo.currentData()
+        # Captured now, not re-read from the widgets once the hash finishes: a
+        # large file can take a while to hash, and the analyst is free to edit
+        # File / Expected hash while it runs. Reading the widgets afterwards
+        # would label the result row with whatever is in the field *then* —
+        # silently attributing the just-computed digest to a different file.
+        name = Path(path).name
+        expected = _normalise_hash(self._expected.text())
         self._run_btn.setEnabled(False)
         self._run_btn.setText("Hashing…")
-        self.run_task(lambda: _hash_file(Path(path), algo), self._on_done, self._on_failed)
+        self.run_task(
+            lambda: _hash_file(Path(path), algo),
+            lambda computed: self._on_done(name, expected, computed),
+            lambda tb: self._on_failed(name, tb),
+        )
 
-    def _on_done(self, computed: str) -> None:
+    def _on_done(self, name: str, expected: str, computed: str) -> None:
         self._run_btn.setEnabled(True)
         self._run_btn.setText("Recompute & compare")
         self._last_computed = computed
         self._copy_btn.setEnabled(True)
-        expected = _normalise_hash(self._expected.text())
         if not expected:
             status = ("INFO", "info")
         elif expected == computed.lower():
             status = ("OK", "ok")
         else:
             status = ("MISMATCH", "err")
-        self._add_row(Path(self._file.path()).name, computed, expected, status)
+        self._add_row(name, computed, expected, status)
 
-    def _on_failed(self, tb: str) -> None:
+    def _on_failed(self, name: str, tb: str) -> None:
         self._run_btn.setEnabled(True)
         self._run_btn.setText("Recompute & compare")
-        last = tb.strip().splitlines()[-1] if tb.strip() else "hashing failed"
-        self._add_row(Path(self._file.path()).name, "—", "—", ("ERROR", "err"))
-        del last  # surfaced via the table status; full TB is in the log panel
+        # WHY a tooltip, not a discarded reason (the previous behaviour): a bare
+        # ERROR pill gives the analyst nothing to act on — permission denied,
+        # file vanished mid-run, and a read error all look identical. The full
+        # traceback is also in the log panel; this puts the short, GUI-phrased
+        # reason where the analyst is already looking.
+        reason = phrase_failure(tb) or "hashing failed"
+        self._add_row(name, "—", "—", ("ERROR", "err"), tooltip=reason)
 
-    def _add_row(self, name: str, computed: str, expected: str, status: tuple[str, str]) -> None:
+    def _add_row(
+        self,
+        name: str,
+        computed: str,
+        expected: str,
+        status: tuple[str, str],
+        *,
+        tooltip: str | None = None,
+    ) -> None:
         row = self._table.rowCount()
         self._table.insertRow(row)
         self._table.setItem(row, 0, QTableWidgetItem(name))
         self._table.setItem(row, 1, QTableWidgetItem(_short_hash(computed)))
         self._table.setItem(row, 2, QTableWidgetItem(_short_hash(expected) if expected else "—"))
         pill = Pill(status[0], status[1])
+        if tooltip:
+            pill.setToolTip(tooltip)
         cell = QWidget()
         cell_layout = QHBoxLayout(cell)
         cell_layout.setContentsMargins(8, 2, 8, 2)

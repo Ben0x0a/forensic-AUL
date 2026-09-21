@@ -8,8 +8,9 @@ Defines : AcquireController, ExtractController — the application logic behind 
           and import no core ops.
 Used by : gui.views.screens_pipeline (each pipeline view constructs its controller).
 Uses    : PySide6 (asyncio bridge only), forensic_aul.ops.acquisition / .extraction,
-          forensic_aul.engine.utils.system, gui.recent_store, and — by attribute —
-          its view (a gui.views.screens_pipeline screen).
+          forensic_aul.engine.utils.system, gui.recent_store, gui.controllers
+          (phrase_failure), and — by attribute — its view (a gui.views.screens_pipeline
+          screen).
 
 WHY controllers only for the pipeline: Acquire and Extract run real asynchronous
 core ops with validation, progress, prefill and acquisition-sidecar logic worth
@@ -29,12 +30,13 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from forensic_aul.engine.utils.cancellation import CancelToken
 from forensic_aul.engine.utils.system import resolve_auto_jobs
 from forensic_aul.ops.acquisition.acquire import acquire
 from forensic_aul.ops.acquisition.device import list_connected_devices
 from forensic_aul.ops.acquisition.report import load_sidecar_for
 from forensic_aul.ops.extraction.extract import run_extract
-from gui.controllers import last_line
+from gui.controllers import phrase_failure
 from gui.recent_store import RecentStore
 
 log = logging.getLogger(__name__)
@@ -52,6 +54,16 @@ class AcquireController:
         self._recents = recents
         # Payload handed to the Extract view by the post-run "Continue" shortcut.
         self._prefill_payload: dict[str, Any] | None = None
+        # The controller owns the cancellation token (as IdentifyController owns
+        # its abort events): a fresh one per run, so a previous run's cancelled
+        # token can never stop the next one before it starts.
+        self._cancel = CancelToken()
+        self._view.set_cancel_handler(self.cancel)
+
+    def cancel(self) -> None:
+        """Stop the running acquisition (called from the GUI thread)."""
+        self._cancel.cancel()
+        self._view.set_cancelling()
 
     # ── Device enumeration ──────────────────────────────────────────────────────
 
@@ -69,7 +81,7 @@ class AcquireController:
 
     def on_scan_failed(self, tb: str) -> None:
         self._view.set_device_scan_failed()
-        self._view.show_result(False, last_line(tb) or "scan failed")
+        self._view.show_result(False, phrase_failure(tb) or "scan failed")
 
     # ── Collection ──────────────────────────────────────────────────────────────
 
@@ -78,9 +90,23 @@ class AcquireController:
         if not case:
             self._view.show_result(False, "Case number is required.")
             return
+        if not self._view.analyst_text():
+            self._view.show_result(False, "Analyst is required.")
+            return
+        # WHY this must be a hard stop, not a convenience default: acquire()
+        # passes udid straight through to pymobiledevice3, which — when udid is
+        # None and more than one device is connected — silently picks whichever
+        # device usbmuxd enumerates first. That is an arbitrary device pick in a
+        # chain-of-custody tool, not a safe "auto-select the only device" path;
+        # the form's required marker on Device is correct and this must agree
+        # with it.
+        if not self._view.device_udid():
+            self._view.show_result(False, "Select a connected device.")
+            return
         if not self._view.output_path():
             self._view.show_result(False, "Choose an output folder.")
             return
+        self._cancel = CancelToken()   # fresh token per run
         kwargs = dict(
             case_number=case,
             output_dir=Path(self._view.output_path()),
@@ -89,10 +115,13 @@ class AcquireController:
             analyst=self._view.analyst_text() or None,
             notes=self._view.notes_text() or None,
             confirm=lambda _device: True,  # the GUI already chose to start
+            cancel=self._cancel,
         )
         self._view.set_continue_visible(False)  # hide any stale shortcut
         self._view.set_running(True)
-        self._view.run_task(lambda: acquire(**kwargs), self.on_done, self.on_failed)
+        self._view.run_task(
+            lambda: acquire(**kwargs), self.on_done, self.on_failed, self.on_cancelled,
+        )
 
     def on_done(self, result: Any) -> None:
         self._view.set_running(False)
@@ -118,7 +147,15 @@ class AcquireController:
 
     def on_failed(self, tb: str) -> None:
         self._view.set_running(False)
-        self._view.show_result(False, last_line(tb) or "acquisition failed")
+        self._view.show_result(False, phrase_failure(tb) or "acquisition failed")
+
+    def on_cancelled(self, _exc: Any) -> None:
+        # An outcome, not an error: with pack=True (the GUI's only path) the
+        # collection lives in a temp directory that is removed on the way out, so
+        # a cancelled acquisition genuinely leaves nothing behind — and saying so
+        # plainly is what stops an analyst hunting for a half-written archive.
+        self._view.set_running(False)
+        self._view.show_result(False, "Cancelled — nothing was written.")
 
     def continue_to_extract(self) -> None:
         """Open Extract pre-filled with this acquisition's path and case metadata."""
@@ -143,6 +180,19 @@ class ExtractController:
         self._recents = recents
         # De-dupes the per-keystroke textChanged storm on the source field.
         self._last_sidecar_src = ""
+        # See AcquireController: the controller owns the token, one per run.
+        self._cancel = CancelToken()
+        self._view.set_cancel_handler(self.cancel)
+
+    def cancel(self) -> None:
+        """Stop the running extraction (called from the GUI thread).
+
+        The view is told at once, because the pipeline only notices at its next
+        check point — a Cancel button that stays live while nothing visibly
+        happens reads as a button that did not work.
+        """
+        self._cancel.cancel()
+        self._view.set_cancelling()
 
     # ── Acquisition-sidecar auto-fill ─────────────────────────────────────────────
 
@@ -194,6 +244,7 @@ class ExtractController:
         # Auto (data 0) defers to the memory-aware resolver; any other entry is an
         # explicit core count chosen from the curated dropdown.
         jobs = self._view.jobs_value() or resolve_auto_jobs()
+        self._cancel = CancelToken()   # fresh token per run
         kwargs = dict(
             logarchive=Path(self._view.source_path()),
             db_path=Path(self._view.output_path()),
@@ -203,14 +254,18 @@ class ExtractController:
             analyst_name=self._view.analyst_text() or None,
             notes=self._view.notes_text() or None,
             jobs=jobs,
-            fast_fts=self._view.fast_fts(),
+            # Not offered in the GUI — see ExtractScreen's Options panel.
+            fast_fts=True,
             fast_write=self._view.fast_write(),
             overwrite=self._view.overwrite(),
             progress=lambda ev: self._view.emit_progress(ev.overall, ev.phase),
+            cancel=self._cancel,
         )
         self._view.begin_progress()
         self._view.show_running_actions()
-        self._view.run_task(lambda: run_extract(**kwargs), self.on_done, self.on_failed)
+        self._view.run_task(
+            lambda: run_extract(**kwargs), self.on_done, self.on_failed, self.on_cancelled,
+        )
 
     def on_done(self, result: Any) -> None:
         self._view.mark_progress_complete()
@@ -228,5 +283,23 @@ class ExtractController:
 
     def on_failed(self, tb: str) -> None:
         self._view.hide_progress()
-        self._view.show_result(False, last_line(tb) or "extraction failed")
+        self._view.show_result(False, phrase_failure(tb) or "extraction failed")
+        self._view.show_idle_actions()
+
+    def on_cancelled(self, exc: Any) -> None:
+        # Name the artefact. A cancelled extract DOES leave a file — the
+        # `.partial` holding every row it managed to parse — and an analyst who
+        # is not told where it is will either hunt for it or, worse, mistake it
+        # for a finished extract later.
+        self._view.hide_progress()
+        partial = getattr(exc, "partial_db_path", None)
+        where = (
+            f"<br><span style='color:#545a68'>Partial database kept at {partial}</span>"
+            if partial else ""
+        )
+        self._view.show_result(
+            False,
+            "Cancelled — the database is marked incomplete and was not renamed "
+            f"to the output path.{where}",
+        )
         self._view.show_idle_actions()

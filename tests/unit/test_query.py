@@ -392,3 +392,47 @@ class TestLogStore:
             assert store.has_kb is False
             with pytest.raises(ValueError, match="no KB annotations"):
                 store.count(LogFilters(annotated_only=True))
+
+
+# ── Unmatched filter values are reported (L11 residue) ────────────────────────
+#
+# A name this database never recorded is a legitimate ask, so it must not raise.
+# But staying silent makes a typo indistinguishable from evidence of absence,
+# which is the dangerous reading in a forensic tool.
+
+def test_unknown_filter_value_warns_and_returns_nothing(tmp_path, caplog):
+    import logging
+
+    db = tmp_path / "warn.db"
+    _make_db(db)
+    with caplog.at_level(logging.WARNING):
+        rows = list(query_logs(db, process="syslgod"))       # typo
+    assert rows == []
+    warnings = " ".join(r.message for r in caplog.records if r.levelno >= logging.WARNING)
+    assert "syslgod" in warnings
+    assert "processes" in warnings
+    assert "no rows can match" in warnings
+
+
+def test_partially_unknown_filter_warns_but_still_filters(tmp_path, caplog):
+    """One bad name among several silently narrowed the filter before this."""
+    import logging
+
+    db = tmp_path / "partial.db"
+    _make_db(db)
+    with caplog.at_level(logging.WARNING):
+        rows = list(query_logs(db, process=["syslogd", "syslgod"]))
+    assert rows, "the valid name must still match"
+    warnings = " ".join(r.message for r in caplog.records if r.levelno >= logging.WARNING)
+    assert "syslgod" in warnings and "still apply" in warnings
+
+
+def test_known_filter_value_warns_about_nothing(tmp_path, caplog):
+    import logging
+
+    db = tmp_path / "clean.db"
+    _make_db(db)
+    with caplog.at_level(logging.WARNING):
+        rows = list(query_logs(db, process="syslogd"))
+    assert rows
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]

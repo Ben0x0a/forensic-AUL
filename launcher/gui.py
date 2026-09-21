@@ -51,14 +51,29 @@ def run_gui() -> int:
     widget = build_main_widget()
     widget.show()
 
-    # Make Ctrl+C from the launching terminal quit the app. WHY this is needed:
-    # Qt's event loop runs in C++ and never returns to the interpreter, so a
-    # Python SIGINT handler would otherwise never fire. A no-op timer ticking a
-    # few times a second wakes the interpreter just long enough to run the
-    # handler, which quits cleanly. NOTE: this interrupts a *responsive* loop
-    # (e.g. during an extraction, which runs on a worker thread) — a truly wedged
-    # main thread still needs an OS kill, as nothing Python-side can run then.
-    signal.signal(signal.SIGINT, lambda *_: app.quit())
+    # Make Ctrl+C from the launching terminal ask to quit, exactly as closing the
+    # window does. WHY this is needed at all: Qt's event loop runs in C++ and
+    # never returns to the interpreter, so a Python SIGINT handler would
+    # otherwise never fire. A no-op timer ticking a few times a second wakes the
+    # interpreter just long enough to run the handler. NOTE: this interrupts a
+    # *responsive* loop (e.g. during an extraction, which runs on a worker
+    # thread) — a truly wedged main thread still needs an OS kill, as nothing
+    # Python-side can run then.
+    #
+    # WHY it prompts rather than quitting outright (D2): Ctrl+C here is not a
+    # shell command being aborted, it is a request to close a window that may be
+    # midway through writing an evidence database. It gets the same question, and
+    # the same drain, as the close button. The window is raised first because the
+    # keystroke happens in the terminal while the dialog appears in the GUI —
+    # without that the analyst sees nothing and presses Ctrl+C again.
+    def _on_sigint(*_args: object) -> None:
+        shutdown = getattr(widget, "request_shutdown", None)
+        if callable(shutdown):
+            shutdown(raise_window=True)
+        else:
+            app.quit()
+
+    signal.signal(signal.SIGINT, _on_sigint)
     sigint_timer = QTimer()
     sigint_timer.timeout.connect(lambda: None)
     sigint_timer.start(200)

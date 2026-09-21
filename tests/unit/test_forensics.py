@@ -161,3 +161,67 @@ class TestVerifySourceFiles:
             "SELECT sha256_after, integrity_ok FROM source_files WHERE file_path = 'c.dsc'"
         ).fetchone()
         assert row == (None, None)
+
+
+# ── The global hash covers paths, not just content (L11 residue) ──────────────
+#
+# Hashing digests alone meant a rename that kept its position in sorted order
+# produced an identical global hash — the archive was declared unchanged when a
+# file had been renamed. A file's name is part of the evidence.
+
+def test_rename_changes_the_global_hash(tmp_path):
+    arch = tmp_path / "a.logarchive"
+    (arch / "Persist").mkdir(parents=True)
+    (arch / "Persist" / "0.tracev3").write_bytes(b"payload")
+    before, _ = hash_logarchive(arch)
+
+    # Renamed within the same sorted slot: nothing else sorts between the two
+    # names, so the sequence of digests is byte-for-byte identical.
+    (arch / "Persist" / "0.tracev3").rename(arch / "Persist" / "0.tracev3x")
+    after, _ = hash_logarchive(arch)
+
+    assert after != before, "a rename must move the global hash"
+
+
+def test_swapped_names_change_the_global_hash(tmp_path):
+    """Two files exchanging names keeps the digest multiset — only paths differ."""
+    arch = tmp_path / "b.logarchive"
+    arch.mkdir()
+    (arch / "a").write_bytes(b"AAA")
+    (arch / "b").write_bytes(b"BBB")
+    before, _ = hash_logarchive(arch)
+
+    (arch / "a").rename(arch / "tmp")
+    (arch / "b").rename(arch / "a")
+    (arch / "tmp").rename(arch / "b")
+    after, _ = hash_logarchive(arch)
+
+    assert after != before
+
+
+def test_global_hash_is_stable_for_an_unchanged_archive(tmp_path):
+    arch = tmp_path / "c.logarchive"
+    (arch / "Persist").mkdir(parents=True)
+    (arch / "Persist" / "0.tracev3").write_bytes(b"payload")
+    assert hash_logarchive(arch)[0] == hash_logarchive(arch)[0]
+
+
+def test_content_change_still_changes_the_global_hash(tmp_path):
+    arch = tmp_path / "d.logarchive"
+    arch.mkdir()
+    (arch / "f").write_bytes(b"one")
+    before, _ = hash_logarchive(arch)
+    (arch / "f").write_bytes(b"two")
+    assert hash_logarchive(arch)[0] != before
+
+
+def test_path_digest_boundary_is_unambiguous(tmp_path):
+    """The NUL separator: no pair of path/digest boundaries may be made to collide."""
+    a = tmp_path / "a.logarchive"
+    (a / "x").mkdir(parents=True)
+    (a / "x" / "y").write_bytes(b"z")
+    b = tmp_path / "b.logarchive"
+    (b / "xy").mkdir(parents=True)          # same characters, different split
+    (b / "xy" / "").parent.mkdir(exist_ok=True)
+    (b / "xy" / "z").write_bytes(b"z")
+    assert hash_logarchive(a)[0] != hash_logarchive(b)[0]

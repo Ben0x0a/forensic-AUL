@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from forensic_aul.engine.utils.cancellation import NEVER_CANCELLED, CancelToken
 from forensic_aul.errors import SourceError
 from forensic_aul.ops.extraction.sources.base import (
     LOOSE_DIAGNOSTICS_KEY,
@@ -38,6 +39,7 @@ def prepare_loose_dirs(
     work_dir: Path | None = None,
     reset_work_dir: bool = False,
     integrity: str = "full",
+    cancel: CancelToken = NEVER_CANCELLED,
 ) -> PreparedSource:
     """Normalise two already-uncompressed folders into a logarchive layout.
 
@@ -66,8 +68,8 @@ def prepare_loose_dirs(
     # in claim_work_root is the only thing standing between two runs.
     root, tmp = make_work_root("EXTRACTION_LOOSE", work_dir, reset=reset_work_dir)
     try:
-        files_d, copied_d = mirror_tree(diagnostics, root)
-        files_u, copied_u = mirror_tree(uuidtext, root)
+        files_d, copied_d = mirror_tree(diagnostics, root, cancel=cancel)
+        files_u, copied_u = mirror_tree(uuidtext, root, cancel=cancel)
         n, copied = files_d + files_u, copied_d + copied_u
         if n == 0:
             raise SourceError(
@@ -77,7 +79,7 @@ def prepare_loose_dirs(
             log.warning(f"Loose dirs: hard links unavailable — copied {copied} of {n} file(s) into the work root instead (extra disk used; result is identical). To enable zero-copy, point --work-dir at the same filesystem as the source folders.")
         else:
             log.info(f"Loose dirs: hard-linked {n} file(s) into a logarchive root (zero-copy)")
-        content_sha256, file_hashes = hash_for_mode(root, integrity)
+        content_sha256, file_hashes = hash_for_mode(root, integrity, cancel=cancel)
     except BaseException:
         # Don't leak a temp dir if mirroring/hashing fails partway.
         if tmp is not None:

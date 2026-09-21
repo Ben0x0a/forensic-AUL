@@ -87,6 +87,19 @@ JOBS_WORKER_RSS_GIB: float = 0.30
 # protects a memory-constrained host from swapping.
 JOBS_MEMORY_RESERVE_GIB: float = 4.0
 
+# ── Output naming ─────────────────────────────────────────────────────────────
+
+# Suffix carried by an output that is still being written. Every long operation
+# that produces a file or a directory writes it under
+# ``<final name> + PARTIAL_SUFFIX`` and renames it to the final name only once it
+# has SUCCEEDED. So a path at the final name *means* a complete artefact, and a
+# ``.partial`` beside it *means* an interrupted one — with no code having had to
+# run to say so, which is what makes it hold true through a cancellation, a
+# crash, a SIGKILL and a power cut alike. The rename is atomic within a
+# filesystem. Consumed by: ops/extraction/extract.py (the analysis database) and
+# ops/acquisition/acquire.py (the ``pack=False`` logarchive directory).
+PARTIAL_SUFFIX: str = ".partial"
+
 # ── Forensic hashing ──────────────────────────────────────────────────────────
 
 # Size of the read chunks used when computing SHA-256 of individual files.

@@ -181,10 +181,66 @@ One row per extraction session.
 | `log_file_sha256` | TEXT | SHA-256 of that log file, sealed at end of run |
 | `acquisition_timestamp` | TEXT NOT NULL | ISO 8601, written at insert |
 | `tool_version` | TEXT NOT NULL | |
+| `extract_status` | TEXT | `running` \| `complete` \| `cancelled` — see below |
+| `extract_ended_at` | TEXT | ISO 8601 UTC, written with a terminal `extract_status` |
 
 `ios_model`, `ios_build_version`, `ios_version`, the two log-time bounds and the
 two `log_file_*` columns are filled in by `update_case_metadata` later in the run,
 so they are NULL on an interrupted extract.
+
+### `extract_status` — did the run finish?
+
+`extract_status` is written `running` when the row is inserted and moved to
+`complete` (as the very last write of a successful run) or `cancelled` (by the
+pipeline's cancel handler). Nothing else ever writes it.
+
+The order matters: because `running` is written *first*, a run that was killed,
+crashed or lost power leaves `running` behind **without any code having had to
+execute**. So the flag catches every way a run can fail to finish, not just an
+orderly cancellation.
+
+`open_analysis_database` refuses to open a database whose status is anything
+other than `complete` — such a store is real evidence as far as it goes, but its
+ordering, indexes and full-text index may be partial, so a reader treating it as
+finished would silently under-report. No CLI or GUI path opens one; the
+`allow_incomplete=True` kwarg exists so the guard stays testable.
+
+A `NULL` status is **not** treated as incomplete. It means no claim was made —
+a database written before this column existed, or a fixture assembled by hand.
+Silence is not a claim, and refusing those would have made the flag a breaking
+change rather than an added guarantee.
+
+The out-of-band counterpart is the file name: `extract` writes to
+`<name>.sqlite.partial` and renames on success, so a file at the final name
+*means* a finished extract. See [extract](../cli/extract.md).
+
+## `extract_phases`
+
+One row per pipeline phase of one run, in the order the phases ran — the run's
+ledger.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `id` | INTEGER PK | |
+| `phase` | TEXT NOT NULL | `prepare` \| `parse` \| `ordering` \| `index` \| `fts` \| `stats` |
+| `started_at` | TEXT NOT NULL | ISO 8601 UTC |
+| `completed_at` | TEXT | ISO 8601 UTC; **NULL means the phase never finished** |
+
+It serves three purposes:
+
+- an **audit trail** of how long each stage of the extraction took;
+- the answer to *"which phase did this interrupted run die in?"* — exactly the
+  row whose `completed_at` is NULL;
+- the substrate a future **resume** will read to decide where to restart.
+
+The table is deliberately not keyed by phase name: a re-run appends a new row
+rather than overwriting the history. `prepare` runs before the database exists,
+so it is the one phase entered retrospectively — with the time it really started.
+
+```sql
+-- Where did an interrupted run stop, and how long had it been there?
+SELECT phase, started_at FROM extract_phases WHERE completed_at IS NULL;
+```
 
 ## `source_files`
 

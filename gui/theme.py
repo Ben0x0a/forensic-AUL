@@ -525,7 +525,17 @@ QPushButton[iconbtn="true"] {{
     min-width: 22px; max-width: 26px; padding: 0;
 }}
 QPushButton[iconbtn="true"]:hover {{ color: {t['text_hi']}; background: {t['bg_row_hover']}; }}
-QPushButton[iconbtn="true"][on="true"] {{ color: {t['accent_hi']}; }}
+/* A latched icon button (auto-scroll, pause) must LOOK latched: a colour
+   change alone is easy to miss on a 22px glyph, so the on-state also fills and
+   outlines, matching how the level toggles above show the same idea. */
+QPushButton[iconbtn="true"][on="true"] {{
+    color: {t['accent_hi']};
+    background: rgba(139, 92, 246, 0.18);
+    border: 1px solid rgba(139, 92, 246, 0.45);
+}}
+QPushButton[iconbtn="true"][on="true"]:hover {{
+    background: rgba(139, 92, 246, 0.28);
+}}
 
 /* ── Dropzone ─────────────────────────────────────────────────────────── */
 QFrame[drop="true"] {{

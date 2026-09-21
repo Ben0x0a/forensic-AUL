@@ -138,9 +138,13 @@ class ScrollScreen(QWidget):
 class OperationScreen(ScrollScreen):
     """A :class:`ScrollScreen` that can run one core operation off-thread.
 
-    Call :meth:`run_task` with a zero-arg callable; results/errors are delivered
-    to the supplied callbacks on the GUI thread. The screen owns the thread/worker
-    references so neither is garbage-collected mid-run.
+    Call :meth:`run_task` with a zero-arg callable; results/errors/cancellations
+    are delivered to the supplied callbacks on the GUI thread. The screen owns
+    the thread/worker references so neither is garbage-collected mid-run.
+
+    Two public questions any host may ask of a screen — :meth:`is_busy` and
+    :meth:`request_cancel` — make the shutdown path possible without the shell
+    knowing anything about a particular screen's internals (see gui/shutdown.py).
     """
 
     # Relayed to the shell so the title-bar / status can reflect a running op.
@@ -155,12 +159,59 @@ class OperationScreen(ScrollScreen):
         self._worker = None
         self._on_finished_cb: Callable[[Any], None] | None = None
         self._on_failed_cb: Callable[[str], None] | None = None
+        self._on_cancelled_cb: Callable[[Any], None] | None = None
+        self._cancel_handler: Callable[[], None] | None = None
+
+    # ── Cancellation contract ─────────────────────────────────────────────────
+
+    def set_cancel_handler(self, handler: Callable[[], None] | None) -> None:
+        """Register what :meth:`request_cancel` should do (the controller's stop).
+
+        WHY the view holds a callback rather than the token itself: the token —
+        or, for the Identify wizard, a pair of ``threading.Event`` objects — is
+        the controller's business, and the shapes differ per operation. The view
+        only needs to know that *something* can stop the run, which keeps it free
+        of any core import (see this module's header).
+        """
+        self._cancel_handler = handler
+
+    def is_busy(self) -> bool:
+        """True while an operation is running on this screen's worker thread.
+
+        Public because it is the question the shutdown path asks of every screen.
+        The previous implementation reached in for a ``_thread`` attribute, which
+        silently answered "not busy" for any screen that did not happen to have
+        one — see gui/shutdown.py.
+        """
+        thread = self._thread
+        if thread is None:
+            return False
+        try:
+            return bool(thread.isRunning())
+        except RuntimeError:
+            # The C++ QThread was already finalised — nothing is running.
+            return False
+
+    def request_cancel(self) -> bool:
+        """Ask the running operation to stop; True if a request was actually made.
+
+        False means there was nothing to cancel, or this screen's operation has
+        no stop mechanism — the caller must not assume the screen will now become
+        idle.
+        """
+        if not self.is_busy() or self._cancel_handler is None:
+            return False
+        self._cancel_handler()
+        return True
+
+    # ── Off-thread run ────────────────────────────────────────────────────────
 
     def run_task(
         self,
         task: Callable[[], Any],
         on_finished: Callable[[Any], None],
         on_failed: Callable[[str], None] | None = None,
+        on_cancelled: Callable[[Any], None] | None = None,
     ) -> None:
         # WHY route through @Slot methods of *self* (a main-thread QObject) rather
         # than connecting the closures directly: a signal connected to a plain
@@ -171,9 +222,13 @@ class OperationScreen(ScrollScreen):
         # the GUI thread after the event loop is spinning.
         self._on_finished_cb = on_finished
         self._on_failed_cb = on_failed
+        self._on_cancelled_cb = on_cancelled
         self.busyChanged.emit(True)
         self._worker = Worker(task)
-        self._thread = start_worker(self, self._worker, self._handle_finished, self._handle_failed)
+        self._thread = start_worker(
+            self, self._worker,
+            self._handle_finished, self._handle_failed, self._handle_cancelled,
+        )
 
     @Slot(object)
     def _handle_finished(self, result: Any) -> None:
@@ -186,6 +241,17 @@ class OperationScreen(ScrollScreen):
         self.busyChanged.emit(False)
         if self._on_failed_cb is not None:
             self._on_failed_cb(tb)
+
+    @Slot(object)
+    def _handle_cancelled(self, exc: Any) -> None:
+        self.busyChanged.emit(False)
+        if self._on_cancelled_cb is not None:
+            self._on_cancelled_cb(exc)
+        elif self._on_failed_cb is not None:
+            # A screen that never asked about cancellation still has to leave its
+            # RUNNING state, so fall back to its failure path rather than freezing
+            # the form mid-run with no way back.
+            self._on_failed_cb(f"{type(exc).__name__}: {exc}")
 
     def emit_progress(self, fraction: float, label: str = "") -> None:
         """Thread-safe progress relay (Qt queues the signal to the GUI thread)."""

@@ -8,7 +8,8 @@ Defines : IdentifyController — the application logic behind the interactive
           view (gui.views.screens_identify) holds only widgets + display methods.
 Used by : gui.views.screens_identify (IdentifyScreen constructs its controller).
 Uses    : PySide6 only indirectly (through the view's run_task host),
-          forensic_aul.run_identify_workflow / load_kb / AcquisitionAborted,
+          forensic_aul.run_identify_workflow / load_kb,
+          forensic_aul.engine.utils.cancellation.CancelToken,
           forensic_aul.engine.utils.system.resolve_auto_jobs, threading,
           gui.recent_store.
 
@@ -22,8 +23,16 @@ the GUI thread.
 THREADING INVARIANT: widgets are NEVER touched from the worker thread. Worker→GUI
 progress goes through the view's queued ``emit_progress`` signal only (the
 countdown ticks ride the progress detail label — see wait_still). GUI→worker
-control uses two ``threading.Event`` objects only (Skip / Continue) plus a plain
-``_aborted`` flag; no widget is read or written off-thread.
+control uses two ``threading.Event`` objects (Skip / Continue) plus a
+:class:`CancelToken`; no widget is read or written off-thread.
+
+WHY a CancelToken rather than this controller's own abort flag (which is what it
+used to carry): stopping a running operation now has one shape across the
+application — the controller owns a token, the view exposes it through
+``set_cancel_handler``, and the worker reports the outcome on its ``cancelled``
+signal. The flag version also had to recognise its own abort by parsing the
+exception type out of a traceback STRING, because a stop and a crash both came
+back on the same failure signal. Both of those are gone.
 """
 
 from __future__ import annotations
@@ -33,10 +42,11 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from forensic_aul import AcquisitionAborted, load_kb, run_identify_workflow
+from forensic_aul import load_kb, run_identify_workflow
+from forensic_aul.engine.utils.cancellation import CancelToken
 from forensic_aul.engine.utils.system import resolve_auto_jobs
+from gui.controllers import phrase_failure
 from gui.paths import DEFAULT_KB_DIR
-from gui.controllers import last_line
 from gui.recent_store import RecentStore
 
 log = logging.getLogger(__name__)
@@ -45,18 +55,6 @@ log = logging.getLogger(__name__)
 # there rather than relative to the working directory). Annotation is enrichment
 # only, so a missing/unloadable KB never blocks the run — see start().
 _KB_DIR = DEFAULT_KB_DIR
-
-
-def _is_aborted(tb: str) -> bool:
-    """True when the traceback's FINAL exception is an AcquisitionAborted.
-
-    Parses the exception type from the traceback's last line
-    (``pkg.module.AcquisitionAborted: message``) rather than substring-matching
-    the whole text — an unrelated error whose message merely mentions the word
-    must not be misreported as an operator abort.
-    """
-    exc_type = last_line(tb).split(":", 1)[0].strip()
-    return exc_type.rsplit(".", 1)[-1] == "AcquisitionAborted"
 
 
 class IdentifyController:
@@ -73,10 +71,15 @@ class IdentifyController:
         # worker thread). Fresh objects are created per run in start().
         self._skip_event = threading.Event()
         self._continue_event = threading.Event()
-        self._aborted = False
+        self._cancel = CancelToken()
         # Set when the knowledge base failed to load for the current run, so the
         # DONE state can tell the analyst the results are unannotated.
         self._kb_warning: str | None = None
+        # Give the view a way to stop this run without knowing how it stops.
+        # WHY it matters beyond the wizard's own Abort button: it is what lets the
+        # application shutdown path drain a running identify instead of tearing
+        # its thread down mid-collection (see gui/shutdown.py).
+        self._view.set_cancel_handler(self.abort)
 
     # ── Device enumeration ──────────────────────────────────────────────────────
 
@@ -98,7 +101,7 @@ class IdentifyController:
 
     def on_scan_failed(self, tb: str) -> None:
         self._view.set_device_scan_failed()
-        self._view.show_result(False, last_line(tb) or "scan failed")
+        self._view.show_result(False, phrase_failure(tb) or "scan failed")
 
     # ── Run ─────────────────────────────────────────────────────────────────────
 
@@ -124,10 +127,11 @@ class IdentifyController:
             log.warning(f"Could not load knowledge base ({exc}); continuing without annotation.")
             kb = None
 
-        # Fresh control channels + flag per run so a prior run's state never leaks.
+        # Fresh control channels + token per run so a prior run's state never
+        # leaks — a token cancelled last time would stop this one immediately.
         self._skip_event = threading.Event()
         self._continue_event = threading.Event()
-        self._aborted = False
+        self._cancel = CancelToken()
 
         self._view.set_state(self._view.RUNNING)
         kwargs = dict(
@@ -148,7 +152,8 @@ class IdentifyController:
             wait_for_action=self.wait_for_action,
         )
         self._view.run_task(
-            lambda: run_identify_workflow(**kwargs), self.on_done, self.on_failed,
+            lambda: run_identify_workflow(**kwargs),
+            self.on_done, self.on_failed, self.on_cancelled,
         )
 
     # ── Interactive pauses (run on the WORKER thread) ────────────────────────────
@@ -166,14 +171,12 @@ class IdentifyController:
             # Skip wakes early (analyst chose not to wait the full duration).
             if self._skip_event.wait(1.0):
                 break
-        if self._aborted:
-            raise AcquisitionAborted("aborted during still phase")
+        self._cancel.check()
 
     def wait_for_action(self) -> None:
         """Block until the operator signals the action is done (worker thread)."""
         self._continue_event.wait()
-        if self._aborted:
-            raise AcquisitionAborted("aborted during action wait")
+        self._cancel.check()
 
     # ── GUI-thread control buttons ───────────────────────────────────────────────
 
@@ -184,9 +187,11 @@ class IdentifyController:
         self._continue_event.set()
 
     def abort(self) -> None:
-        # Set the flag first, then wake BOTH pauses: whichever the worker is
-        # currently blocked on unblocks, sees _aborted, and raises AcquisitionAborted.
-        self._aborted = True
+        # Cancel first, then wake BOTH pauses: whichever the worker is currently
+        # blocked on unblocks, reaches its cancel.check(), and raises
+        # OperationCancelled. Waking before cancelling would let the worker pass
+        # the check and carry on.
+        self._cancel.cancel()
         self._skip_event.set()
         self._continue_event.set()
 
@@ -203,13 +208,14 @@ class IdentifyController:
             self._view.show_result(False, self._kb_warning)
 
     def on_failed(self, tb: str) -> None:
-        # An operator abort is an expected, informational outcome — not an error:
-        # nothing is written beyond the archives already collected. Anything else
-        # is a genuine failure surfaced with its most informative traceback line.
         self._view.set_state(self._view.SETUP)
-        if _is_aborted(tb):
-            self._view.show_result(
-                False, "Aborted — nothing was written beyond the collected archives."
-            )
-        else:
-            self._view.show_result(False, last_line(tb) or "identify failed")
+        self._view.show_result(False, phrase_failure(tb) or "identify failed")
+
+    def on_cancelled(self, _exc: Any) -> None:
+        # An expected outcome, not an error, and it arrives on its own signal —
+        # so unlike the flag-and-traceback version this cannot mistake a crash
+        # for an abort, or vice versa.
+        self._view.set_state(self._view.SETUP)
+        self._view.show_result(
+            False, "Aborted — nothing was written beyond the collected archives."
+        )

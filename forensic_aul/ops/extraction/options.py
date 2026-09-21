@@ -6,6 +6,7 @@ Defines : ``ExtractOptions`` (the user-tunable knobs of ``run_extract``),
           stages instead of ~20 individual parameters).
 Used by : forensic_aul.ops.extraction.extract (run_extract and its stages).
 Uses    : forensic_aul.config (BATCH_SIZE default),
+          forensic_aul.engine.utils.cancellation (CancelToken),
           forensic_aul.ops.extraction.source (PreparedSource),
           forensic_aul.engine.database.writer / engine.utils.progress (types).
 """
@@ -18,6 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from forensic_aul.config import BATCH_SIZE
+from forensic_aul.engine.utils.cancellation import NEVER_CANCELLED, CancelToken
 
 if TYPE_CHECKING:
     # Type-only: keeps this container module import-light (no writer/progress
@@ -32,7 +34,13 @@ class ExtractOptions:
     """The tunable behaviour of one ``run_extract`` call (see its docstring)."""
 
     batch_size: int = BATCH_SIZE
-    fast_fts: bool = False      # defer the FTS rebuild to the end of the run
+    # Defer the FTS rebuild to the end of the run. ON by default: it produces
+    # the same final database with far less write amplification, and the only
+    # cost is that an interrupted run leaves full-text search empty until
+    # rebuilt. Only the CLI can turn it off (--no-fast-fts); the GUI does not
+    # offer the choice, because there is no case where an analyst benefits
+    # from the slower path but many where they would pick it by accident.
+    fast_fts: bool = True
     fast_write: bool = False    # synchronous=OFF (speed over power-loss safety)
     fts: bool = True            # build the FTS5 full-text index at all
     keep_raw: bool = False      # persist logs.raw_data JSON
@@ -63,11 +71,29 @@ class RunContext:
     """
 
     conn: sqlite3.Connection
+    # The file actually being written: ``<final_db_path>.partial``. Everything in
+    # the pipeline writes here, so an interrupted run is self-evidently partial
+    # from its NAME alone — see run_extract's docstring.
     db_path: Path
+    # Where db_path is renamed once, and only once, the run has succeeded. A file
+    # at this name therefore MEANS a completed extract.
+    final_db_path: Path
     prepared: "PreparedSource"
     case: CaseInfo
     opts: ExtractOptions
     reporter: "ProgressReporter"
     t0: float                            # monotonic start of the run
+    cancel: CancelToken = NEVER_CANCELLED
     writer: "BatchWriter | None" = None  # set after the schema is initialised
     fts5_ok: bool = False                # set after init_schema probes FTS5
+    # case_metadata rowid, known once step 3 has run. Held here so the cancel
+    # path can mark the run cancelled without threading the id back out of the
+    # stage that created it.
+    metadata_id: int | None = None
+    # ISO 8601 UTC time source preparation began — the one phase that runs before
+    # the database exists, so it can only be entered in ``extract_phases``
+    # retrospectively (see extract._record_prepare_phase).
+    prepare_started_at: str = ""
+    # extract_phases rowid of the phase currently in progress; None between
+    # phases. A row left open is the record of where an interrupted run stopped.
+    phase_id: int | None = None

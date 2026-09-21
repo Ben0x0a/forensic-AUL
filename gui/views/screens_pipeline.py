@@ -136,6 +136,12 @@ class AcquireScreen(OperationScreen):
         actions.addStretch(1)
         self._reset_btn = ghost_button("Clear")
         self._reset_btn.clicked.connect(self._ctrl.reset)
+        # Shown only while collecting. Ghost, not primary: stopping is never the
+        # forward action, and the row already has one.
+        self._cancel_btn = ghost_button("Cancel")
+        self._cancel_btn.setVisible(False)
+        self._cancel_btn.clicked.connect(self._ctrl.cancel)
+        actions.addWidget(self._cancel_btn)
         self._start_btn = primary_button("Start acquisition")
         self._start_btn.clicked.connect(self._ctrl.start)
         # Accent shortcut shown only after a successful run: jumps to Extract with
@@ -186,6 +192,20 @@ class AcquireScreen(OperationScreen):
     def set_running(self, running: bool) -> None:
         self._start_btn.setEnabled(not running)
         self._start_btn.setText("Acquiring…" if running else "Start acquisition")
+        self._cancel_btn.setVisible(running)
+        self._cancel_btn.setEnabled(running)
+        self._cancel_btn.setText("Cancel")
+
+    def set_cancelling(self) -> None:
+        """Acknowledge a Cancel press while the operation winds down.
+
+        The device service decides when it actually stops, so the button reports
+        the request rather than pretending the run is already over — and it is
+        disabled, because pressing it again would do nothing.
+        """
+        self._cancel_btn.setEnabled(False)
+        self._cancel_btn.setText("Cancelling…")
+        self._start_btn.setText("Stopping…")
 
     def set_continue_visible(self, visible: bool) -> None:
         self._continue_btn.setVisible(visible)
@@ -217,6 +237,11 @@ class ExtractScreen(OperationScreen):
         # count only.
         self._settings = settings
         self.navigate = None
+        # Live only while the RUNNING action row exists (see show_running_actions);
+        # cleared by the idle/done rows so set_cancelling can never touch a button
+        # Qt has already deleted.
+        self._cancel_btn: Any = None
+        self._running_btn: Any = None
         self._ctrl = ExtractController(self, recents)
         self.progressChanged.connect(self._on_progress)
 
@@ -230,10 +255,11 @@ class ExtractScreen(OperationScreen):
 
         form = Panel()
         form.add(h2("Archive to extract"))
-        self._src = PathPicker("file", placeholder="logarchive folder / .tar.gz / .faul / .zip")
+        self._src = PathPicker("any", placeholder="logarchive folder / .tar.gz / .faul / .zip")
         form.add(field_row("Source", self._src, required=True))
         form.add(_indented_help(
-            "Drag a .logarchive folder onto the field, or Browse for a .tar.gz / .faul / .zip."))
+            "Drag any source onto the field, or browse: Folder… for a .logarchive "
+            "directory, File… for a .tar.gz / .faul / .zip."))
         # Note shown when a matching acquisition sidecar is found and case fields
         # are auto-filled; hidden otherwise. Driven by the controller via set_sidecar_note.
         self._sidecar_note = help_label("")
@@ -287,12 +313,15 @@ class ExtractScreen(OperationScreen):
                 self._jobs.setCurrentIndex(index)
         style_combo(self._jobs)
         form.add(field_row("Parser jobs", self._jobs))
-        self._fast_fts = QCheckBox("Defer full-text index (faster, builds on first search)")
-        # On by default: same final database, far less write amplification on big archives.
-        self._fast_fts.setChecked(True)
+        # WHY no "defer full-text index" checkbox: it is always on here. The
+        # deferred build produces the same final database with far less write
+        # amplification, so there is no case where an analyst benefits from the
+        # slower path — only cases where they would tick the wrong box and pay
+        # for it on a multi-gigabyte archive. The CLI keeps --no-fast-fts for
+        # the one real use (a partial run that must stay searchable).
         self._fast_write = QCheckBox("Relax durability for speed (--fast-write)")
         self._overwrite = QCheckBox("Overwrite the output database if it exists")
-        for box in (self._fast_fts, self._fast_write, self._overwrite):
+        for box in (self._fast_write, self._overwrite):
             form.add(box)
 
         # KB annotation — present but disabled (ROADMAP: lands in v3).
@@ -327,6 +356,7 @@ class ExtractScreen(OperationScreen):
         self.content.addLayout(self.make_result_host())
 
         self._actions = QHBoxLayout()
+        self._actions.setSpacing(8)
         self._actions.addStretch(1)
         self.content.addLayout(self._actions)
         self.content.addStretch(1)
@@ -358,9 +388,6 @@ class ExtractScreen(OperationScreen):
     def jobs_value(self) -> int:
         return self._jobs.currentData()
 
-    def fast_fts(self) -> bool:
-        return self._fast_fts.isChecked()
-
     def fast_write(self) -> bool:
         return self._fast_write.isChecked()
 
@@ -371,6 +398,7 @@ class ExtractScreen(OperationScreen):
 
     def show_idle_actions(self) -> None:
         clear_layout(self._actions)
+        self._cancel_btn = self._running_btn = None   # the RUNNING row is gone
         self._actions.addStretch(1)
         start = primary_button("Start extraction")
         start.clicked.connect(self._ctrl.start)
@@ -379,16 +407,37 @@ class ExtractScreen(OperationScreen):
     def show_running_actions(self) -> None:
         clear_layout(self._actions)
         self._actions.addStretch(1)
+        # Ghost Cancel beside the disabled primary: stopping is not the forward
+        # action, so it must not compete with it for the violet.
+        self._cancel_btn = ghost_button("Cancel")
+        self._cancel_btn.clicked.connect(self._ctrl.cancel)
+        self._actions.addWidget(self._cancel_btn)
         # One button language: keep the row's forward action primary (violet)
         # and just relabel + disable it while running, mirroring how
         # AcquireScreen.set_running treats its own primary button — not a swap
         # to a disabled ghost, which reads as unstyled.
-        running = primary_button("Extracting…")
-        running.setEnabled(False)
-        self._actions.addWidget(running)
+        self._running_btn = primary_button("Extracting…")
+        self._running_btn.setEnabled(False)
+        self._actions.addWidget(self._running_btn)
+
+    def set_cancelling(self) -> None:
+        """Acknowledge a Cancel press while the extraction winds down.
+
+        The pipeline stops at its next check point — up to one chunkset during
+        the parse — so the button reports that the request landed instead of
+        implying the run has already stopped. It is disabled because a second
+        press has nothing left to do.
+        """
+        if self._cancel_btn is not None:
+            self._cancel_btn.setEnabled(False)
+            self._cancel_btn.setText("Cancelling…")
+        if self._running_btn is not None:
+            self._running_btn.setText("Stopping…")
+        self._progress_title.setText("Cancelling…")
 
     def show_done_actions(self) -> None:
         clear_layout(self._actions)
+        self._cancel_btn = self._running_btn = None   # the RUNNING row is gone
         self._actions.addStretch(1)
         new = ghost_button("Extract new", "plus")
         new.clicked.connect(self._reset)

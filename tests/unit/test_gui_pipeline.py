@@ -58,8 +58,8 @@ def _stub_run_task(screen):
     """
     calls: list[tuple] = []
 
-    def record(task, on_finished, on_failed=None):
-        calls.append((task, on_finished, on_failed))
+    def record(task, on_finished, on_failed=None, on_cancelled=None):
+        calls.append((task, on_finished, on_failed, on_cancelled))
 
     screen.run_task = record  # type: ignore[method-assign]
     return calls
@@ -129,6 +129,17 @@ def test_extract_prefill_populates_fields(qapp):
         "C-9", "42", "E", "Bob", "/tmp/x.logarchive")
 
 
+# ── Extract: G6 — source picker must be able to browse to a .logarchive dir ──────
+
+def test_extract_source_picker_can_browse_to_a_directory(qapp):
+    """A file-open dialog cannot return a directory pick, so the source field —
+    which accepts a .logarchive *folder* as well as a .tar.gz/.faul/.zip *file*
+    — must use PathPicker's "any" mode (two explicit Browse affordances), not
+    the plain "file" mode that only opens a file dialog."""
+    ext = _make_extract()
+    assert ext._src._mode == "any"
+
+
 # ── Extract: acquisition-sidecar auto-fill ────────────────────────────────────────
 
 def _write_sidecar(arc: Path, *, case: str, imei: str, exhibit: str = "", analyst: str = ""):
@@ -191,6 +202,60 @@ def test_acquire_validation_blocks_without_case(qapp, tmp_path):
     acq._ctrl.start()
     assert not calls, "acquire dispatched without a case number"
     assert acq._result_host.count() == 1
+
+
+# ── Acquire: G5 — validation must agree with the form's required=True markers ────
+# Case, Analyst, Device and Output are all marked required in the view; the
+# controller previously validated only Case and Output, so a run with no device
+# selected passed udid=None into acquire() silently. Research into acquire()
+# confirmed udid=None is *not* a safe "auto-select the only device" path: with
+# more than one device connected it silently hands the pick to pymobiledevice3's
+# usbmux enumeration order — an arbitrary device pick in a chain-of-custody tool.
+# So validation now matches the marker on all four fields rather than dropping it.
+
+class _FakeDevice:
+    """A minimal stand-in for DeviceInfo — just what DevicePicker.set_devices reads."""
+
+    device_name = "Test iPhone"
+    product_type = "iPhone14,2"
+    product_version = "17.0"
+    imei = "356000000000001"
+    udid = "00008030-ABCDEF012345"
+
+
+def test_acquire_validation_blocks_without_analyst(qapp, tmp_path):
+    acq = _make_acquire()
+    calls = _stub_run_task(acq)
+    acq._case.setText("CASE-1")
+    acq._device.set_devices([_FakeDevice()])
+    acq._out.set_path(str(tmp_path))
+    acq._ctrl.start()
+    assert not calls, "acquire dispatched without an analyst"
+    assert acq._result_host.count() == 1
+
+
+def test_acquire_validation_blocks_without_device(qapp, tmp_path):
+    acq = _make_acquire()
+    calls = _stub_run_task(acq)
+    acq._case.setText("CASE-1")
+    acq._analyst.setText("Ana")
+    acq._out.set_path(str(tmp_path))
+    # No rescan ever ran — the combo still shows its "No device scanned…"
+    # placeholder, whose data is None.
+    acq._ctrl.start()
+    assert not calls, "acquire dispatched with udid=None — an arbitrary device pick"
+    assert acq._result_host.count() == 1
+
+
+def test_acquire_dispatches_when_all_required_fields_are_set(qapp, tmp_path):
+    acq = _make_acquire()
+    calls = _stub_run_task(acq)
+    acq._case.setText("CASE-1")
+    acq._analyst.setText("Ana")
+    acq._device.set_devices([_FakeDevice()])  # combo auto-selects the one device
+    acq._out.set_path(str(tmp_path))
+    acq._ctrl.start()
+    assert len(calls) == 1, "a complete form (all four required fields) should dispatch"
 
 
 class _FakeAcquireResult:
@@ -270,16 +335,25 @@ def test_extract_idle_state_has_one_primary_button(qapp):
 
 
 def test_extract_running_state_keeps_primary_relabelled(qapp):
+    """The RUNNING row is a ghost Cancel plus the relabelled primary.
+
+    (Cancel was added by the cancellation work; the original assertion of a
+    single button became an assertion that exactly ONE of them is primary — the
+    property it was really guarding is that the running state relabels the
+    primary rather than swapping in a ghost.)
+    """
     ext = _make_extract()
     ext.show_running_actions()
     buttons = _buttons_in(ext._actions)
-    assert len(buttons) == 1
-    running = buttons[0]
-    assert running.property("variant") == "primary", (
+    primaries = [b for b in buttons if b.property("variant") == "primary"]
+    assert len(primaries) == 1, (
         "the running state must relabel the primary button, not swap in a ghost"
     )
+    running = primaries[0]
     assert running.text() == "Extracting…"
     assert not running.isEnabled()
+    ghosts = [b for b in buttons if b.property("variant") == "ghost"]
+    assert [b.text() for b in ghosts] == ["Cancel"]
 
 
 def test_extract_done_state_has_one_primary_button(qapp):

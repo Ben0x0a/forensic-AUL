@@ -288,3 +288,123 @@ def test_report_states_the_unresolved_count(tmp_path):
     clean = tmp_path / "clean.db"
     _extract_db(clean)
     assert "Unresolved" not in format_summary(summarise(clean))
+
+
+# ── A global-hash mismatch says WHICH kind of change it is ────────────────────
+#
+# The global hash covers each file's relative path AND its content digest, so a
+# mismatch means one of the two moved. On the check most likely to be read as
+# tampering, "mismatch" alone leaves that distinction to the reader.
+
+def _archive_and_db(tmp_path, *, stored_sha, name="x"):
+    """A real logarchive plus a database whose source_files hashes match it."""
+    from forensic_aul.engine.integrity import compute_sha256
+
+    arch = tmp_path / f"{name}.logarchive"
+    (arch / "Persist").mkdir(parents=True, exist_ok=True)
+    payload = arch / "Persist" / "0.tracev3"
+    payload.write_bytes(b"payload")
+
+    db = tmp_path / f"{name}.db"
+    _extract_db(db, logarchive_sha=stored_sha, logarchive_path=str(arch))
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "INSERT INTO source_files(file_path, file_type, sha256, parsed_at) "
+        "VALUES (?,?,?,?)",
+        ("Persist/0.tracev3", "tracev3", compute_sha256(payload),
+         "2024-01-15T00:00:00Z"),
+    )
+    conn.commit()
+    conn.close()
+    return db, arch
+
+
+def _global_check(result):
+    return next(c for c in result.checks if c.label == "logarchive global SHA-256")
+
+
+def test_content_change_is_named_as_a_content_change(tmp_path):
+    db, arch = _archive_and_db(tmp_path, stored_sha="deadbeef" * 8, name="t")
+    (arch / "Persist" / "0.tracev3").write_bytes(b"tampered")
+    detail = _global_check(verify_database(db)).detail
+    assert "changed content" in detail
+
+
+def test_rename_is_named_as_a_path_change_not_a_content_change(tmp_path):
+    """A renamed file: content intact, no longer where the database says."""
+    db, arch = _archive_and_db(tmp_path, stored_sha="deadbeef" * 8, name="r")
+    (arch / "Persist" / "0.tracev3").rename(arch / "Persist" / "renamed.tracev3")
+    detail = _global_check(verify_database(db)).detail
+    assert "content is intact" in detail
+    assert "no longer at their recorded path" in detail
+    assert "changed content" not in detail
+
+
+def test_unrecorded_file_change_says_the_shape_differs(tmp_path):
+    """Every recorded digest matches, so the difference is a path or an extra file.
+
+    hash_logarchive covers every file in the tree; source_files records only the
+    ones that were parsed, so an unparsed file can move the global hash while
+    every per-file check still passes.
+    """
+    db, arch = _archive_and_db(tmp_path, stored_sha="deadbeef" * 8, name="u")
+    (arch / "Info.plist").write_bytes(b"not parsed, but hashed")
+    detail = _global_check(verify_database(db)).detail
+    assert "every recorded file's content matches" in detail
+    assert "did not record" in detail
+
+
+def test_skip_files_says_it_cannot_tell(tmp_path):
+    """Without the per-file evidence, verify must not guess either way."""
+    db, _ = _archive_and_db(tmp_path, stored_sha="deadbeef" * 8, name="s")
+    detail = _global_check(verify_database(db, skip_files=True)).detail
+    assert "--skip-files" in detail
+    assert "renamed or moved" in detail
+
+
+def test_matching_global_hash_still_passes(tmp_path):
+    from forensic_aul.engine.integrity import hash_logarchive
+
+    db, arch = _archive_and_db(tmp_path, stored_sha="placeholder", name="m")
+    real_sha, _ = hash_logarchive(arch)
+    db, _ = _archive_and_db(tmp_path, stored_sha=real_sha, name="m2")
+    assert _global_check(verify_database(db)).status == "ok"
+
+
+def test_moving_the_archive_does_not_change_its_hash(tmp_path):
+    """Paths are relative to the root, so relocating a whole case is safe."""
+    import shutil
+
+    from forensic_aul.engine.integrity import hash_logarchive
+
+    _, arch = _archive_and_db(tmp_path, stored_sha="placeholder", name="mv")
+    before, _ = hash_logarchive(arch)
+    moved = tmp_path / "elsewhere" / "deep" / "mv.logarchive"
+    moved.parent.mkdir(parents=True)
+    shutil.move(str(arch), str(moved))
+    assert hash_logarchive(moved)[0] == before
+
+
+def test_a_moved_archive_verifies_via_the_override(tmp_path):
+    """After a move the stored absolute path is stale; --logarchive still works."""
+    import shutil
+
+    from forensic_aul.engine.integrity import hash_logarchive
+
+    _, probe = _archive_and_db(tmp_path, stored_sha="placeholder", name="p")
+    real_sha, _ = hash_logarchive(probe)
+    db, arch = _archive_and_db(tmp_path, stored_sha=real_sha, name="q")
+    moved = tmp_path / "moved" / "q.logarchive"
+    moved.parent.mkdir()
+    shutil.move(str(arch), str(moved))
+
+    # Without the override the archive cannot be located at all — a distinct
+    # check from a hash mismatch, and it must not be reported as one.
+    stale = verify_database(db)
+    missing = next(c for c in stale.checks if c.label == "logarchive hash")
+    assert missing.status == "fail" and "directory missing" in missing.detail
+    assert not any(c.label == "logarchive global SHA-256" for c in stale.checks)
+
+    # Pointed at the new location, the hash still matches: the move changed
+    # nothing inside the archive.
+    assert _global_check(verify_database(db, logarchive=moved)).status == "ok"

@@ -122,7 +122,6 @@ def sample_log_entry() -> LogEntry:
         tracev3_firehose_inner_offset=None,
         tracev3_entry_inner_offset=None,
         format_string_file_offset=None,
-        timestamp_iso="2024-01-15T12:00:01.000000000Z",
         timestamp_unix_ns=1_705_315_201_000_000_000,
         timestamp_mach=1_001_000_000,
         timesync_anchor_id=None,

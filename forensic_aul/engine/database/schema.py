@@ -2,7 +2,8 @@
 
 Tables
 ------
-case_metadata     — one row per extraction session
+case_metadata     — one row per extraction session (incl. ``extract_status``)
+extract_phases    — one row per pipeline phase (started/completed): the run ledger
 source_files      — one row per parsed file (sha256, path, type)
 processes         — lookup: process name
 libraries         — lookup: (name, uuid)
@@ -51,6 +52,19 @@ EVENT_TYPE_NAMES: tuple[str, ...] = (
     "Log", "Activity", "Trace", "Signpost", "Loss", "Statedump", "Simpledump",
 )
 
+# The three values ``case_metadata.extract_status`` may hold. RUNNING is written
+# when the metadata row is inserted, so it is what an interrupted run leaves
+# behind with no code having to execute; COMPLETE is written atomically with the
+# finalised metadata; CANCELLED is written by the extract pipeline's cancel
+# handler. Consumed by: database/writer.py (writes), database/access.py (the
+# open gate), ops/extraction/extract.py (the transitions).
+EXTRACT_STATUS_RUNNING = "running"
+EXTRACT_STATUS_COMPLETE = "complete"
+EXTRACT_STATUS_CANCELLED = "cancelled"
+EXTRACT_STATUSES: tuple[str, ...] = (
+    EXTRACT_STATUS_RUNNING, EXTRACT_STATUS_COMPLETE, EXTRACT_STATUS_CANCELLED,
+)
+
 # Rank given to a boot seen in the logs but absent from the timesync layout (so it
 # has no physical first-appearance position). It is larger than any real rank, so
 # such boots sort *after* every known boot in event_order. Consumed by:
@@ -84,7 +98,29 @@ CREATE TABLE IF NOT EXISTS case_metadata (
     log_file_path         TEXT,        -- path to the operational log file
     log_file_sha256       TEXT,        -- SHA-256 of the log file (sealed at end of run)
     acquisition_timestamp TEXT NOT NULL,
-    tool_version          TEXT NOT NULL
+    tool_version          TEXT NOT NULL,
+    -- Run completion. Written 'running' when the row is inserted and updated to
+    -- one of EXTRACT_STATUSES at the end. WHY it is stored rather than inferred:
+    -- it is the only in-band evidence that a database is the COMPLETE parse of
+    -- its source. A run that was cancelled, crashed or lost power leaves
+    -- 'running'/'cancelled' here with no code having to run, and the readers
+    -- refuse it (see database/access.open_analysis_database).
+    extract_status        TEXT,
+    extract_ended_at      TEXT         -- ISO 8601 UTC, set with extract_status
+);
+"""
+
+# One row per pipeline phase of one extract run, in the order the phases ran.
+# Serves three purposes: an audit trail of how long each stage took, the "which
+# phase did an interrupted run die in" answer, and the ledger a future resume
+# reads to decide where to restart. Deliberately NOT keyed by phase name — a
+# resumed or re-run phase appends a new row rather than overwriting the history.
+_DDL_EXTRACT_PHASES = """
+CREATE TABLE IF NOT EXISTS extract_phases (
+    id           INTEGER PRIMARY KEY,
+    phase        TEXT NOT NULL,   -- one of extract._EXTRACT_PHASES' names
+    started_at   TEXT NOT NULL,   -- ISO 8601 UTC
+    completed_at TEXT             -- ISO 8601 UTC; NULL = the phase never finished
 );
 """
 
@@ -100,7 +136,13 @@ CREATE TABLE IF NOT EXISTS source_files (
     -- invalidate the others — their rows stay independently usable.
     integrity_ok INTEGER,
     file_size    INTEGER,
-    parsed_at    TEXT NOT NULL
+    parsed_at    TEXT NOT NULL,         -- registration time (before parsing)
+    -- Set only once every log row of this file has been flushed to the database.
+    -- NULL therefore means "registered but not fully parsed" — which is exactly
+    -- the set of files a future resume must delete and re-parse. Only tracev3
+    -- files are ever marked; the other file types are consumed wholesale during
+    -- setup and have no partial state.
+    parse_completed_at TEXT
 );
 """
 
@@ -429,6 +471,7 @@ def init_schema(
         # lookup must exist before _DDL_LOGS.
         for ddl in (
             _DDL_CASE_METADATA,
+            _DDL_EXTRACT_PHASES,
             _DDL_SOURCE_FILES,
             _DDL_PROCESSES,
             _DDL_LIBRARIES,

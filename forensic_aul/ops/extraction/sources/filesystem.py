@@ -18,6 +18,7 @@ import stat
 import zipfile
 from pathlib import Path, PurePosixPath
 
+from forensic_aul.engine.utils.cancellation import NEVER_CANCELLED, CancelToken
 from forensic_aul.errors import SourceError
 from forensic_aul.ops.extraction.sources.base import (
     ExtractOutcome,
@@ -75,12 +76,18 @@ def ffs_target_relpath(name: str) -> PurePosixPath | None:
     return matched[1] if matched else None
 
 
-def _extract(archive: Path, root: Path) -> ExtractOutcome:
-    """Extract diagnostics/ + uuidtext/ from an FFS zip into a logarchive *root*."""
+def _extract(archive: Path, root: Path, cancel: CancelToken) -> ExtractOutcome:
+    """Extract diagnostics/ + uuidtext/ from an FFS zip into a logarchive *root*.
+
+    *cancel* is checked per zip entry in both passes: an FFS zip routinely holds
+    hundreds of thousands of entries, so the selection scan alone is long enough
+    to need a check point of its own, before a single byte is copied.
+    """
     version: str | None = None
     with zipfile.ZipFile(archive) as zf:
         matched: list[tuple[zipfile.ZipInfo, str, PurePosixPath]] = []
         for info in zf.infolist():
+            cancel.check()
             if info.is_dir():
                 continue
             if version is None and info.filename.replace("\\", "/").lower().endswith(_SYSVERSION_FFS):
@@ -112,6 +119,7 @@ def _extract(archive: Path, root: Path) -> ExtractOutcome:
 
         n = 0
         for info, prefix, rel in matched:
+            cancel.check()
             if prefix != chosen:
                 continue
             dest = safe_target(root, rel)
@@ -129,10 +137,12 @@ def prepare(
     work_dir: Path | None = None,
     integrity: str = "full",
     reset_work_dir: bool = False,
+    cancel: CancelToken = NEVER_CANCELLED,
 ) -> PreparedSource:
     return prepare_archive(
         Path(path), SourceType.FILESYSTEM, _extract,
         work_dir=work_dir, integrity=integrity, reset_work_dir=reset_work_dir,
+        cancel=cancel,
     )
 
 

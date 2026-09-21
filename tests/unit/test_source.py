@@ -15,6 +15,7 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 
+from forensic_aul.engine.utils.cancellation import NEVER_CANCELLED
 from forensic_aul.ops.extraction.source import (
     SourceType,
     _ffs_target_relpath,
@@ -458,15 +459,23 @@ class TestSourceHandlerRegistry:
         def fake_matches(path):
             return path.is_file() and path.read_bytes()[:4] == b"FAKE"
 
-        def fake_extract(archive, root):
+        # The handler protocol carries a CancelToken through preparation (see
+        # sources/base.SourceHandler): `extract` takes it as a third positional
+        # argument and `prepare` accepts it as a keyword.
+        def fake_extract(archive, root, cancel):
+            cancel.check()
             (root / "Persist").mkdir(parents=True)
             (root / "Persist" / "0.tracev3").write_bytes(b"trace")
             return ExtractOutcome(product_version="18.0")
 
-        def fake_prepare(path, *, work_dir=None, integrity="full", reset_work_dir=False):
+        def fake_prepare(
+            path, *, work_dir=None, integrity="full", reset_work_dir=False,
+            cancel=NEVER_CANCELLED,
+        ):
             return prepare_archive(
                 path, SourceType.SYSDIAGNOSE, fake_extract,
                 work_dir=work_dir, integrity=integrity, reset_work_dir=reset_work_dir,
+                cancel=cancel,
             )
 
         handler = SourceHandler(

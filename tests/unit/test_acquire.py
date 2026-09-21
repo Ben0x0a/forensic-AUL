@@ -46,7 +46,8 @@ def patched(monkeypatch):
         # Materialise the (temp) logarchive so the existence check passes.
         Path(out).mkdir(parents=True, exist_ok=True)
 
-    def fake_hash(path):
+    def fake_hash(path, *, cancel=None):
+        # Mirrors hash_logarchive's cancellable signature (checked per file there).
         return "deadbeefcafe", {"Persist/0000.tracev3": "aa", "timesync/0.timesync": "bb"}
 
     captured: dict = {}
