@@ -1,10 +1,12 @@
-"""Unit tests for the crash-report engine — app/diagnostics.py + app/sanitize.py.
+"""Unit tests for the diagnostic-report engine — app/diagnostics.py + app/sanitize.py.
 
-Cover the three things that must not regress: (1) the sensitivity CLASSIFIER puts
+Cover the four things that must not regress: (1) the sensitivity CLASSIFIER puts
 PII (typed domain objects, named fields, filesystem paths) in the ``sensitive``
 bucket and tuning knobs in ``safe``; (2) the SUMMARISER caps size and never raises,
-even on a value with a hostile ``__repr__``; and (3) the SHARE path redacts every
-planted secret — no plaintext PII survives ``redact_report``.
+even on a value with a hostile ``__repr__``; (3) the SHARE path redacts every
+planted secret — no plaintext PII survives ``redact_report``; and (4) the BUG
+REPORT captures a worker thread's locals, excludes the reporter's own frames,
+shares one schema with the crash report, and is ignored by the error count.
 
 The domain types are recognised by NAME, so the tests use local stand-ins named
 like the real ones (``DeviceInfo``, ``CaseInfo``, ``Connection``) — no library
@@ -14,13 +16,23 @@ import is needed, which is exactly the property that keeps the handler robust.
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
 from app import diagnostics
-from app.diagnostics import SAFE, SENSITIVE, CrashConfig, classify
+from app.diagnostics import (
+    KIND_BUG,
+    KIND_CRASH,
+    SAFE,
+    SENSITIVE,
+    CrashConfig,
+    classify,
+    list_reports,
+    write_bug_report,
+)
 from app.sanitize import anonymise_path, redact_report, render_markdown
 
 
@@ -207,3 +219,75 @@ def test_anonymise_path_relative_to_repo_root():
 def test_anonymise_path_home_fallback():
     home_file = str(Path.home() / "secret" / "note.txt")
     assert anonymise_path(home_file) == "~/secret/note.txt"
+
+
+# ── bug report (no exception: the live-state capture) ──────────────────────────
+
+def _bug_report_from_a_worker(tmp_path: Path) -> dict:
+    """File a bug report while a worker thread is parked inside a function holding a
+    distinctive local — the shape of the real case, where the values that explain a
+    wrong answer live in a worker, not in the thread that pressed the button."""
+    parked = threading.Event()
+    release = threading.Event()
+
+    def worker():
+        worker_only_local = "value-only-in-the-worker"  # noqa: F841 - captured, not used
+        parked.set()
+        release.wait(timeout=5)
+
+    t = threading.Thread(target=worker, name="faul-worker", daemon=True)
+    t.start()
+    parked.wait(timeout=5)
+    try:
+        path = write_bug_report({"entrypoint": "test"}, cfg=CrashConfig(crash_dir=tmp_path))
+    finally:
+        release.set()
+        t.join(timeout=5)
+    assert path is not None
+    return json.loads(path.read_text(encoding="utf-8-sig"))
+
+
+def test_bug_report_captures_worker_thread_locals(tmp_path):
+    report = _bug_report_from_a_worker(tmp_path)
+    worker_frames = [f for f in report["frames"] if "faul-worker" in (f.get("thread") or "")]
+    assert worker_frames, "the worker thread contributed no frames"
+    names = {n for f in worker_frames for n in f["locals"][SAFE]}
+    assert "worker_only_local" in names
+
+
+def test_bug_report_excludes_the_reporters_own_frames(tmp_path):
+    """The trap: guarding with "skip any thread containing my frame" drops the
+    CALLING thread — the most interesting one — and still writes a valid report."""
+    report = _bug_report_from_a_worker(tmp_path)
+    assert report["frames"], "captured zero frames"
+
+    files = {f["file"] for f in report["frames"]}
+    assert diagnostics.__file__ not in files          # reporter trimmed …
+    assert any("test_diagnostics" in f for f in files)  # … but its caller kept
+
+
+def test_bug_report_shares_the_crash_schema(tmp_path):
+    bug = _bug_report_from_a_worker(tmp_path)
+    crash = json.loads(_write_sample(tmp_path).read_text(encoding="utf-8-sig"))
+
+    assert bug["schema"] == crash["schema"]
+    assert bug.keys() == crash.keys()                 # one reader serves both
+    assert (bug["kind"], crash["kind"]) == (KIND_BUG, KIND_CRASH)
+    assert bug["exception"] is None and bug["traceback"] is None
+
+    # …so the one redaction pass and the one renderer handle it unchanged.
+    md = render_markdown(redact_report(bug))
+    assert "# forensic_AUL bug report" in md
+    assert "## Steps to reproduce" in md
+    assert "## Traceback" not in md                   # nothing raised
+
+
+def test_error_count_ignores_bug_reports(tmp_path):
+    """Counting bug reports when choosing the "open error reports" caption would be
+    self-fulfilling: filing one would make the tool claim it had errored."""
+    _write_sample(tmp_path)
+    _bug_report_from_a_worker(tmp_path)
+
+    assert len(list_reports(tmp_path, kind=KIND_CRASH)) == 1
+    assert len(list_reports(tmp_path, kind=KIND_BUG)) == 1
+    assert len(list_reports(tmp_path)) == 2

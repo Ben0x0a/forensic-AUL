@@ -31,12 +31,13 @@ _LOGARCHIVE = Path(
     )
 )
 
-# Resolved view: surrogate ids → names, ordered by the deterministic event_order.
+# Resolved view: surrogate ids → names, ordered by the deterministic event_order
+# (which lives in the logs_order side table — see database/ordering.py).
 # The normalised columns (boot_uuid, log_level, event_type, process_uuid) are
 # joined back to their names so the digest is independent of run-to-run ids; the
 # ISO timestamp is no longer stored (timestamp_unix_ns fully determines it).
 _VIEW_SQL = """
-SELECT l.event_order, l.source_order, l.tracev3_file_id,
+SELECT o.event_order, o.source_order, l.tracev3_file_id,
        l.timestamp_mach, l.timestamp_unix_ns,
        b.boot_uuid, l.pid, l.tid, l.euid, ll.name, et.name,
        p.name, s.name, c.name, f.value, lib.name, lib.uuid,
@@ -44,6 +45,7 @@ SELECT l.event_order, l.source_order, l.tracev3_file_id,
        l.tracev3_chunkset_file_offset, l.tracev3_firehose_inner_offset,
        l.tracev3_entry_inner_offset
 FROM logs l
+LEFT JOIN logs_order   o   ON o.id   = l.id
 LEFT JOIN processes    p   ON p.id   = l.process_id
 LEFT JOIN subsystems   s   ON s.id   = l.subsystem_id
 LEFT JOIN categories   c   ON c.id   = l.category_id
@@ -53,7 +55,7 @@ LEFT JOIN boots        b   ON b.id   = l.boot_id
 LEFT JOIN log_levels   ll  ON ll.id  = l.log_level_id
 LEFT JOIN event_types  et  ON et.id  = l.event_type_id
 LEFT JOIN process_uuids pu ON pu.id  = l.process_uuid_id
-ORDER BY l.event_order
+ORDER BY o.event_order
 """
 
 

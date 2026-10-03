@@ -41,6 +41,8 @@ Rows are read ordered by `(timestamp_unix_ns ASC, id ASC)`.
 | `timestamp` | TEXT | ISO 8601 formatted from `timestamp_unix_ns`; empty for the `0` sentinel |
 | `timestamp_unix_ns` | INTEGER | |
 | `event_order` | INTEGER | Carried through from the action database so the tamper signal stays visible in the diff too |
+| `source_order` | INTEGER | Carried through from the action database — physical position within `source_file` (the other half of the ordering evidence alongside `event_order`) |
+| `source_file` | TEXT | The tracev3 file `source_order` ranks within (`source_files.file_path` in the action database) |
 | `process` | TEXT | |
 | `pid`, `tid` | INTEGER | |
 | `log_level` | TEXT | |
@@ -92,6 +94,11 @@ CREATE VIEW v_identified_visible AS
 - Both objects are created with `IF NOT EXISTS`, by `run_diff` and again when a
   diff database is opened by `IdentifyResults`, so a database produced before this
   feature gains them on open (best-effort: a read-only file still serves reads).
+- The same open-time upgrade covers `source_order`/`source_file`: a diff database
+  produced before L10 lacks those two columns, so `IdentifyResults` adds them via
+  `ALTER TABLE ... ADD COLUMN` (guarded by `PRAGMA table_info`, since column
+  addition has no `IF NOT EXISTS` form) — reads on an older database keep working,
+  with `NULL` in the two new columns for its existing rows.
 
 ## Reading it: `IdentifyResults`
 
@@ -137,7 +144,8 @@ Encoding is UTF-8 with BOM so Excel auto-detects it.
 Header, in order:
 
 ```
-timestamp, timestamp_unix_ns, event_order, process, pid, tid,
+timestamp, timestamp_unix_ns, event_order, source_order, source_file,
+process, pid, tid,
 log_level, event_type, subsystem, category, message,
 matched_signatures, note
 ```

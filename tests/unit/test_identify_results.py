@@ -253,7 +253,8 @@ class TestExportCsv:
         with out.open(encoding="utf-8-sig") as fp:
             rows = list(csv.DictReader(fp))
         assert rows[0].keys() == {
-            "timestamp", "timestamp_unix_ns", "event_order", "process", "pid",
+            "timestamp", "timestamp_unix_ns", "event_order", "source_order",
+            "source_file", "process", "pid",
             "tid", "log_level", "event_type", "subsystem", "category",
             "message", "matched_signatures", "note",
         }

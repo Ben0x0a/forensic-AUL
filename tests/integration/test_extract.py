@@ -18,6 +18,7 @@ import pytest
 
 from forensic_aul.engine.database.schema import EVENT_TYPE_NAMES, LOG_LEVEL_NAMES
 from forensic_aul.ops.extraction.extract import run_extract
+from forensic_aul.ops.summary.cache import load_summary
 
 # ── Test data paths ────────────────────────────────────────────────────────────
 
@@ -77,6 +78,32 @@ class TestSchema:
         for t in ("processes", "subsystems", "categories", "libraries",
                   "format_strs", "source_files", "case_metadata"):
             assert t in tables, f"Missing table: {t}"
+
+
+# ── Summary statistics cached at extract time ──────────────────────────────────
+
+class TestSummaryCache:
+    """Extract computes the summary once and stores it; readers never recompute."""
+
+    def test_summary_cache_written(self, extracted_db):
+        summary = load_summary(extracted_db)
+        assert summary is not None, "extract did not cache a summary"
+        assert summary.total_entries > 0
+
+    def test_cached_totals_match_the_database(self, db_conn, extracted_db):
+        summary = load_summary(extracted_db)
+        real = db_conn.execute("SELECT COUNT(*) FROM logs").fetchone()[0]
+        assert summary.total_entries == real
+
+    def test_facets_are_complete_not_truncated(self, extracted_db, db_conn):
+        """facets hold every distinct value, unlike the top-N display lists."""
+        summary = load_summary(extracted_db)
+        distinct_processes = db_conn.execute(
+            "SELECT COUNT(*) FROM (SELECT DISTINCT process_id FROM logs "
+            "WHERE process_id IS NOT NULL)"
+        ).fetchone()[0]
+        assert len(summary.facets["process"]) == distinct_processes
+        assert len(summary.top_processes) <= len(summary.facets["process"])
 
 
 # ── Entry counts ───────────────────────────────────────────────────────────────

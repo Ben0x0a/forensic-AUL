@@ -84,6 +84,32 @@ zero-copy, put `--work-dir` on the same volume as the sources.
 Archives and loose dirs are materialised into a **temporary directory**
 (auto-cleaned) unless `--work-dir DIR` is given.
 
+### A kept work root is never reused
+
+Everything under the work root is hashed and parsed as part of the acquisition.
+A root left behind by an earlier run would therefore contribute *its* files to
+the next case — hashed into `content_sha256`, registered in `source_files`, and
+parsed into `logs`, indistinguishable from the evidence actually under
+examination.
+
+So FAUL **refuses** to extract into a work root that already holds files:
+
+```
+Work root already exists and is not empty: /scratch/unpacked/sysdiagnose.tar.logarchive
+(1284 entries). Re-using it would hash and parse those files as part of THIS
+acquisition — evidence from a previous run would silently enter this case. Point
+--work-dir at an empty directory, or pass --reset-work-dir to delete this root first.
+```
+
+This is not a rare collision. The root is named after the source's stem, so two
+sysdiagnose archives from **different devices** that share a filename map to the
+same root — and the loose-dirs source uses a *fixed* root name, so any two
+loose-dirs runs sharing a `--work-dir` collide regardless of source.
+
+`--reset-work-dir` deletes that root first (logging a `WARNING` that its previous
+contents are not part of this acquisition). It removes only the
+`<name>.logarchive` root FAUL created, never your `--work-dir` itself.
+
 ---
 
 ## Options
@@ -119,7 +145,8 @@ exit code `1`. An explicit flag always overrides the sidecar value.
 |---|---|---|
 | `--diagnostics DIR` | `None` | Loose-dirs source: the uncompressed `private/var/db/diagnostics/` folder (Persist/Special/Signpost/timesync). Must be given together with `--uuidtext`, and instead of `INPUT`. |
 | `--uuidtext DIR` | `None` | Loose-dirs source: the uncompressed `private/var/db/uuidtext/` folder (the 2-char dirs + `dsc/`). |
-| `--work-dir DIR` | `None` (auto-cleaned temp dir) | For archive / loose-dirs sources: materialise the logarchive here and keep it. |
+| `--work-dir DIR` | `None` (auto-cleaned temp dir) | For archive / loose-dirs sources: materialise the logarchive here and keep it. A work root that already holds files is refused — see [A kept work root is never reused](#a-kept-work-root-is-never-reused). |
+| `--reset-work-dir` | off | Delete the work root inside `--work-dir` before extracting. Without it, a root left by a previous run is refused rather than reused. |
 | `--integrity {full,fingerprint,off}` | `full` | Source hashing mode. `full` = complete chain-of-custody attestation (per-file SHA-256 + end-of-run re-verification). `fingerprint` = only a cheap head+size+tail archive fingerprint. `off` = no hashing at all. **Non-`full` modes are triage-only: the database then records no evidence hashes**, and `verify-hash` has nothing to check. |
 | `--overwrite` | off | Replace `OUTPUT` if it already exists. Without it, extracting into an existing database is refused (it would merge two acquisitions). |
 
@@ -172,6 +199,31 @@ faul.py extract evidence.logarchive -o /tmp/triage.db --fast --integrity off \
 ```
 
 ---
+
+## Interrupting a run
+
+`extract` writes to `<OUTPUT>.partial` and renames it to `OUTPUT` only when the
+run completes. **A file at the output path therefore means a finished extract —
+always.** No code has to run for an interrupted one to be marked, so a cancel, a
+crash, a power loss and a `kill -9` all leave the same evidence: a `.partial`.
+
+Press **Ctrl+C** to stop a run. The first one cancels cooperatively — the current
+file finishes, the database is closed cleanly and the audit log is sealed — and
+`extract` exits **130**. A second Ctrl+C is left to Python's default handler, so
+an unresponsive run can still be interrupted the usual way.
+
+The partial database records what happened:
+
+| Where | What it says |
+|---|---|
+| the filename | `.partial` — never promoted, so it cannot be mistaken for an extract |
+| `case_metadata.extract_status` | `cancelled` (or `running` if the process died without a chance to write) |
+| `case_metadata.extract_ended_at` | when it stopped |
+| `extract_phases` | which phases completed and which one it died in |
+| `source_files.parse_completed_at` | which source files were fully parsed |
+
+Every reader refuses a partial, `verify-hash` included. There is no resume and no
+inspection flag: a cancelled run is a discarded run. Re-run the extract.
 
 ## Outputs
 

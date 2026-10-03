@@ -22,7 +22,11 @@ from pathlib import Path
 from typing import Sequence
 
 from forensic_aul.config import BATCH_SIZE as _DEFAULT_BATCH_SIZE
-from forensic_aul.engine.database.schema import UNKNOWN_BOOT_RANK
+from forensic_aul.engine.database.schema import (
+    EXTRACT_STATUS_RUNNING,
+    EXTRACT_STATUSES,
+    UNKNOWN_BOOT_RANK,
+)
 from forensic_aul.engine.models import LogEntry, TimesyncAnchor
 
 log = logging.getLogger(__name__)
@@ -318,7 +322,7 @@ class BatchWriter:
         file_size: int | None,
     ) -> int:
         """Insert a source file record and return its rowid."""
-        parsed_at = _now_iso()
+        parsed_at = now_iso()
         self._conn.execute(
             """
             INSERT OR IGNORE INTO source_files(file_path, file_type, sha256, file_size, parsed_at)
@@ -331,6 +335,80 @@ class BatchWriter:
             (file_path,),
         ).fetchone()
         return row[0]
+
+    def mark_file_parsed(self, source_file_id: int) -> None:
+        """Record that every log row of *source_file_id* is now in the database.
+
+        WHY the caller must flush first: the column's whole value is that NULL
+        means "this file's rows may be incomplete". Marking a file whose rows are
+        still sitting in the batch buffer would assert a completeness the
+        database does not have, and a future resume would skip re-parsing it.
+        """
+        self._conn.execute(
+            "UPDATE source_files SET parse_completed_at = ? WHERE id = ?",
+            (now_iso(), source_file_id),
+        )
+        self._conn.commit()
+
+    # ------------------------------------------------------------------ #
+    # Run ledger (extract_phases / case_metadata.extract_status)          #
+    # ------------------------------------------------------------------ #
+
+    def begin_phase(self, phase: str, started_at: str | None = None) -> int:
+        """Open an ``extract_phases`` row for *phase* and return its id.
+
+        Committed immediately: the ledger's job is to survive whatever ends the
+        run, so it must be on disk before the phase's work starts.
+
+        *started_at* overrides the timestamp. It exists for the one phase that
+        runs BEFORE the database does — source preparation — which can only be
+        entered into the ledger retrospectively, with the time it really began.
+        """
+        cur = self._conn.execute(
+            "INSERT INTO extract_phases(phase, started_at) VALUES (?, ?)",
+            (phase, started_at or now_iso()),
+        )
+        self._conn.commit()
+        rowid = cur.lastrowid
+        if rowid is None:
+            raise RuntimeError("begin_phase: lastrowid was None")
+        return rowid
+
+    def complete_phase(self, phase_id: int) -> None:
+        """Close the ``extract_phases`` row opened by :meth:`begin_phase`.
+
+        A row left with ``completed_at`` NULL is the record of the phase an
+        interrupted run died in — so this is only ever called on success.
+        """
+        self._conn.execute(
+            "UPDATE extract_phases SET completed_at = ? WHERE id = ?",
+            (now_iso(), phase_id),
+        )
+        self._conn.commit()
+
+    def set_extract_status(self, rowid: int, status: str) -> None:
+        """Set ``case_metadata.extract_status`` and commit; stamp the end time.
+
+        ``extract_ended_at`` is filled for the two terminal states only — a row
+        that is still ``running`` has not ended, and writing a time there would
+        make a killed run look like a finished one.
+
+        WHY the invariant guard: this flag is what every reader trusts when it
+        decides whether a database is the complete parse of its source. A typo
+        stored here would be neither ``complete`` (so the store becomes
+        unopenable) nor a recognised incomplete state (so nothing can explain
+        why) — a silent, unexplainable refusal much later.
+        """
+        if status not in EXTRACT_STATUSES:
+            raise ValueError(
+                f"invalid extract_status {status!r}; expected one of {EXTRACT_STATUSES}"
+            )
+        ended_at = None if status == EXTRACT_STATUS_RUNNING else now_iso()
+        self._conn.execute(
+            "UPDATE case_metadata SET extract_status = ?, extract_ended_at = ? WHERE id = ?",
+            (status, ended_at, rowid),
+        )
+        self._conn.commit()
 
     def insert_shutdown_event(
         self,
@@ -387,8 +465,15 @@ class BatchWriter:
         logarchive_sha256: str | None = None,
         tool_version: str = "0.1.0",
     ) -> int:
-        """Insert a case_metadata row and return its rowid."""
-        acquisition_timestamp = _now_iso()
+        """Insert a case_metadata row and return its rowid.
+
+        ``extract_status`` starts at ``running`` and is only ever moved to a
+        terminal value by :meth:`set_extract_status`. WHY stamp it here rather
+        than at the end: an interrupted run then declares itself incomplete
+        without any code having had to execute — which is the whole point, since
+        a crash, a kill or a power loss run no code at all.
+        """
+        acquisition_timestamp = now_iso()
         cur = self._conn.execute(
             """
             INSERT INTO case_metadata(
@@ -397,8 +482,8 @@ class BatchWriter:
                 log_start_time, log_end_time,
                 notes, source_path, source_type, source_fingerprint,
                 logarchive_path, logarchive_sha256,
-                acquisition_timestamp, tool_version
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                acquisition_timestamp, tool_version, extract_status
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 case_number, imei, exhibit_number, analyst_name,
@@ -406,7 +491,7 @@ class BatchWriter:
                 log_start_time, log_end_time,
                 notes, source_path, source_type, archive_fingerprint,
                 logarchive_path, logarchive_sha256,
-                acquisition_timestamp, tool_version,
+                acquisition_timestamp, tool_version, EXTRACT_STATUS_RUNNING,
             ),
         )
         rowid = cur.lastrowid
@@ -606,7 +691,7 @@ def register_source_file(
     return writer.insert_source_file(rel, file_type, sha256, file_size)
 
 
-def _now_iso() -> str:
+def now_iso() -> str:
     """Return the current UTC time as an ISO-8601 string with microsecond precision.
 
     Microseconds match the precision of the per-log entry ``timestamp`` column,

@@ -32,6 +32,7 @@ from enum import Enum
 from pathlib import Path, PurePosixPath
 
 from forensic_aul.engine.integrity import hash_logarchive
+from forensic_aul.engine.utils.cancellation import NEVER_CANCELLED, CancelToken
 from forensic_aul.errors import SourceError
 
 log = logging.getLogger(__name__)
@@ -162,7 +163,8 @@ class SourceHandler:
 
     ``matches(path)`` is the full content-first detector (a directory check, a
     magic-byte read, or a deeper content probe); ``prepare(path, work_dir=…,
-    integrity=…)`` normalises the source into a :class:`PreparedSource`.
+    integrity=…, cancel=…)`` normalises the source into a
+    :class:`PreparedSource`.
     ``priority`` orders detection — a *more specific* handler (e.g. a ``.faul``,
     which is a zip carrying a marker) must be probed **before** a broader one
     (a plain ``.zip``); lower numbers run first. ``describe`` feeds the
@@ -217,24 +219,80 @@ def safe_target(root: Path, rel: PurePosixPath) -> Path:
 
 
 def make_work_root(
-    name: str, work_dir: Path | None
+    name: str, work_dir: Path | None, *, reset: bool = False
 ) -> tuple[Path, tempfile.TemporaryDirectory | None]:
     """Return (root, tempdir-handle). With *work_dir* the root is kept; else temp.
 
     *name* is the stem of the kept ``<name>.logarchive`` directory — derived from
     the evidence so a retained --work-dir is self-describing.
+
+    A kept root that already holds files is **refused** unless *reset* is set, in
+    which case it is deleted and recreated — see :func:`claim_work_root` for why.
+    The temp path is always a fresh directory, so it is never affected.
     """
     if work_dir is not None:
         work_dir = Path(work_dir)
         work_dir.mkdir(parents=True, exist_ok=True)
         root = work_dir / f"{name}.logarchive"
-        root.mkdir(parents=True, exist_ok=True)
+        claim_work_root(root, reset=reset)
         return root, None
     tmp = tempfile.TemporaryDirectory(prefix="faul_source_")
     return Path(tmp.name), tmp
 
 
-def mirror_tree(src_dir: Path, dest_root: Path) -> tuple[int, int]:
+def claim_work_root(root: Path, *, reset: bool) -> None:
+    """Take exclusive ownership of *root*, creating it empty.
+
+    WHY this guard exists — it prevents silent evidence cross-contamination.
+    Source preparation materialises the evidence into this directory and then
+    hashes and parses **everything under it**. A root left behind by an earlier
+    run therefore contributes its files to the next acquisition: they are hashed
+    into ``content_sha256``, registered in ``source_files``, and their log entries
+    are parsed into the case. Nothing downstream can tell them apart from the
+    evidence actually being examined.
+
+    That is not a hypothetical collision. The root is named after the source's
+    stem, so two sysdiagnose archives from two different devices that happen to
+    share a filename (``sysdiagnose_2026-08-01.tar.gz`` is not a distinctive
+    name) map to the same root — and the loose-dirs handler uses a *fixed* name,
+    so every loose-dirs run sharing a work dir collides regardless of source.
+
+    So a non-empty root is refused by default. *reset* deletes it first, which is
+    the deliberate "I know, start clean" path. Note it removes only the
+    ``<name>.logarchive`` root FAUL created, never the operator's *work_dir*
+    itself — the analyst may keep other things beside it.
+
+    Raises:
+        SourceError: *root* exists with content and *reset* is false, or *root*
+            exists but is not a directory.
+    """
+    if root.exists() and not root.is_dir():
+        raise SourceError(
+            f"Work root path exists but is not a directory: {root}. "
+            "Point --work-dir somewhere else."
+        )
+    if root.is_dir() and any(root.iterdir()):
+        if not reset:
+            entries = sum(1 for _ in root.rglob("*"))
+            raise SourceError(
+                f"Work root already exists and is not empty: {root} "
+                f"({entries} entr{'y' if entries == 1 else 'ies'}). Re-using it "
+                "would hash and parse those files as part of THIS acquisition — "
+                "evidence from a previous run would silently enter this case. "
+                "Point --work-dir at an empty directory, or pass "
+                "--reset-work-dir to delete this root first."
+            )
+        log.warning(
+            f"--reset-work-dir: deleting the existing work root {root} before "
+            "extraction (its previous contents are NOT part of this acquisition)"
+        )
+        shutil.rmtree(root)
+    root.mkdir(parents=True, exist_ok=True)
+
+
+def mirror_tree(
+    src_dir: Path, dest_root: Path, *, cancel: CancelToken = NEVER_CANCELLED
+) -> tuple[int, int]:
     """Recreate *src_dir*'s tree under *dest_root*, hard-linking each regular file.
 
     Returns ``(files, copied)`` — the total files materialised and how many of them
@@ -260,6 +318,7 @@ def mirror_tree(src_dir: Path, dest_root: Path) -> tuple[int, int]:
     for dirpath, _dirnames, filenames in os.walk(src_dir):
         rel_dir = Path(dirpath).relative_to(src_dir)
         for filename in filenames:
+            cancel.check()
             src_file = Path(dirpath) / filename
             if src_file.is_symlink():
                 continue
@@ -327,14 +386,16 @@ def check_integrity_mode(integrity: str) -> None:
         )
 
 
-def hash_for_mode(root: Path, integrity: str) -> tuple[str | None, dict[str, str]]:
+def hash_for_mode(
+    root: Path, integrity: str, *, cancel: CancelToken = NEVER_CANCELLED
+) -> tuple[str | None, dict[str, str]]:
     """Content hash + per-file hashes for *root*, honouring the integrity mode.
 
     "full" runs :func:`hash_logarchive`; the other modes return ``(None, {})`` so
     every downstream consumer records NULL hashes instead of a fabricated baseline.
     """
     if integrity == "full":
-        return hash_logarchive(root)
+        return hash_logarchive(root, cancel=cancel)
     log.info(f"Integrity mode {integrity!r}: per-file hashing skipped — no chain-of-custody attestation")
     return None, {}
 
@@ -344,10 +405,12 @@ def hash_for_mode(root: Path, integrity: str) -> tuple[str | None, dict[str, str
 def prepare_archive(
     path: Path,
     source_type: SourceType,
-    extract: Callable[[Path, Path], ExtractOutcome | str | None],
+    extract: Callable[[Path, Path, CancelToken], ExtractOutcome | str | None],
     *,
     work_dir: Path | None,
     integrity: str,
+    reset_work_dir: bool = False,
+    cancel: CancelToken = NEVER_CANCELLED,
 ) -> PreparedSource:
     """The common single-file-archive path: snapshot → extract → hash → assemble.
 
@@ -357,15 +420,20 @@ def prepare_archive(
     *extract* callable materialises the logarchive files under the given root and
     returns an :class:`ExtractOutcome` (or, for convenience, a bare product-version
     string / None). Shared by the sysdiagnose, FFS and ``.faul`` handlers.
+
+    *cancel* is handed to *extract* (which checks it per archive member) and to
+    the hashing pass. A cancellation propagates as ``OperationCancelled`` after
+    the temp work root has been cleaned up, exactly as any other failure does —
+    so an aborted preparation leaves nothing behind.
     """
     check_integrity_mode(integrity)
     fingerprint = quick_fingerprint(path) if integrity != "off" else None
-    root, tmp = make_work_root(path.stem, work_dir)
+    root, tmp = make_work_root(path.stem, work_dir, reset=reset_work_dir)
     try:
-        outcome = extract(path, root)
+        outcome = extract(path, root, cancel)
         if not isinstance(outcome, ExtractOutcome):
             outcome = ExtractOutcome(product_version=outcome)
-        content_sha256, file_hashes = hash_for_mode(root, integrity)
+        content_sha256, file_hashes = hash_for_mode(root, integrity, cancel=cancel)
     except BaseException:
         # Don't leak a temp dir if extraction/hashing fails partway.
         if tmp is not None:

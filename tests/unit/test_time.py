@@ -134,3 +134,119 @@ class TestIso8601SubSecond:
     def test_second_aligned_still_all_zeros(self):
         ns = 1_704_067_200_000_000_000
         assert iso8601_from_unix_ns(ns) == "2024-01-01T00:00:00.000000000Z"
+
+
+# ── Anchor selection: binary search must equal the linear walk ────────────────
+
+def _linear_select_anchor(boot, target, preamble):
+    """The pre-2026-08 linear walk, kept HERE as the oracle for the new search.
+
+    Deliberately a copy rather than an import: its whole purpose is to be the
+    implementation the production code no longer is, so that a change to
+    _select_anchor cannot silently change this too.
+    """
+    chosen = None
+    boot_fallback = preamble == 0
+    for record in boot.timesync:
+        if record.kernel_time > target:
+            if chosen is None and not boot_fallback:
+                chosen = record
+            break
+        chosen = record
+    if chosen is not None:
+        return chosen.kernel_time, chosen.walltime, chosen.timesync_file_id
+    if boot_fallback:
+        return 0, boot.boot_time, boot.timesync_file_id
+    return None
+
+
+def _boot_with(kernel_times, *, file_id=3):
+    records = [
+        TimesyncEntry(
+            signature=0x207354, unknown_flags=0, kernel_time=kt,
+            walltime=_BOOT_TIME_NS + kt, timezone=0, daylight_savings=0,
+            file_offset=i * 32, timesync_file_id=file_id,
+        )
+        for i, kt in enumerate(kernel_times)
+    ]
+    return TimesyncBoot(
+        signature=0xBBB0, header_size=48, unknown=0, boot_uuid=_BOOT_UUID,
+        timebase_numerator=1, timebase_denominator=1, boot_time=_BOOT_TIME_NS,
+        timezone_offset_mins=0, daylight_savings=0, timesync=records,
+        file_offset=0, timesync_file_id=file_id,
+    )
+
+
+class TestAnchorSearchMatchesLinearWalk:
+    """The binary search must pick the SAME anchor the linear walk picked.
+
+    This is not a micro-optimisation that can be waved through: the anchor is
+    what a timestamp is computed from and what makes the conversion auditable, so
+    picking a different one silently moves evidence. Every case below compares
+    against the oracle above rather than against a hand-written expectation.
+    """
+
+    @pytest.mark.parametrize("preamble", [0, 1])
+    @pytest.mark.parametrize("kernel_times", [
+        [],                          # no records at all
+        [1_000],                     # single record
+        [1_000, 2_000, 3_000],       # ordinary ascending run
+        [0, 1_000],                  # a record AT zero
+        [1_000, 1_000, 2_000],       # duplicate keys — must keep the LAST
+    ])
+    def test_matches_for_every_target(self, kernel_times, preamble):
+        from forensic_aul.engine.utils.time import _select_anchor
+
+        boot = _boot_with(kernel_times)
+        # Probe below, on, between and above every record boundary.
+        targets = [0, 500, 999, 1_000, 1_001, 1_500, 2_000, 2_500, 3_000, 9_999]
+        for target in targets:
+            got = _select_anchor(boot, target, preamble, 1, 1)
+            want = _linear_select_anchor(boot, target, preamble)
+            if want is None:
+                assert got is None, f"target={target}: expected no anchor"
+                continue
+            assert got is not None, f"target={target}: expected an anchor"
+            assert (got.kernel_continuous_time, got.walltime_unix_ns,
+                    got.timesync_file_id) == want, f"target={target}"
+
+    def test_unsorted_records_fall_back_to_the_walk(self, caplog):
+        """Out-of-order records must keep the old behaviour, not a wrong answer.
+
+        A binary search over unsorted keys is undefined; the walk's answer ("stop
+        at the first overshoot") is the one every existing database was built
+        with, so that is what must survive.
+        """
+        import logging
+
+        from forensic_aul.engine.utils.time import _select_anchor
+
+        boot = _boot_with([1_000, 5_000, 2_000])
+        with caplog.at_level(logging.WARNING):
+            got = _select_anchor(boot, 3_000, 1, 1, 1)
+        assert "not in ascending" in caplog.text
+        want = _linear_select_anchor(boot, 3_000, 1)
+        assert (got.kernel_continuous_time, got.walltime_unix_ns,
+                got.timesync_file_id) == want
+
+    def test_index_is_rebuilt_when_records_are_merged_in(self):
+        """A boot that GAINS records must not answer from the stale index.
+
+        merge_timesync_dicts appends one .timesync file's records to another's
+        for the same boot, and it can run after the anchor search has already
+        cached an index — so the cache has to notice the list grew.
+        """
+        from forensic_aul.engine.utils.time import _select_anchor
+
+        boot = _boot_with([1_000])
+        first = _select_anchor(boot, 9_000, 1, 1, 1)
+        assert first.kernel_continuous_time == 1_000
+
+        boot.timesync.append(TimesyncEntry(
+            signature=0x207354, unknown_flags=0, kernel_time=5_000,
+            walltime=_BOOT_TIME_NS + 5_000, timezone=0, daylight_savings=0,
+            file_offset=64, timesync_file_id=11,
+        ))
+        second = _select_anchor(boot, 9_000, 1, 1, 1)
+        assert second.kernel_continuous_time == 5_000, "stale index was reused"
+        assert second.timesync_file_id == 11

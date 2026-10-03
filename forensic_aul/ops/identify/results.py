@@ -10,9 +10,10 @@ Used by : any front-end (CLI, GUI) that wants to browse/filter/hide rows in an
           existing diff DB after ``run_diff``/``run_identify_workflow`` has
           produced it; re-exported from ``forensic_aul/__init__.py``.
 Uses    : forensic_aul.errors (InvalidDatabaseError), forensic_aul.ops.identify
-          .diff (_create_hidden_keys_objects, for backward-compatible upgrade
-          of older diff DBs), forensic_aul.ops.query.reader (_escape_like —
-          the one source of truth for LIKE escaping), sqlite3, csv.
+          .diff (_create_hidden_keys_objects and _ensure_source_columns, for
+          backward-compatible upgrade of older diff DBs), forensic_aul.ops
+          .query.reader (_escape_like — the one source of truth for LIKE
+          escaping), sqlite3, csv.
 """
 
 from __future__ import annotations
@@ -24,7 +25,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from forensic_aul.errors import InvalidDatabaseError
-from forensic_aul.ops.identify.diff import _CSV_HEADER, _create_hidden_keys_objects
+from forensic_aul.ops.identify.diff import (
+    _CSV_HEADER,
+    _create_hidden_keys_objects,
+    _ensure_source_columns,
+)
 from forensic_aul.ops.query.reader import _escape_like
 
 log = logging.getLogger(__name__)
@@ -37,7 +42,8 @@ _EXPORT_HEADER = _CSV_HEADER
 # rows() SELECT — every identified_logs column in insertion order, aliased so
 # sqlite3.Row access by name matches the table's own column names.
 _ROWS_COLUMNS = (
-    "id, timestamp, timestamp_unix_ns, event_order, process, pid, tid, "
+    "id, timestamp, timestamp_unix_ns, event_order, source_order, source_file, "
+    "process, pid, tid, "
     "log_level, event_type, subsystem, category, message, matched_signatures, "
     "excluded, note"
 )
@@ -85,12 +91,15 @@ class IdentifyResults:
                 "run_diff?)"
             )
 
-        # Backward compatibility: a diff DB from before hidden_keys existed
-        # still has to work for reads and gains the hiding machinery on open
-        # (idempotent DDL — see diff._create_hidden_keys_objects). Best-effort:
-        # a read-only file still serves reads even if this write fails.
+        # Backward compatibility: a diff DB from before hidden_keys (or before
+        # source_order/source_file, L10) existed still has to work for reads —
+        # both gain their missing pieces on open (idempotent — see
+        # diff._create_hidden_keys_objects / diff._ensure_source_columns).
+        # Best-effort: a read-only file still serves reads even if this write
+        # fails.
         try:
             _create_hidden_keys_objects(conn)
+            _ensure_source_columns(conn)
             conn.commit()
         except sqlite3.OperationalError as exc:
             log.warning(f"could not create hidden_keys/v_identified_visible (read-only database?): {exc}")
@@ -235,6 +244,7 @@ class IdentifyResults:
             for row in rows:
                 writer.writerow([
                     row["timestamp"], row["timestamp_unix_ns"], row["event_order"],
+                    row["source_order"], row["source_file"],
                     row["process"], row["pid"], row["tid"], row["log_level"],
                     row["event_type"], row["subsystem"], row["category"],
                     row["message"], row["matched_signatures"], row["note"],

@@ -19,6 +19,8 @@ import gc
 import os
 import sqlite3
 
+import re
+
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -224,3 +226,108 @@ def test_export_button_writes_csv(qapp, tmp_path, monkeypatch):
     # KB-known is included by default in export_csv, noise excluded.
     assert "background chatter" in text
     assert "boot" not in text
+
+
+# ── Signature authoring dialog ──────────────────────────────────────────────────
+
+def _kb_copy(tmp_path):
+    """A writable copy of the shipped knowledge base."""
+    import shutil
+    from gui.paths import DEFAULT_KB_DIR
+
+    dest = tmp_path / "kb"
+    shutil.copytree(DEFAULT_KB_DIR, dest)
+    return dest
+
+
+def _sample_row():
+    return {
+        "message": "Associated to HomeNet with bssid aa:bb:cc:dd:ee:ff",
+        "process": "wifid",
+        "subsystem": "com.apple.wifi",
+        "category": "manager",
+        "log_level": "Default",
+    }
+
+
+def test_dialog_prefills_from_the_row(qapp, tmp_path):
+    from gui.views.dialog_signature import SignatureDialog
+
+    dialog = SignatureDialog(_sample_row(), kb_dir=_kb_copy(tmp_path))
+    # The pattern is escaped, so it matches this line and only this line.
+    assert dialog._regex.text() == re.escape(_sample_row()["message"])
+    assert dialog._id.text().startswith("wifid.")
+    # Process is pre-selected as the narrowing constraint; the rest are offered.
+    assert dialog._constraints["process"].isChecked()
+    assert not dialog._constraints["category"].isChecked()
+    dialog.deleteLater()
+
+
+def test_dialog_preview_round_trips_through_the_loader(qapp, tmp_path):
+    """What the preview shows must be what the knowledge base can load."""
+    from forensic_aul.ops.knowledge_base.loader import load_kb
+    from gui.views.dialog_signature import SignatureDialog
+
+    kb_dir = _kb_copy(tmp_path)
+    dialog = SignatureDialog(_sample_row(), kb_dir=kb_dir)
+    dialog._id.setText("net.wifi_join")
+    dialog._action.setText("Device joined a Wi-Fi network")
+    dialog._interpretation.setText("The device was in range of this SSID.")
+    assert "net.wifi_join" in dialog._preview.toPlainText()
+
+    dialog._on_save()
+    assert dialog.written_path() is not None
+    sig = next(s for s in load_kb(kb_dir).signatures if s.id == "net.wifi_join")
+    assert sig.action == "Device joined a Wi-Fi network"
+    assert sig.interpretation == "The device was in range of this SSID."
+    assert sig.status == "draft"          # authored interactively, not yet reviewed
+    assert sig.match.process == "wifid"
+    dialog.deleteLater()
+
+
+@pytest.mark.parametrize("bad_id", ["", "Net.WiFi", "9lives!", "-leading"])
+def test_dialog_refuses_a_bad_id(qapp, tmp_path, bad_id):
+    from gui.views.dialog_signature import SignatureDialog
+
+    dialog = SignatureDialog(_sample_row(), kb_dir=_kb_copy(tmp_path))
+    dialog._action.setText("x")
+    dialog._id.setText(bad_id)
+    assert "id" in dialog._status.text().lower()
+    dialog.deleteLater()
+
+
+def test_dialog_refuses_an_uncompilable_pattern(qapp, tmp_path):
+    from gui.views.dialog_signature import SignatureDialog
+
+    dialog = SignatureDialog(_sample_row(), kb_dir=_kb_copy(tmp_path))
+    dialog._id.setText("net.ok")
+    dialog._action.setText("x")
+    dialog._regex.setText("unbalanced (")
+    assert "compile" in dialog._status.text()
+    dialog.deleteLater()
+
+
+def test_dialog_refuses_to_overwrite_an_existing_signature(qapp, tmp_path):
+    from gui.views.dialog_signature import SignatureDialog
+
+    kb_dir = _kb_copy(tmp_path)
+    (kb_dir / "signatures" / "net.taken.yaml").write_text("signatures: []\n", encoding="utf-8")
+    dialog = SignatureDialog(_sample_row(), kb_dir=kb_dir)
+    dialog._action.setText("x")
+    dialog._id.setText("net.taken")
+    assert "already exists" in dialog._status.text()
+    dialog.deleteLater()
+
+
+def test_dialog_test_button_counts_matches_on_screen(qapp, tmp_path):
+    from gui.views.dialog_signature import SignatureDialog
+
+    rows = [_sample_row(), {"message": "Associated to CafeWiFi with bssid 11:22:33:44:55:66"},
+            {"message": "something else entirely"}]
+    dialog = SignatureDialog(rows[0], sample_rows=rows, kb_dir=_kb_copy(tmp_path))
+    dialog._regex.setText(r"Associated to \S+ with bssid")
+    dialog._on_test()
+    assert "2" in dialog._status.text() and "3" in dialog._status.text()
+    # The wording must not imply it searched the whole database.
+    assert "not the whole database" in dialog._status.text()
+    dialog.deleteLater()

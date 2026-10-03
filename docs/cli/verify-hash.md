@@ -33,7 +33,7 @@ the audit log has been altered since extraction.
 | `DATABASE` | **required** | SQLite database produced by `extract`. |
 | `--logarchive DIR` | read from `case_metadata` | Override the path to the `.logarchive`. Supply only if the evidence has moved since extraction. |
 | `--log-file FILE` | read from `case_metadata` | Override the path to the operational log file. Supply only if it has moved. |
-| `--skip-files` | off | Skip the per-file verification; only re-hash the logarchive globally. Much faster on large archives, but a single altered file inside an otherwise identical tree is then only visible through the global hash. |
+| `--skip-files` | off | Skip the per-file verification; only re-hash the logarchive globally. Much faster on large archives, but a single altered file inside an otherwise identical tree is then only visible through the global hash, and a mismatch can no longer be attributed to a content change vs a renamed file (see [Reading a global-hash mismatch](#reading-a-global-hash-mismatch)). |
 
 ---
 
@@ -98,3 +98,34 @@ The distinction matters in scripts: `1` means "the evidence does not match",
 - [Forensic model](../concepts/forensic-model.md) ·
   [Database schema](../formats/database-schema.md) ·
   [Acquisition sidecar](../formats/acquisition-sidecar.md)
+
+## Reading a global-hash mismatch
+
+The global hash covers each file's **relative path** and its **content digest**,
+so a mismatch means one of the two moved. `verify-hash` says which, using the
+per-file results to tell them apart:
+
+| What it reports | What it means |
+|---|---|
+| `N file(s) changed content` | a recorded file's bytes differ — a real content change |
+| `content is intact but N recorded file(s) are no longer at their recorded path` | something was renamed, moved or removed inside the archive |
+| `every recorded file's content matches, so the difference is in file paths/names, or in a file the extract did not record` | no recorded content changed; the archive's *shape* did (note that `hash_logarchive` covers every file in the tree, while `source_files` records only the ones that were parsed) |
+| `re-run without --skip-files …` | the per-file evidence that separates these cases was not gathered |
+
+**Moving a case does not break verification.** Paths are relative to the
+logarchive root, so relocating or copying the whole archive leaves the hash
+unchanged. `verify-hash` finds the archive through the absolute path stored at
+extract time, so after a move point it at the new location:
+
+```bash
+faul verify-hash case.db --logarchive /new/location/case.logarchive
+```
+
+## An interrupted extract cannot be verified
+
+An extract that does not finish leaves `<name>.sqlite.partial` rather than
+`<name>.sqlite` — the final name exists only when a run completed. `verify-hash`
+refuses a partial, as every reader does: its ordering, indexes and full-text
+index may be missing, so anything read from it would silently under-report.
+
+A partial is not an extract. Re-run it.

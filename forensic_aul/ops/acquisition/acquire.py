@@ -28,7 +28,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from forensic_aul.errors import ForensicAULError
+from forensic_aul.config import PARTIAL_SUFFIX
+from forensic_aul.errors import ForensicAULError, OperationCancelled
+from forensic_aul.engine.utils.cancellation import NEVER_CANCELLED, CancelToken
 from forensic_aul.engine.utils.time import parse_duration_seconds
 from forensic_aul.engine.faul_format import FAUL_SUFFIX, pack_faul
 from forensic_aul.ops.acquisition.report import build_report_dict, write_acquisition_report
@@ -37,6 +39,10 @@ from forensic_aul.engine.integrity import hash_logarchive
 from forensic_aul.outcomes import AcquireResult
 
 log = logging.getLogger(__name__)
+
+# How often the collection poll wakes to look at the cancellation token. Short
+# enough to feel immediate to an operator, long enough to be free.
+_COLLECT_POLL_S = 0.2
 
 
 # ── Errors ────────────────────────────────────────────────────────────────────
@@ -67,6 +73,7 @@ def acquire(
     batch_size: int = 1_000,
     pack: bool = True,
     confirm: Callable[[DeviceInfo], bool] | None = None,
+    cancel: CancelToken = NEVER_CANCELLED,
 ) -> AcquireResult:
     """Collect a ``.logarchive`` from a connected iOS device into a ``.faul``.
 
@@ -91,10 +98,24 @@ def acquire(
     offset (``"1h"`` / ``"24h"`` / ``"7d"``), a Unix timestamp (int), or None for
     everything available.
 
+    With ``pack=False`` the directory is collected as
+    ``<name>.logarchive.partial`` and renamed on success — the same rule
+    ``run_extract`` applies to its database, and for the same reason: a
+    half-collected archive must never be mistaken for a complete one. (With
+    ``pack=True`` the question does not arise: collection happens in a temp
+    directory and only the finished ``.faul`` is ever written to *output_dir*.)
+
     *confirm*, if given, is called with the connected :class:`DeviceInfo` after
     connection and **before** collection; returning False aborts (raising
     :class:`AcquisitionAborted`). Use it to show a summary / prompt the operator.
     The library itself performs no I/O beyond logging.
+
+    *cancel* stops the acquisition: the collection is awaited as a cancellable
+    task, so cancelling asks the device service to stop and raises
+    :class:`~forensic_aul.errors.OperationCancelled`. How promptly the device
+    side gives up is outside our control — with a slow or unresponsive device the
+    cancellation may only take effect at the end of the current collection, so a
+    front-end should say "stopping…" rather than promise an immediate halt.
 
     Returns:
         An :class:`~forensic_aul.outcomes.AcquireResult` (logarchive path, SHA-256,
@@ -104,6 +125,7 @@ def acquire(
         ImportError: ``pymobiledevice3`` is not installed.
         AcquisitionAborted: *confirm* returned False.
         AcquisitionError: connection, collection, or output failed.
+        OperationCancelled: *cancel* was cancelled during the acquisition.
     """
     return asyncio.run(_acquire_async(
         case_number=case_number,
@@ -120,6 +142,7 @@ def acquire(
         batch_size=batch_size,
         pack=pack,
         confirm=confirm,
+        cancel=cancel,
     ))
 
 
@@ -141,11 +164,13 @@ async def _acquire_async(
     batch_size: int,
     pack: bool,
     confirm: Callable[[DeviceInfo], bool] | None,
+    cancel: CancelToken = NEVER_CANCELLED,
 ) -> AcquireResult:
     if not case_number:
         raise AcquisitionError("case_number is required")
 
     # ── Connect (ImportError if pymobiledevice3 is missing) ───────────────────
+    cancel.check()
     log.info(f'Connecting to device{f" {udid}" if udid else ""}…')
     lockdown, device = await connect_device(udid)
 
@@ -184,7 +209,10 @@ async def _acquire_async(
             tmp = stack.enter_context(tempfile.TemporaryDirectory(prefix="faul_acquire_"))
             logarchive_path = Path(tmp) / f"{stem}.logarchive"
         else:
-            logarchive_path = output
+            # D7 — the loose layout writes straight into output_dir, so it needs
+            # the same "partial until proven complete" naming run_extract uses:
+            # collect into <name>.logarchive.partial and rename on success.
+            logarchive_path = output.with_name(output.name + PARTIAL_SUFFIX)
 
         try:
             # ── Operator confirmation hook (front-end supplies the interaction) ─
@@ -192,11 +220,13 @@ async def _acquire_async(
                 raise AcquisitionAborted("acquisition declined by confirm callback")
 
             # ── Collect ─────────────────────────────────────────────────────────
+            cancel.check()
             start_unix = _parse_start_time(start_time)
             log.info(f"Collecting logs → {logarchive_path}")
-            await collect_logarchive(
-                lockdown, str(logarchive_path),
+            await _collect_cancellable(
+                lockdown, logarchive_path,
                 size_limit=size_limit, age_limit=age_limit, start_unix=start_unix,
+                cancel=cancel,
             )
         finally:
             await close_lockdown(lockdown)
@@ -210,8 +240,14 @@ async def _acquire_async(
         # ── Hash ────────────────────────────────────────────────────────────────
         file_hashes: dict[str, str] = {}
         try:
-            logarchive_sha256, file_hashes = hash_logarchive(logarchive_path)
+            logarchive_sha256, file_hashes = hash_logarchive(logarchive_path, cancel=cancel)
             file_count = len(file_hashes)
+        except OperationCancelled:
+            # WHY re-raised ahead of the broad handler: that handler exists so a
+            # hashing hiccup never costs us the collected evidence, but a
+            # cancellation must stop the acquisition, not carry on to write an
+            # unhashed output the operator asked us to abandon.
+            raise
         except Exception as exc:  # noqa: BLE001 — hashing must not lose the collected evidence
             log.warning(f"Could not hash logarchive: {exc}")
             logarchive_sha256, file_count = "", 0
@@ -234,6 +270,12 @@ async def _acquire_async(
                     f"collection succeeded but the .faul could not be written: {exc}"
                 ) from exc
         else:
+            # Promote the collected directory to its final name: from here on its
+            # presence means a complete, hashed collection. Done BEFORE the
+            # sidecar so the sidecar is written next to — and names — the real
+            # output rather than a path that is about to change.
+            logarchive_path.replace(output)
+            logarchive_path = output
             try:
                 report_path = write_acquisition_report(
                     logarchive_path, device,
@@ -257,6 +299,9 @@ async def _acquire_async(
             case_number=case_number, imei=device.imei or "UNKNOWN",
             exhibit_number=exhibit_number, analyst_name=analyst, notes=notes,
             batch_size=batch_size, overwrite=True,
+            # Same token: cancelling an `acquire --extract` must stop the whole
+            # thing, not collect the archive and then quietly parse it anyway.
+            cancel=cancel,
         )
 
     return AcquireResult(
@@ -267,6 +312,54 @@ async def _acquire_async(
         report_path=report_path,   # None when the sidecar is embedded in the .faul
         extract_result=extract_result,
     )
+
+
+async def _collect_cancellable(
+    lockdown: object,
+    out: Path,
+    *,
+    size_limit: int | None,
+    age_limit: int | None,
+    start_unix: int | None,
+    cancel: CancelToken,
+) -> None:
+    """Run :func:`collect_logarchive` as a task that *cancel* can stop.
+
+    HOW: the collection becomes an ``asyncio.Task`` and this coroutine polls the
+    token between short sleeps; on a cancellation it cancels the task and waits
+    for it to unwind, then raises :class:`OperationCancelled`.
+
+    WHY a task and a poll rather than a check inside the collection: the whole of
+    the transfer happens inside ``OsTraceService.collect``, a single await that
+    returns only when the device is done — there is no loop of ours to check a
+    token in. Cancelling the task is the only lever, and it is one the *device*
+    side must cooperate with; a device that ignores it simply finishes its
+    current collection first, which is why the caller-facing documentation
+    promises "stopping…" rather than an immediate halt.
+
+    With the null token nothing is polled and this is a plain await, so the
+    ordinary CLI path pays nothing.
+    """
+    if cancel is NEVER_CANCELLED:
+        await collect_logarchive(
+            lockdown, str(out),
+            size_limit=size_limit, age_limit=age_limit, start_unix=start_unix,
+        )
+        return
+
+    task = asyncio.ensure_future(collect_logarchive(
+        lockdown, str(out),
+        size_limit=size_limit, age_limit=age_limit, start_unix=start_unix,
+    ))
+    while not task.done():
+        if cancel.cancelled:
+            log.info("Acquisition cancelled — asking the device service to stop…")
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+            raise OperationCancelled("acquisition cancelled by the operator")
+        await asyncio.wait({task}, timeout=_COLLECT_POLL_S)
+    await task   # re-raise whatever the collection itself failed with
 
 
 async def collect_logarchive(

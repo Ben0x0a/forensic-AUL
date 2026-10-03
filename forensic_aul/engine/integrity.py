@@ -9,6 +9,12 @@ Generic SHA-256 hashing and post-extraction tamper-evident sealing:
                         case_metadata at the end of an extract session.
   verify_source_files — Re-hash every registered source file after parsing and
                         record whether each one changed during the run.
+
+The two whole-tree passes (``hash_logarchive`` / ``verify_source_files``) read
+every byte of the evidence, so both accept a
+:class:`~forensic_aul.engine.utils.cancellation.CancelToken` and check it once
+per file. ``compute_sha256`` deliberately does not: it is the primitive, and a
+single file is short enough that per-chunk checks would only add cost.
 """
 
 from __future__ import annotations
@@ -19,6 +25,7 @@ import sqlite3
 from pathlib import Path
 
 from forensic_aul.config import HASH_CHUNK_SIZE as _CHUNK_SIZE
+from forensic_aul.engine.utils.cancellation import NEVER_CANCELLED, CancelToken
 
 log = logging.getLogger(__name__)
 
@@ -40,17 +47,36 @@ def compute_sha256(path: Path | str) -> str:
     return h.hexdigest()
 
 
-def hash_logarchive(logarchive: Path | str) -> tuple[str, dict[str, str]]:
+def hash_logarchive(
+    logarchive: Path | str, *, cancel: CancelToken = NEVER_CANCELLED
+) -> tuple[str, dict[str, str]]:
     """Compute a deterministic SHA-256 fingerprint of an entire logarchive.
 
-    The global hash is the SHA-256 of all per-file SHA-256 digests,
-    concatenated in sorted path order (relative to *logarchive* root).
+    The global hash covers, for every file in sorted path order, **both its
+    relative path and its content digest** — ``path ‖ NUL ‖ digest``.
 
     Returns:
         (global_sha256, {relative_path: file_sha256}) — both lowercase hex.
 
     The returned dict can be used to populate `source_files.sha256` during
     extraction and to verify individual files later.
+
+    WHY paths and not just digests: a file's name is part of the evidence, not
+    packaging around it. Hashing digests alone lets a rename that keeps its
+    position in sorted order produce an identical global hash, declaring the
+    archive unchanged when a file had been renamed. The NUL separator keeps the
+    concatenation unambiguous (a path cannot contain one), so no pair of
+    path/digest boundaries can be made to collide.
+
+    Paths are relative to *logarchive*, so **moving the archive does not change
+    the hash** — only a change inside it does.
+
+    *cancel* is checked once per file: on a multi-gigabyte acquisition this pass
+    reads every byte of the evidence and is the longest uninterruptible stretch
+    of source preparation.
+
+    Raises:
+        OperationCancelled: *cancel* was cancelled while hashing.
     """
     root = Path(logarchive)
     if not root.is_dir():
@@ -61,6 +87,7 @@ def hash_logarchive(logarchive: Path | str) -> tuple[str, dict[str, str]]:
     global_h = hashlib.sha256()
 
     for path in all_files:
+        cancel.check()
         # Symlinks skipped: rglob follows them, which could pull in files
         # outside the root and yield a non-reproducible hash.
         if path.is_symlink() or not path.is_file():
@@ -72,6 +99,9 @@ def hash_logarchive(logarchive: Path | str) -> tuple[str, dict[str, str]]:
             log.warning(f"integrity: cannot hash {rel}: {exc}")
             continue
         file_hashes[rel] = digest
+        # path ‖ NUL ‖ digest — see the WHY in the docstring.
+        global_h.update(rel.encode("utf-8"))
+        global_h.update(b"\x00")
         global_h.update(bytes.fromhex(digest))
 
     return global_h.hexdigest(), file_hashes
@@ -106,6 +136,8 @@ def seal_log_file(
 def verify_source_files(
     conn: sqlite3.Connection,
     logarchive_root: Path,
+    *,
+    cancel: CancelToken = NEVER_CANCELLED,
 ) -> tuple[int, int, int]:
     """Re-hash every registered source file and record the "after" digest + status.
 
@@ -124,35 +156,45 @@ def verify_source_files(
     which file to distrust.
 
     Returns ``(unchanged, changed, unverifiable)`` counts.
+
+    *cancel* is checked once per file. A cancellation still writes the results
+    gathered so far before propagating: each per-file verdict is independently
+    meaningful, so discarding the ones already computed would throw away real
+    attestation for nothing.
+
+    Raises:
+        OperationCancelled: *cancel* was cancelled while re-hashing.
     """
     rows = conn.execute("SELECT id, file_path, sha256 FROM source_files").fetchall()
 
     n_ok = n_changed = n_unverifiable = 0
     updates: list[tuple[str | None, int | None, int]] = []
 
-    for sid, rel, before in rows:
-        try:
-            after: str | None = compute_sha256(logarchive_root / rel)
-        except OSError as exc:
-            log.warning(f"integrity: cannot re-hash {rel}: {exc}")
-            after, ok = None, None
-            n_unverifiable += 1
-        else:
-            if before is None:
-                ok = None
+    try:
+        for sid, rel, before in rows:
+            cancel.check()
+            try:
+                after: str | None = compute_sha256(logarchive_root / rel)
+            except OSError as exc:
+                log.warning(f"integrity: cannot re-hash {rel}: {exc}")
+                after, ok = None, None
                 n_unverifiable += 1
-            elif after == before:
-                ok = 1
-                n_ok += 1
             else:
-                ok = 0
-                n_changed += 1
-                log.warning(f"integrity: {rel} CHANGED during the run (before={before} after={after})")
-        updates.append((after, ok, sid))
-
-    conn.executemany(
-        "UPDATE source_files SET sha256_after = ?, integrity_ok = ? WHERE id = ?",
-        updates,
-    )
-    conn.commit()
+                if before is None:
+                    ok = None
+                    n_unverifiable += 1
+                elif after == before:
+                    ok = 1
+                    n_ok += 1
+                else:
+                    ok = 0
+                    n_changed += 1
+                    log.warning(f"integrity: {rel} CHANGED during the run (before={before} after={after})")
+            updates.append((after, ok, sid))
+    finally:
+        conn.executemany(
+            "UPDATE source_files SET sha256_after = ?, integrity_ok = ? WHERE id = ?",
+            updates,
+        )
+        conn.commit()
     return n_ok, n_changed, n_unverifiable

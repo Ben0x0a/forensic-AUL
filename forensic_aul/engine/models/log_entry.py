@@ -37,7 +37,11 @@ class LogEntry:
     format_string_file_offset: Optional[int]      # offset of the format string in the UUIDText/DSC file (None for dynamic)
 
     # ── Timing ────────────────────────────────────────────────────────────────
-    timestamp_iso: str           # ISO 8601 UTC (e.g. "2024-03-15T10:23:45.123456789Z")
+    # NOTE there is no ISO string here. The instant is stored, exported and
+    # compared as the integer below; the readable form is derived on read
+    # (LogRow.timestamp_iso, format_timestamp). Carrying it on the entry meant
+    # formatting a datetime for every row and shipping ~30 bytes per row through
+    # the worker pickle, for a value the writer then discarded.
     timestamp_unix_ns: int       # nanoseconds since 1970-01-01 UTC
     timestamp_mach: int          # raw mach continuous time (kernel ticks, exact integer)
     timesync_anchor_id: Optional[int]  # FK → timesync_anchors.id; None on failure

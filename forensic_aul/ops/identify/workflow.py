@@ -25,8 +25,11 @@ Uses    : forensic_aul.ops.acquisition (device connection, collection, report,
           forensic_aul.engine.utils.progress (ProgressReporter/ProgressSink).
 
 Errors are raised, never turned into exit codes: ``AcquisitionAborted`` when the
-operator declines or interrupts, ``AcquisitionError`` / ``ValueError`` for
-failures — the front-end maps them to exit status and user messages.
+operator declines, ``OperationCancelled`` when they stop a run already under way,
+``AcquisitionError`` / ``ValueError`` for failures — the front-end maps them to
+exit status and user messages. Declining and cancelling are separate types on
+purpose: the first means the run never legitimately started, the second that the
+operator interrupted one that had.
 """
 
 from __future__ import annotations
@@ -108,13 +111,14 @@ def run_identify_workflow(
     - *confirm(device)* — shown the connected :class:`DeviceInfo` before the
       baseline acquisition; returning False aborts (``AcquisitionAborted``).
     - *wait_still(seconds)* — asked to hold for *still_seconds* while the
-      baseline captures a quiet device; raise :class:`AcquisitionAborted` to
-      abort, or return early to skip the remaining wait (the callback owns the
-      timing, not this function). Only invoked when *wait_still* is given AND
-      *still_seconds* > 0.
+      baseline captures a quiet device; raise
+      :class:`~forensic_aul.errors.OperationCancelled` to abort (the GUI does so
+      through a ``CancelToken``), or return early to skip the remaining wait (the
+      callback owns the timing, not this function). Only invoked when *wait_still*
+      is given AND *still_seconds* > 0.
     - *wait_for_action()* — blocks until the operator has performed the action;
-      raise :class:`AcquisitionAborted` to abort. ``None`` proceeds immediately
-      (useful only in tests — a real run needs the pause).
+      raise :class:`~forensic_aul.errors.OperationCancelled` to abort. ``None``
+      proceeds immediately (useful only in tests — a real run needs the pause).
     - *status(line)* — human progress lines ("[1/2] Acquiring baseline …");
       defaults to the module logger at INFO.
     - *progress* — a :class:`~forensic_aul.engine.utils.progress.ProgressSink`
@@ -156,7 +160,8 @@ def run_identify_workflow(
         ValueError: *case_number* yields no usable filename characters after
             sanitising.
         ImportError: ``pymobiledevice3`` is not installed.
-        AcquisitionAborted: the operator declined or aborted.
+        AcquisitionAborted: the operator declined before the run started.
+        OperationCancelled: a front-end callback stopped a run under way.
         AcquisitionError: connection, collection, or output-path safety failed.
     """
     return asyncio.run(_run_identify_async(

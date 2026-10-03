@@ -87,6 +87,8 @@ def verify_database(
     Raises:
         FileNotFoundError: *database* does not exist.
         InvalidDatabaseError: *database* is not an analysis database.
+        IncompleteDatabaseError: the extract that produced it never completed —
+            re-run it rather than attesting a half-written store.
         ValueError: ``case_metadata`` is empty (not an extract DB).
     """
     db_path = Path(database)
@@ -141,19 +143,56 @@ def _verify_logarchive(
         result.checks.append(Check("logarchive hash", "fail", f"could not hash: {exc}"))
         return
 
+    global_matches = bool(stored_sha) and global_sha == stored_sha
+
+    if not skip_files:
+        result.per_file = _verify_per_file(conn, file_hashes)
+
     if not stored_sha:
         result.checks.append(Check(
             "logarchive global SHA-256", "skip", "none stored in case_metadata"))
-    elif global_sha == stored_sha:
+    elif global_matches:
         result.checks.append(Check(
             "logarchive global SHA-256", "ok", stored=stored_sha, actual=global_sha))
     else:
         result.checks.append(Check(
-            "logarchive global SHA-256", "fail", "mismatch",
+            "logarchive global SHA-256", "fail", _global_mismatch_reason(result.per_file),
             stored=stored_sha, actual=global_sha))
 
-    if not skip_files:
-        result.per_file = _verify_per_file(conn, file_hashes)
+
+def _global_mismatch_reason(per_file: PerFileResult | None) -> str:
+    """Say *what kind* of change a failed global hash indicates.
+
+    The global hash covers each file's relative path **and** its content digest
+    (see engine/integrity.hash_logarchive), so a mismatch means one of the two
+    moved — and which one matters enormously to an analyst. The per-file results
+    separate them: a content change moves a per-file digest, whereas a rename
+    leaves every recorded digest intact and shows up as a file that is no longer
+    where the database says it was.
+
+    A bare "mismatch" would leave that distinction for the reader to work out, on
+    the check most likely to be read as evidence tampering.
+    """
+    if per_file is None:
+        # --skip-files: the evidence that separates the two cases was not
+        # gathered, so claim only what is actually known.
+        return ("mismatch — re-run without --skip-files to tell a content change "
+                "from a renamed or moved file")
+    if per_file.mismatches:
+        return (f"mismatch — {len(per_file.mismatches)} file(s) changed content "
+                "(see the per-file results)")
+    if per_file.missing_file:
+        return (f"mismatch — content is intact but {per_file.missing_file} recorded "
+                "file(s) are no longer at their recorded path inside the archive "
+                "(renamed, moved or removed)")
+    if per_file.total and per_file.matched == per_file.total:
+        # Everything the extract recorded still matches, so the difference is in
+        # a path — or in a file present in the archive that was never parsed and
+        # therefore has no source_files row to check.
+        return ("mismatch — every recorded file's content matches, so the "
+                "difference is in file paths/names, or in a file the extract did "
+                "not record")
+    return "mismatch"
 
 
 def _verify_per_file(

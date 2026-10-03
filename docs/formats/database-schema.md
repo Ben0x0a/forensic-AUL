@@ -2,7 +2,7 @@
 
 Reference for the SQLite database produced by [`extract`](../cli/extract.md). Source
 of truth: `forensic_aul/engine/database/schema.py` (DDL), `writer.py` (inserts),
-`ordering.py` (the two ordering columns), plus the annotation tables created by
+`ordering.py` (the forensic ordering), plus the annotation tables created by
 `forensic_aul/ops/annotation/matcher.py`.
 
 ## Stable surface vs internal schema
@@ -59,8 +59,6 @@ The main table: one row per parsed log entry.
 | Column | Type | Meaning |
 |---|---|---|
 | `id` | INTEGER PK | rowid alias (no `AUTOINCREMENT`) |
-| `source_order` | INTEGER | Physical position **within its own tracev3 file** (1-based, byte order). NULL until the ordering pass runs |
-| `event_order` | INTEGER | Merged real timeline: `(boot physical rank, timestamp_mach)`. NULL until the ordering pass runs |
 | `tracev3_file_id` | INTEGER FK → `source_files.id` | File the raw Firehose entry came from |
 | `format_src_file_id` | INTEGER FK → `source_files.id` | UUIDText or DSC file that supplied the format string |
 | `timesync_file_id` | INTEGER FK → `source_files.id` | `.timesync` file used for the timestamp conversion |
@@ -90,14 +88,39 @@ Notes:
 - **No ISO timestamp column.** The human-readable string is derived on read from
   `timestamp_unix_ns` (`engine/utils/time.iso8601_from_unix_ns`), saving ~30 bytes
   per row. The read layer emits `""` — not a 1970 date — for the `0` sentinel.
+
 - All FK columns are nullable; an unresolved lookup simply leaves NULL.
-- `source_order` / `event_order` are assigned **after** the bulk load, so they are
-  independent of insertion order (and therefore of how many parser processes ran).
-  An interrupted extract can leave them NULL.
+- The forensic ordering is **not** stored here. It is assigned after the bulk
+  load, into [`logs_order`](#logs_order), so it is independent of insertion order
+  (and therefore of how many parser processes ran).
+
+### How the `0` sentinel behaves downstream
+
+An entry whose timestamp could not be resolved is stored with
+`timestamp_unix_ns = 0` rather than being dropped — the entry is real evidence
+and its message, process and ordering are all intact. What it lacks is a place on
+a timeline, and every derived surface treats that consistently:
+
+| Surface | Behaviour |
+|---|---|
+| ISO timestamp (`LogRow.timestamp_iso`, exports) | empty string, never a 1970 date |
+| `summary.total_entries` | **counted** — it is part of the corpus |
+| `summary` time range / histogram | **excluded** — it cannot be placed |
+| `summary.unresolved_timestamps` | how many there are, so the two figures above can be reconciled |
+| export / `query_logs`, no time filter | **included** |
+| export / `query_logs`, any of `--from` / `--to` / `--last` | **excluded** — it cannot be proven to fall inside the window, and claiming it does would be a fabrication |
+| non-time filters (process, subsystem, …) | **included** — only *time* bounds may exclude it |
+| `identify` baseline cutoff | ignores sentinel rows when computing `MAX(timestamp_unix_ns)` |
+| `identify` action rows | **retained** with `excluded = 0` and a `note`, since a sentinel row cannot be proven to predate the action; the count is logged as a WARNING |
+
+The rule throughout: never silently drop the row, and never invent a time for it.
+Regression tests live in `tests/unit/test_export.py`, `test_diff.py` and
+`test_summary_verify.py`.
 
 ### Ordering semantics
 
-`ordering.py` computes both columns in one pass:
+`ordering.py` computes both values in one pass, into
+[`logs_order`](#logs_order):
 
 - `source_order` — `ROW_NUMBER() PARTITION BY tracev3_file_id ORDER BY (chunkset
   offset, firehose inner offset, entry inner offset, id)`. Combined with
@@ -124,7 +147,8 @@ full sorted build:
 | `idx_logs_category_id` | `category_id` |
 | `idx_logs_process_id` | `process_id` |
 | `idx_logs_format_str_id` | `format_str_id` |
-| `idx_logs_event_order` | `event_order` |
+
+The ordering index lives with its column, on `logs_order` — see below.
 
 Not indexed on purpose: `log_level_id` / `event_type_id` (never selective),
 `boot_id` (only sorted, and `event_order` already leads with its rank), `pid`,
@@ -135,6 +159,38 @@ built afterwards by `finalize_indexes()`.
 
 ---
 
+## `logs_order`
+
+The deterministic forensic ordering: one row per `logs` row, joined on `id`.
+Written in a single pass after the bulk load (`database/ordering.py`). A `logs`
+row with no matching row here has no ordering yet — readers LEFT JOIN, so it
+reads as NULL.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `id` | INTEGER PK | = `logs.id` (rowid alias, so the join is a rowid lookup) |
+| `source_order` | INTEGER | Physical position **within its own tracev3 file** (1-based, byte order) |
+| `event_order` | INTEGER | Merged real timeline: `(boot physical rank, timestamp_mach)` |
+
+| Index | Column |
+|---|---|
+| `idx_logs_order_event_order` | `event_order` |
+
+**Why a separate table.** The ordering can only be computed once every row is
+loaded. Back-filling it into `logs` meant an `UPDATE` over every row of the
+widest table in the database, and SQLite rewrites a whole page per row touched —
+roughly 14 GB of writes to store two integers per row on a 47 M-row extract, or
+28% of the run. Writing a narrow table instead costs about a tenth of that.
+
+It also makes the pass **atomic**: one `INSERT` in one transaction commits whole
+or rolls back to an empty table, so a database never holds a half-assigned
+ordering. An interrupted extract has either a complete ordering or none.
+
+`id` carries no `REFERENCES logs(id)` on purpose. `foreign_keys` is ON, so the
+clause would cost a parent-key probe per row to enforce something the writer
+cannot violate — every row here comes from `SELECT … FROM logs`.
+
+---
 ## `case_metadata`
 
 One row per extraction session.
@@ -157,10 +213,66 @@ One row per extraction session.
 | `log_file_sha256` | TEXT | SHA-256 of that log file, sealed at end of run |
 | `acquisition_timestamp` | TEXT NOT NULL | ISO 8601, written at insert |
 | `tool_version` | TEXT NOT NULL | |
+| `extract_status` | TEXT | `running` \| `complete` \| `cancelled` — see below |
+| `extract_ended_at` | TEXT | ISO 8601 UTC, written with a terminal `extract_status` |
 
 `ios_model`, `ios_build_version`, `ios_version`, the two log-time bounds and the
 two `log_file_*` columns are filled in by `update_case_metadata` later in the run,
 so they are NULL on an interrupted extract.
+
+### `extract_status` — did the run finish?
+
+`extract_status` is written `running` when the row is inserted and moved to
+`complete` (as the very last write of a successful run) or `cancelled` (by the
+pipeline's cancel handler). Nothing else ever writes it.
+
+The order matters: because `running` is written *first*, a run that was killed,
+crashed or lost power leaves `running` behind **without any code having had to
+execute**. So the flag catches every way a run can fail to finish, not just an
+orderly cancellation.
+
+`open_analysis_database` refuses to open a database whose status is anything
+other than `complete` — such a store is real evidence as far as it goes, but its
+ordering, indexes and full-text index may be partial, so a reader treating it as
+finished would silently under-report. No CLI or GUI path opens one; the
+`allow_incomplete=True` kwarg exists so the guard stays testable.
+
+A `NULL` status is **not** treated as incomplete. It means no claim was made —
+a database written before this column existed, or a fixture assembled by hand.
+Silence is not a claim, and refusing those would have made the flag a breaking
+change rather than an added guarantee.
+
+The out-of-band counterpart is the file name: `extract` writes to
+`<name>.sqlite.partial` and renames on success, so a file at the final name
+*means* a finished extract. See [extract](../cli/extract.md).
+
+## `extract_phases`
+
+One row per pipeline phase of one run, in the order the phases ran — the run's
+ledger.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `id` | INTEGER PK | |
+| `phase` | TEXT NOT NULL | `prepare` \| `parse` \| `ordering` \| `index` \| `fts` \| `stats` |
+| `started_at` | TEXT NOT NULL | ISO 8601 UTC |
+| `completed_at` | TEXT | ISO 8601 UTC; **NULL means the phase never finished** |
+
+It serves three purposes:
+
+- an **audit trail** of how long each stage of the extraction took;
+- the answer to *"which phase did this interrupted run die in?"* — exactly the
+  row whose `completed_at` is NULL;
+- the substrate a future **resume** will read to decide where to restart.
+
+The table is deliberately not keyed by phase name: a re-run appends a new row
+rather than overwriting the history. `prepare` runs before the database exists,
+so it is the one phase entered retrospectively — with the time it really started.
+
+```sql
+-- Where did an interrupted run stop, and how long had it been there?
+SELECT phase, started_at FROM extract_phases WHERE completed_at IS NULL;
+```
 
 ## `source_files`
 
@@ -256,12 +368,13 @@ Indexes: `idx_shutdown_events_time(shutdown_unix_ns)`,
 
 ```sql
 CREATE VIEW v_logs AS
-SELECT l.id, l.timestamp_unix_ns, l.source_order, l.event_order,
+SELECT l.id, l.timestamp_unix_ns, o.source_order, o.event_order,
        p.name AS process, l.pid, l.tid,
        ll.name AS log_level, et.name AS event_type,
        s.name AS subsystem, c.name AS category,
        l.message, fs.value AS format_string, b.boot_uuid
 FROM logs l
+LEFT JOIN logs_order o ON o.id = l.id
 LEFT JOIN processes p … LEFT JOIN boots b ON b.id = l.boot_id;
 ```
 
@@ -290,6 +403,37 @@ An **external-content** FTS5 index over `logs.message`, plus `logs_ai` / `logs_a
   the shadow table `logs_fts_docsize` — a plain scan of an external-content table
   would report an emptied index as populated. The `message_match` filter **raises**
   rather than silently falling back to a `LIKE` scan when no usable index exists.
+
+## `summary_cache` (statistics, written by `extract`)
+
+```sql
+CREATE TABLE summary_cache (
+    id           INTEGER PRIMARY KEY CHECK (id = 1),
+    computed_at  TEXT NOT NULL,   -- ISO 8601 UTC
+    faul_version TEXT NOT NULL,   -- the forensic-aul that computed it
+    params       TEXT NOT NULL,   -- JSON: {"top": N, "buckets": N}
+    payload      TEXT NOT NULL    -- JSON serialisation of Summary
+);
+```
+
+The database's statistics about itself: entry total, wall-clock range, annotation
+counts, complete per-facet breakdowns (process / subsystem / category / level) and
+the temporal histogram — everything
+[`summary`](../cli/summary.md) reports, computed once and stored.
+
+- Written as the final `stats` phase of `extract`, and rewritten by `annotate`
+  (which changes the annotation counts). Recomputing costs six-plus full passes
+  over `logs`; paying it at the end of a run that has already read every byte
+  means readers get the statistics instantly instead of freezing on open.
+- `CHECK (id = 1)` makes "at most one cached summary" a schema-level invariant, so
+  a rewrite can only ever REPLACE the previous row.
+- Read with `load_summary()` (`ops/summary/cache.py`), which returns `None` when
+  the table or row is absent. **There is no fallback compute on the read path**: a
+  database extracted before this table existed reports "not evaluated" rather than
+  silently spending a minute recomputing. Re-extract to populate it.
+- A payload written by an incompatible version is ignored with a warning, not
+  raised — the cache is a convenience, never evidence. Nothing in it is
+  authoritative: every value is derivable from `logs` and the annotation tables.
 
 ## Annotation tables (created by `annotate`)
 

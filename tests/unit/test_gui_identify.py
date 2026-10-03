@@ -27,7 +27,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 import gui.controllers.identify as identify_ctrl  # noqa: E402
 import gui.recent_store as recent_store  # noqa: E402
 import gui.settings_store as settings_store  # noqa: E402
-from forensic_aul import AcquisitionAborted  # noqa: E402
+from forensic_aul import OperationCancelled  # noqa: E402
 from forensic_aul.outcomes import DiffResult, IdentifyResult  # noqa: E402
 from gui.recent_store import RecentStore  # noqa: E402
 from gui.settings_store import SettingsStore  # noqa: E402
@@ -78,10 +78,15 @@ def _fake_result(sqlite_path="/tmp/x-identified.db", retained=3, excluded=1) -> 
 class _ThreadRunner:
     """Stands in for OperationScreen.run_task: runs the task on a real thread.
 
-    The finished/failed callbacks are recorded, not auto-fired, so a test can join
-    the worker (after pressing Skip/Continue/Abort from the main thread) and then
-    dispatch the recorded callback synchronously — mirroring the real GUI-thread
-    delivery without needing a spinning Qt event loop.
+    The finished/failed/cancelled callbacks are recorded, not auto-fired, so a
+    test can join the worker (after pressing Skip/Continue/Abort from the main
+    thread) and then dispatch the recorded callback synchronously — mirroring the
+    real GUI-thread delivery without needing a spinning Qt event loop.
+
+    The three-way routing below mirrors gui.workers.base.Worker.run exactly: an
+    OperationCancelled goes to on_cancelled as the OBJECT, anything else to
+    on_failed as a formatted traceback. A test that only checked "did we get to
+    SETUP" would pass either way, so the split has to be real here.
     """
 
     def __init__(self) -> None:
@@ -89,11 +94,13 @@ class _ThreadRunner:
         self._task = None
         self._on_finished = None
         self._on_failed = None
+        self._on_cancelled = None
         self._result = None
         self._error: BaseException | None = None
 
-    def run_task(self, task, on_finished, on_failed=None):
+    def run_task(self, task, on_finished, on_failed=None, on_cancelled=None):
         self._on_finished, self._on_failed = on_finished, on_failed
+        self._on_cancelled = on_cancelled
 
         def _body():
             try:
@@ -110,7 +117,10 @@ class _ThreadRunner:
         assert self.thread is not None
         self.thread.join(timeout)
         assert not self.thread.is_alive(), "worker thread did not finish in time"
-        if self._error is not None:
+        if isinstance(self._error, OperationCancelled):
+            if self._on_cancelled is not None:
+                self._on_cancelled(self._error)
+        elif self._error is not None:
             import traceback
 
             tb = "".join(traceback.format_exception(
@@ -205,7 +215,7 @@ def test_abort_during_still_returns_to_setup(qapp, monkeypatch):
     _select_device(screen)
     screen._out.set_path("/tmp/out")
     screen._ctrl.start()
-    screen._ctrl.abort()  # sets the flag + wakes the pause → AcquisitionAborted
+    screen._ctrl.abort()  # cancels the token + wakes the pause → OperationCancelled
     runner.join_and_dispatch()
     assert screen._setup_panel.isVisibleTo(screen), "abort should return to SETUP"
     assert screen._result_host.count() == 1, "an informational message is shown"
@@ -321,18 +331,49 @@ def test_kb_dir_points_at_the_shipped_knowledge_base():
     assert identify_ctrl._KB_DIR.is_dir()
 
 
-def test_is_aborted_parses_the_final_exception_type():
-    aborted_tb = (
-        "Traceback (most recent call last):\n"
-        '  File "x.py", line 1, in run\n'
-        "forensic_aul.ops.acquisition.acquire.AcquisitionAborted: user declined\n"
+def test_a_crash_is_never_reported_as_an_abort(qapp, monkeypatch):
+    """A failure whose MESSAGE mentions an abort must not be read as one.
+
+    This is the trap the controller's old traceback-sniffing existed to avoid,
+    and it is now closed structurally rather than textually: a real stop arrives
+    on the worker's `cancelled` signal carrying the exception object, everything
+    else on `failed`, so the WORDING of an unrelated error cannot change the
+    verdict. Asserting on the message, not just on the SETUP state, is the point
+    — both paths return to SETUP, so a state-only check would pass either way.
+    """
+    screen = _make_screen()
+    runner = _install_fake_workflow(monkeypatch, screen, drives="none")
+    monkeypatch.setattr(
+        identify_ctrl, "run_identify_workflow",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("wrapped an AcquisitionAborted somewhere")
+        ),
     )
-    assert identify_ctrl._is_aborted(aborted_tb)
-    # An unrelated error merely MENTIONING the word must not count as an abort.
-    other_tb = (
-        "Traceback (most recent call last):\n"
-        '  File "x.py", line 1, in run\n'
-        "RuntimeError: wrapped an AcquisitionAborted somewhere\n"
-    )
-    assert not identify_ctrl._is_aborted(other_tb)
-    assert not identify_ctrl._is_aborted("")
+    shown: list[tuple[bool, str]] = []
+    screen.show_result = lambda ok, message: shown.append((ok, message))
+
+    _select_device(screen)
+    screen._out.set_path("/tmp/out")
+    screen._ctrl.start()
+    runner.join_and_dispatch()
+
+    assert shown, "a failure must be surfaced"
+    _, message = shown[-1]
+    assert "wrapped an AcquisitionAborted somewhere" in message
+    assert not message.startswith("Aborted"), "a crash was misreported as an abort"
+
+
+def test_an_abort_reports_the_abort_wording(qapp, monkeypatch):
+    """The other half: a real stop is reported as one, and says what was kept."""
+    screen = _make_screen()
+    runner = _install_fake_workflow(monkeypatch, screen, drives="still")
+    shown: list[tuple[bool, str]] = []
+    screen.show_result = lambda ok, message: shown.append((ok, message))
+
+    _select_device(screen)
+    screen._out.set_path("/tmp/out")
+    screen._ctrl.start()
+    screen._ctrl.abort()
+    runner.join_and_dispatch()
+
+    assert shown and shown[-1][1].startswith("Aborted")

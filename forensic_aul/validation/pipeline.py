@@ -41,6 +41,20 @@ def _is_sqlite(path: Path) -> bool:
     return path.is_file() and path.suffix.lower() in {".db", ".sqlite", ".sqlite3"}
 
 
+def _is_packaged_acquisition(path: Path) -> bool:
+    """True for an acquisition the extraction layer can unpack into logarchive shape
+    (a ``.faul`` container, a sysdiagnose ``.tar.gz``, an FFS ``.zip``).
+
+    Deliberately a file/extension pre-filter only, NOT a content sniff: the real,
+    content-based detection lives in ``ops.extraction.source`` and stays the single
+    source of truth. This just decides which branch to hand the file to; a file that
+    passes here and turns out to be something else fails there, with that layer's
+    own error message."""
+    return path.is_file() and (
+        path.suffix.lower() in {".faul", ".zip"} or path.name.lower().endswith(".tar.gz")
+    )
+
+
 # ── Resource manager for the ndjson + DB temp paths ───────────────────────────
 
 class _Resources:
@@ -150,8 +164,17 @@ def _dispatch(
         db_path = _extract_logarchive(source, args, resources, keep_paths)
         return _run_compare(db_path, ref_path, args)
 
-    log.error(f"error: cannot interpret SOURCE {source} — "
-        f"expected a .logarchive directory or a SQLite database file.")
+    # Mode 5: a packaged acquisition (.faul / sysdiagnose .tar.gz / FFS .zip). The
+    # log data inside is what a logarchive holds, but `log show` will not read it
+    # without an Info.plist — so on macOS we build one and validate it like any
+    # other archive. This is the mode that matters most: it checks the acquisitions
+    # analysts actually receive, not just the ones a Mac produced.
+    if _is_packaged_acquisition(source):
+        return _run_packaged_source(source, args, resources, keep_paths)
+
+    log.error(f"error: cannot interpret SOURCE {source} — expected a .logarchive "
+        f"directory, a packaged acquisition (.faul / .zip / .tar.gz), or a SQLite "
+        f"database file.")
     return 1
 
 
@@ -276,6 +299,56 @@ def _make_reference(
         keep_paths.add(ref.resolve())
         log.info(f"Reference ndjson kept at: {ref}")
     return ref
+
+
+# ── Packaged acquisitions (.faul / sysdiagnose / FFS zip) ─────────────────────
+
+def _run_packaged_source(
+    source: Path,
+    args: argparse.Namespace,
+    resources: _Resources,
+    keep_paths: set[Path],
+) -> int:
+    """Validate a packaged acquisition against Apple's ``log show``.
+
+    The evidence analysts actually receive is a sysdiagnose or a full-filesystem
+    zip, not a Mac-produced ``.logarchive`` — but ``log show`` refuses those, so
+    until now the most representative material was the least testable. The
+    extraction layer already normalises such an archive into logarchive shape; all
+    that is missing is the ``Info.plist`` wrapper, which is derivable from the
+    tracev3 headers (see validation.logarchive_build).
+
+    An explicit REFERENCE ndjson still works everywhere — only the auto-generated
+    one needs macOS, because only `log show` can produce ground truth.
+    """
+    from forensic_aul.ops.extraction.sources import prepare_source
+    from forensic_aul.validation.logarchive_build import build_logarchive
+    from forensic_aul.validation.platform import is_macos
+
+    if args.reference is None and not is_macos():
+        log.error("error: on this OS a packaged acquisition needs an explicit reference "
+                  "ndjson (only Apple's `log show`, macOS-only, can generate one).")
+        return 1
+    if args.reference is not None and not args.reference.is_file():
+        log.error(f"error: reference ndjson not found: {args.reference}")
+        return 1
+
+    # integrity="off": this is a QA run over a copy, not an acquisition — hashing
+    # a multi-GB zip here would cost minutes and attest nothing the real extract
+    # has not already attested.
+    log.info(f"Unpacking packaged acquisition: {source}")
+    work_dir = resources.tempdir(prefix="forensic_aul_pkg_")
+    with prepare_source(source, work_dir=work_dir, integrity="off") as prepared:
+        archive = build_logarchive(
+            prepared.logarchive_root, work_dir, name=source.stem or "acquisition"
+        )
+        if getattr(args, "keep_archive", False):
+            keep_paths.add(work_dir.resolve())
+            log.info(f"Synthesised logarchive kept at: {archive}")
+
+        ref_path = args.reference or _make_reference(archive, args, resources, keep_paths)
+        db_path = _extract_logarchive(archive, args, resources, keep_paths)
+        return _run_compare(db_path, ref_path, args)
 
 
 def _extract_logarchive(

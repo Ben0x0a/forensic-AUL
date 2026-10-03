@@ -58,8 +58,8 @@ def _stub_run_task(screen):
     """
     calls: list[tuple] = []
 
-    def record(task, on_finished, on_failed=None):
-        calls.append((task, on_finished, on_failed))
+    def record(task, on_finished, on_failed=None, on_cancelled=None):
+        calls.append((task, on_finished, on_failed, on_cancelled))
 
     screen.run_task = record  # type: ignore[method-assign]
     return calls
@@ -71,6 +71,19 @@ def _make_extract():
 
 def _make_acquire():
     return AcquireScreen(SettingsStore(), RecentStore())
+
+
+def _buttons_in(layout):
+    """Return every direct-child QPushButton of a QHBoxLayout/QVBoxLayout, in order."""
+    return [
+        layout.itemAt(i).widget()
+        for i in range(layout.count())
+        if layout.itemAt(i).widget() is not None
+    ]
+
+
+def _button_named(layout, text):
+    return next(b for b in _buttons_in(layout) if b.text() == text)
 
 
 # ── View / controller separation ────────────────────────────────────────────────
@@ -114,6 +127,17 @@ def test_extract_prefill_populates_fields(qapp):
     assert (ext.case_text(), ext.imei_text(), ext.exhibit_text(),
             ext.analyst_text(), ext.source_path()) == (
         "C-9", "42", "E", "Bob", "/tmp/x.logarchive")
+
+
+# ── Extract: G6 — source picker must be able to browse to a .logarchive dir ──────
+
+def test_extract_source_picker_can_browse_to_a_directory(qapp):
+    """A file-open dialog cannot return a directory pick, so the source field —
+    which accepts a .logarchive *folder* as well as a .tar.gz/.faul/.zip *file*
+    — must use PathPicker's "any" mode (two explicit Browse affordances), not
+    the plain "file" mode that only opens a file dialog."""
+    ext = _make_extract()
+    assert ext._src._mode == "any"
 
 
 # ── Extract: acquisition-sidecar auto-fill ────────────────────────────────────────
@@ -180,6 +204,60 @@ def test_acquire_validation_blocks_without_case(qapp, tmp_path):
     assert acq._result_host.count() == 1
 
 
+# ── Acquire: G5 — validation must agree with the form's required=True markers ────
+# Case, Analyst, Device and Output are all marked required in the view; the
+# controller previously validated only Case and Output, so a run with no device
+# selected passed udid=None into acquire() silently. Research into acquire()
+# confirmed udid=None is *not* a safe "auto-select the only device" path: with
+# more than one device connected it silently hands the pick to pymobiledevice3's
+# usbmux enumeration order — an arbitrary device pick in a chain-of-custody tool.
+# So validation now matches the marker on all four fields rather than dropping it.
+
+class _FakeDevice:
+    """A minimal stand-in for DeviceInfo — just what DevicePicker.set_devices reads."""
+
+    device_name = "Test iPhone"
+    product_type = "iPhone14,2"
+    product_version = "17.0"
+    imei = "356000000000001"
+    udid = "00008030-ABCDEF012345"
+
+
+def test_acquire_validation_blocks_without_analyst(qapp, tmp_path):
+    acq = _make_acquire()
+    calls = _stub_run_task(acq)
+    acq._case.setText("CASE-1")
+    acq._device.set_devices([_FakeDevice()])
+    acq._out.set_path(str(tmp_path))
+    acq._ctrl.start()
+    assert not calls, "acquire dispatched without an analyst"
+    assert acq._result_host.count() == 1
+
+
+def test_acquire_validation_blocks_without_device(qapp, tmp_path):
+    acq = _make_acquire()
+    calls = _stub_run_task(acq)
+    acq._case.setText("CASE-1")
+    acq._analyst.setText("Ana")
+    acq._out.set_path(str(tmp_path))
+    # No rescan ever ran — the combo still shows its "No device scanned…"
+    # placeholder, whose data is None.
+    acq._ctrl.start()
+    assert not calls, "acquire dispatched with udid=None — an arbitrary device pick"
+    assert acq._result_host.count() == 1
+
+
+def test_acquire_dispatches_when_all_required_fields_are_set(qapp, tmp_path):
+    acq = _make_acquire()
+    calls = _stub_run_task(acq)
+    acq._case.setText("CASE-1")
+    acq._analyst.setText("Ana")
+    acq._device.set_devices([_FakeDevice()])  # combo auto-selects the one device
+    acq._out.set_path(str(tmp_path))
+    acq._ctrl.start()
+    assert len(calls) == 1, "a complete form (all four required fields) should dispatch"
+
+
 class _FakeAcquireResult:
     logarchive_path = "/tmp/c.logarchive"
     logarchive_sha256 = "abc123def456"
@@ -208,3 +286,170 @@ def test_acquire_on_done_builds_payload_and_navigates(qapp):
     acq.navigate = lambda screen_id, **kw: navigated.append((screen_id, kw))
     acq._ctrl.continue_to_extract()
     assert navigated == [("extract", {"prefill": payload})]
+
+
+# ── Button language: one primary (violet) button per action row ─────────────────
+# Every terminal state (idle / running / done) may show at most one
+# variant="primary" button — everything else must be variant="ghost". Covers
+# both AcquireScreen (persistent buttons, relabelled in place) and
+# ExtractScreen (the action row is rebuilt per state via clear_layout).
+
+def test_acquire_idle_state_has_one_primary_button(qapp):
+    acq = _make_acquire()
+    assert acq._start_btn.property("variant") == "primary"
+    assert acq._reset_btn.property("variant") == "ghost"
+    assert acq._continue_btn.isHidden(), "Continue shortcut is idle-only, not visible yet"
+
+
+def test_acquire_running_state_keeps_primary_relabelled(qapp):
+    acq = _make_acquire()
+    acq.set_running(True)
+    # Running swaps neither the widget nor its variant — only text + enabled —
+    # so the row still shows exactly one primary button, now disabled.
+    assert acq._start_btn.property("variant") == "primary"
+    assert acq._start_btn.text() == "Acquiring…"
+    assert not acq._start_btn.isEnabled()
+
+
+def test_acquire_done_state_demotes_start_to_ghost(qapp):
+    acq = _make_acquire()
+    acq.set_running(False)
+    acq.set_continue_visible(True)
+    # "Continue to Extract" is now the row's forward action; "Start
+    # acquisition" must be demoted so only one primary button remains.
+    assert acq._continue_btn.property("variant") == "primary"
+    assert acq._start_btn.property("variant") == "ghost"
+
+    acq.set_continue_visible(False)  # a fresh run / reset restores it
+    assert acq._start_btn.property("variant") == "primary"
+
+
+def test_extract_idle_state_has_one_primary_button(qapp):
+    ext = _make_extract()
+    ext.show_idle_actions()
+    buttons = _buttons_in(ext._actions)
+    primaries = [b for b in buttons if b.property("variant") == "primary"]
+    assert len(primaries) == 1
+    assert primaries[0].text() == "Start extraction"
+    assert all(b.property("variant") in ("primary", "ghost") for b in buttons)
+
+
+def test_extract_running_state_keeps_primary_relabelled(qapp):
+    """The RUNNING row is a ghost Cancel plus the relabelled primary.
+
+    (Cancel was added by the cancellation work; the original assertion of a
+    single button became an assertion that exactly ONE of them is primary — the
+    property it was really guarding is that the running state relabels the
+    primary rather than swapping in a ghost.)
+    """
+    ext = _make_extract()
+    ext.show_running_actions()
+    buttons = _buttons_in(ext._actions)
+    primaries = [b for b in buttons if b.property("variant") == "primary"]
+    assert len(primaries) == 1, (
+        "the running state must relabel the primary button, not swap in a ghost"
+    )
+    running = primaries[0]
+    assert running.text() == "Extracting…"
+    assert not running.isEnabled()
+    ghosts = [b for b in buttons if b.property("variant") == "ghost"]
+    assert [b.text() for b in ghosts] == ["Cancel"]
+
+
+def test_extract_done_state_has_one_primary_button(qapp):
+    ext = _make_extract()
+    ext.show_done_actions()
+    buttons = _buttons_in(ext._actions)
+    primaries = [b for b in buttons if b.property("variant") == "primary"]
+    assert len(primaries) == 1, "exactly one primary button in the done-state row"
+    assert primaries[0].text() == "Open in Exploit"
+    assert _button_named(ext._actions, "Extract new").property("variant") == "ghost"
+    assert _button_named(ext._actions, "Export").property("variant") == "ghost"
+
+
+# ── Extract: Notes field ─────────────────────────────────────────────────────────
+
+def test_extract_notes_field_exists_and_is_readable(qapp):
+    ext = _make_extract()
+    ext._notes.setText("  seized during a consent search  ")
+    assert ext.notes_text() == "seized during a consent search"
+
+
+def test_extract_notes_reach_run_extract(qapp, tmp_path, monkeypatch):
+    """Notes typed on Extract must reach run_extract.
+
+    Acquire already collected notes and the op already accepted them, so the
+    hand-off silently dropped case context an examiner had deliberately written
+    down (review item G8).
+    """
+    ext = _make_extract()
+    src = tmp_path / "case.logarchive"
+    src.mkdir()
+    ext._src.set_path(str(src))
+    ext._out.set_path(str(tmp_path / "out.sqlite"))
+    ext.fill_fields(case="CASE-1", imei="123456", only_empty=False)
+    ext._notes.setText("collected in the lab")
+
+    captured: dict = {}
+
+    def fake_run_extract(*args, **kwargs):
+        captured.update(kwargs)
+        raise RuntimeError("stop before any real extraction runs")
+
+    import gui.controllers.pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module, "run_extract", fake_run_extract)
+    calls = _stub_run_task(ext)
+    ext._ctrl.start()
+    assert len(calls) == 1
+    task = calls[0][0]
+    try:
+        task()
+    except RuntimeError:
+        pass
+    assert captured.get("notes") == "collected in the lab"
+
+
+# ── Extract: recents must never populate the output field ───────────────────────
+
+def test_extract_has_no_recent_databases_list(qapp):
+    """The output field is a destination the operator is about to write to; an
+    existing case.sqlite is neither a safe autofill for it (one Overwrite tick
+    from clobbering a previous case) nor a valid Source (it is not a raw
+    logarchive/.tar.gz/.zip). So, unlike Acquire, Extract has no recents list
+    at all — see the WHY comment above the Output section in screens_pipeline.py."""
+    ext = _make_extract()
+    assert not hasattr(ext, "_recent_list")
+    assert not hasattr(ext, "_pick_db")
+
+
+def test_extract_jobs_default_comes_from_settings(qapp, tmp_path, monkeypatch):
+    """The extractJobs preference pre-selects the dropdown (Phase 4 wiring)."""
+    import gui.settings_store as settings_store
+    from gui.settings_store import SettingsStore
+    from gui.views.screens_pipeline import ExtractScreen, _job_options
+
+    monkeypatch.setattr(settings_store, "_SETTINGS_PATH", tmp_path / "settings.json")
+    options = _job_options()
+    if len(options) < 2:
+        pytest.skip("host offers too few core choices to test a non-Auto default")
+
+    store = SettingsStore()
+    store.set("extractJobs", options[-1])
+    screen = ExtractScreen(store, RecentStore())
+    assert screen.jobs_value() == options[-1]
+    screen.deleteLater()
+
+
+def test_extract_jobs_falls_back_to_auto_on_a_smaller_host(qapp, tmp_path, monkeypatch):
+    """A preference the host cannot honour must not invent a core count."""
+    import gui.settings_store as settings_store
+    from gui.settings_store import SettingsStore
+    from gui.views.screens_pipeline import ExtractScreen
+
+    monkeypatch.setattr(settings_store, "_SETTINGS_PATH", tmp_path / "settings.json")
+    store = SettingsStore()
+    store.set("extractJobs", 256)          # more cores than any test host has
+    screen = ExtractScreen(store, RecentStore())
+    assert screen.jobs_value() == 0        # Auto
+    screen.deleteLater()

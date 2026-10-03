@@ -16,13 +16,16 @@ WHY relay busyChanged/progressChanged: the shell hooks a screen's own signals
 (see OperationScreen) to reflect a running op in its chrome. Because the wizard now
 sits inside the hub, the shell sees only the hub — so the hub must forward the
 child's signals under its own name for the wizard's progress to still reach it.
+The same argument applies to ``is_busy()`` / ``request_cancel()``: the shutdown
+path questions the screens in the shell's stack, and the hub is what it finds
+there.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QTabWidget, QVBoxLayout, QWidget
 
 from gui.recent_store import RecentStore
@@ -58,6 +61,11 @@ class IdentifyHub(QWidget):
         # in-screen switcher (styled by the theme's QTabBar block).
         self._tabs = QTabWidget()
         self._tabs.setDocumentMode(True)
+        # Match the Exploit tabs: no elision, no stretch, no base rule.
+        tab_bar = self._tabs.tabBar()
+        tab_bar.setElideMode(Qt.TextElideMode.ElideNone)
+        tab_bar.setExpanding(False)
+        tab_bar.setDrawBase(False)
         self._tabs.addTab(self._run, "Run")
         self._tabs.addTab(self._results, "Results")
 
@@ -77,6 +85,23 @@ class IdentifyHub(QWidget):
         """
         self._run.navigate = navigate
         self._results.navigate = navigate
+
+    # ── Busy / cancellation relay ─────────────────────────────────────────────────
+
+    def is_busy(self) -> bool:
+        """True while the wizard is running (the results viewer never is).
+
+        WHY the hub must answer this: the shell asks each screen in its stack,
+        and the hub is what the stack holds. Before this existed the shutdown
+        path looked for a ``_thread`` attribute, which a plain ``QWidget`` like
+        this one does not have — so a running identify was silently reported as
+        idle and torn down mid-run on close.
+        """
+        return bool(self._run.is_busy())
+
+    def request_cancel(self) -> bool:
+        """Ask the wizard to abort; True if a request was actually made."""
+        return bool(self._run.request_cancel())
 
     # ── Tab access ────────────────────────────────────────────────────────────────
 

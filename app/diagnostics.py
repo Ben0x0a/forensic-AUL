@@ -1,12 +1,18 @@
-"""Forensic crash-report capture: on any unhandled exception, write one structured
-report holding the traceback and the type + value of every variable in every stack
-frame — enough to debug a run without reproducing it.
+"""Forensic diagnostic capture: write one structured report holding the type + value
+of every variable in every stack frame — enough to debug a run without reproducing
+it. Two kinds share one format:
+
+* a **crash** report, written automatically when something raises;
+* a **bug** report, written on demand when the tool *returns* but the answer is
+  wrong — the harder failure, because there is no traceback and the state that
+  explains it lives only in the running frames.
 
 Defines : ``install_excepthook`` (global ``sys``/``threading`` hooks),
           ``capture_exception`` (call from an ``except`` block that swallows and
-          returns a code), ``write_crash_report`` (the guarded writer), and the
-          sensitivity vocabulary + ``classify`` used to split captured variables
-          into ``safe`` and ``sensitive`` buckets.
+          returns a code), ``write_bug_report`` (operator-triggered, no exception),
+          ``write_crash_report`` (the guarded writer), ``list_reports`` (find/count
+          saved reports by kind), and the sensitivity vocabulary + ``classify``
+          used to split captured variables into ``safe`` and ``sensitive`` buckets.
 Used by : launcher.cli / launcher.gui (install the hooks at start-up), and the
           broad ``except`` handlers in app.extract_session and launcher.cmds.*.
           app.sanitize consumes the classification vocabulary; launcher.cmds.
@@ -21,6 +27,11 @@ Design:
   ``capture_exception`` covers the paths that catch-log-and-``return 1`` and so
   never reach the hook. Both walk the traceback so every frame's ``f_locals`` is
   captured with no instrumentation sprinkled through the codebase.
+- ``write_bug_report`` has no traceback to walk, so it walks EVERY LIVE THREAD
+  instead (``sys._current_frames``). In a GUI the values that explain a wrong
+  answer are usually in a worker thread, not the one that pressed the button.
+- BOTH kinds emit the same schema through the same writer, so one reader and one
+  redaction pass serve both; only ``kind`` and the absence of an exception differ.
 - Every value passes through ``_summarise``, which NEVER dumps a whole DB
   connection / batch / cache (they are reduced to type + size) and caps string
   length, item count, recursion depth and per-frame bytes.
@@ -54,11 +65,28 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 # Bumped when the report structure changes so a downstream reader can branch on it.
-REPORT_SCHEMA = "faul.crash-report/1"
+# /2 added ``kind`` and the optional per-frame ``thread`` label (bug reports).
+REPORT_SCHEMA = "faul.diagnostic-report/2"
+
+# Report kinds. One schema covers both; ``kind`` is how a reader tells them apart.
+KIND_CRASH = "crash"
+KIND_BUG = "bug"
+
+# Filename prefix per kind. They differ so a shell can COUNT one kind without the
+# other: a control that decides between "open error reports" and "report bug…" must
+# count crashes only — counting bug reports is self-fulfilling, since filing one
+# would make the tool claim it had errored.
+_FILENAME_PREFIX = {KIND_CRASH: "faul_crash_", KIND_BUG: "faul_bug_"}
 
 # Sensitivity bucket labels — the two sections the operator reviews before sharing.
 SAFE = "safe"
 SENSITIVE = "sensitive"
+
+# Frames kept per thread in a bug report, innermost first. A module constant, not a
+# CrashConfig knob: it bounds the REPORTER, not the tool, so it is not something an
+# operator would ever tune — while a runaway recursion would otherwise dump
+# thousands of near-identical frames.
+_MAX_STACK_DEPTH = 60
 
 
 # ── configuration ─────────────────────────────────────────────────────────────
@@ -341,36 +369,96 @@ def _is_noise(name: str, value: Any) -> bool:
     return isinstance(value, _NOISE_TYPES)
 
 
+def _frame_entry(frame: Any, lineno: int, cfg: CrashConfig) -> dict[str, Any]:
+    """One report entry for one live frame: where it is, plus its locals summarised
+    and split into ``safe`` / ``sensitive``. A per-frame byte budget stops one huge
+    frame bloating the report. Shared by the traceback walk (crash) and the
+    live-thread walk (bug), so both kinds produce identical frame records."""
+    code = frame.f_code
+    buckets: dict[str, dict[str, Any]] = {SAFE: {}, SENSITIVE: {}}
+    used = 0
+    truncated = False
+    for var_name, value in list(frame.f_locals.items()):
+        if _is_noise(var_name, value):
+            continue
+        summary = _summarise(value, cfg, cfg.max_depth)
+        size = _sizeof(summary)
+        if used + size > cfg.max_frame_bytes:
+            truncated = True
+            break
+        buckets[classify(var_name, value)][var_name] = summary
+        used += size
+    entry: dict[str, Any] = {
+        "file": code.co_filename,
+        "lineno": lineno,
+        "function": code.co_name,
+        "code": linecache.getline(code.co_filename, lineno).strip() or None,
+        "locals": buckets,
+    }
+    if truncated:
+        entry["locals_truncated"] = True
+    return entry
+
+
 def _collect_frames(tb: Any, cfg: CrashConfig) -> list[dict[str, Any]]:
-    """One entry per stack frame (outermost first, crash site last). Each frame's
-    locals are summarised and split into ``safe`` / ``sensitive``. A per-frame byte
-    budget stops one huge frame bloating the report."""
+    """One entry per traceback frame (outermost first, crash site last)."""
+    return [_frame_entry(frame, lineno, cfg) for frame, lineno in traceback.walk_tb(tb)]
+
+
+# ── live-thread stacks (the bug report, which has no traceback to walk) ─────────
+
+def _is_reporter_frame(frame: Any) -> bool:
+    """True when *frame* belongs to this module — i.e. it is the reporter's own."""
+    try:
+        return frame.f_globals.get("__name__") == __name__
+    except Exception:  # noqa: BLE001 - an exotic frame must not crash the probe.
+        return False
+
+
+def _thread_chain(innermost: Any) -> list[tuple[Any, int]]:
+    """A thread's frames, OUTERMOST first (matching the traceback order), with the
+    reporter's own frames trimmed off the inner end and the depth capped.
+
+    WHY trim rather than skip: the obvious guard — "if this stack contains one of my
+    frames, skip the whole thread" — silently discards the calling thread, which is
+    normally the most interesting one. It is also invisible: the report still looks
+    valid, just with nothing in it. Only the frames INNER than the reporter are
+    noise; every frame outside it is the application state we came for.
+    """
+    frame = innermost
+    # The reporter's frames form a contiguous run at the INNER end of the calling
+    # thread's stack (this module is what called sys._current_frames), so walking
+    # outward past them removes exactly the reporter and nothing else.
+    while frame is not None and _is_reporter_frame(frame):
+        frame = frame.f_back
+    chain: list[tuple[Any, int]] = []
+    while frame is not None and len(chain) < _MAX_STACK_DEPTH:
+        chain.append((frame, frame.f_lineno))
+        frame = frame.f_back
+    return list(reversed(chain))
+
+
+def _collect_thread_frames(cfg: CrashConfig) -> list[dict[str, Any]]:
+    """Every live thread's frames, the calling thread first, each entry labelled with
+    its thread. Per-thread guarded: ``sys._current_frames`` is a snapshot, so a
+    thread can finish while we walk it — losing one racing thread is acceptable,
+    raising out of the reporter is not."""
+    names = {t.ident: t.name for t in threading.enumerate()}
+    current = threading.get_ident()
+    snapshot = sys._current_frames()  # noqa: SLF001 - the only way to reach live stacks.
+    # Calling thread first: it is the one the operator was interacting with.
+    order = sorted(snapshot, key=lambda tid: (tid != current, names.get(tid, ""), tid))
+
     frames: list[dict[str, Any]] = []
-    for frame, lineno in traceback.walk_tb(tb):
-        code = frame.f_code
-        buckets: dict[str, dict[str, Any]] = {SAFE: {}, SENSITIVE: {}}
-        used = 0
-        truncated = False
-        for var_name, value in list(frame.f_locals.items()):
-            if _is_noise(var_name, value):
-                continue
-            summary = _summarise(value, cfg, cfg.max_depth)
-            size = _sizeof(summary)
-            if used + size > cfg.max_frame_bytes:
-                truncated = True
-                break
-            buckets[classify(var_name, value)][var_name] = summary
-            used += size
-        entry: dict[str, Any] = {
-            "file": code.co_filename,
-            "lineno": lineno,
-            "function": code.co_name,
-            "code": linecache.getline(code.co_filename, lineno).strip() or None,
-            "locals": buckets,
-        }
-        if truncated:
-            entry["locals_truncated"] = True
-        frames.append(entry)
+    for tid in order:
+        label = f"{names.get(tid, 'unknown')} (tid={tid})"
+        try:
+            for frame, lineno in _thread_chain(snapshot[tid]):
+                entry = _frame_entry(frame, lineno, cfg)
+                entry["thread"] = label
+                frames.append(entry)
+        except Exception:  # noqa: BLE001 - a vanished/racing thread must not sink the report.
+            log.debug("Could not capture stack for thread %s", label, exc_info=True)
     return frames
 
 
@@ -446,13 +534,14 @@ def _metadata(context: dict[str, Any] | None) -> dict[str, Any]:
 
 # ── report assembly + hooks ────────────────────────────────────────────────────
 
-def _report_path(cfg: CrashConfig) -> Path:
-    """A filesystem-safe, collision-free path: no colons in the timestamp; pid
-    suffix; a numeric suffix only if a same-second same-pid file already exists
-    (never overwrite an existing report)."""
+def _report_path(cfg: CrashConfig, kind: str) -> Path:
+    """A filesystem-safe, collision-free path: kind-specific prefix (so one kind can
+    be counted without the other); no colons in the timestamp; pid suffix; a numeric
+    suffix only if a same-second same-pid file already exists (never overwrite an
+    existing report)."""
     cfg.crash_dir.mkdir(parents=True, exist_ok=True)
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H%M%SZ")
-    base = f"faul_crash_{stamp}_p{os.getpid()}"
+    base = f"{_FILENAME_PREFIX[kind]}{stamp}_p{os.getpid()}"
     path = cfg.crash_dir / f"{base}.json"
     counter = 1
     while path.exists():
@@ -470,6 +559,7 @@ def _build_report(
 ) -> dict[str, Any]:
     return {
         "schema": REPORT_SCHEMA,
+        "kind": KIND_CRASH,
         "tool": "forensic_AUL",
         "exception": {
             "type": _typename(exc),
@@ -481,6 +571,37 @@ def _build_report(
         "frames": _collect_frames(tb, cfg),
         "metadata": _metadata(context),
     }
+
+
+def _build_bug_report(cfg: CrashConfig, context: dict[str, Any] | None) -> dict[str, Any]:
+    """The same structure as a crash report, minus the two things a bug report has
+    no equivalent of. Keeping the keys present (as ``None``) rather than dropping
+    them means one reader and one redaction pass handle both kinds unchanged."""
+    return {
+        "schema": REPORT_SCHEMA,
+        "kind": KIND_BUG,
+        "tool": "forensic_AUL",
+        "exception": None,
+        "traceback": None,
+        "frames": _collect_thread_frames(cfg),
+        "metadata": _metadata(context),
+    }
+
+
+def _emit(report: dict[str, Any], cfg: CrashConfig, kind: str) -> Path | None:
+    """Write one report (JSON + best-effort Markdown twin) and return the JSON path.
+
+    The single writer for both kinds: whatever the JSON gains — an encoding, a
+    naming rule, a twin — both kinds gain together and cannot drift apart.
+    """
+    path = _report_path(cfg, kind)
+    # utf-8-sig so Windows tooling auto-detects the encoding (house rule).
+    path.write_text(
+        json.dumps(report, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8-sig",
+    )
+    _write_markdown_twin(report, path)
+    return path
 
 
 def write_crash_report(
@@ -500,19 +621,74 @@ def write_crash_report(
     try:
         if not cfg.enabled:
             return None
-        report = _build_report(exc_type, exc, tb, cfg, context)
-        path = _report_path(cfg)
-        # utf-8-sig so Windows tooling auto-detects the encoding (house rule).
-        path.write_text(
-            json.dumps(report, indent=2, ensure_ascii=False, default=str),
-            encoding="utf-8-sig",
-        )
-        _write_markdown_twin(report, path)
+        path = _emit(_build_report(exc_type, exc, tb, cfg, context), cfg, KIND_CRASH)
         log.error(f"Crash report written to {path}")
         return path
     except Exception:  # noqa: BLE001 - the handler must never raise over the original error.
         log.exception("Failed to write crash report")
         return None
+
+
+def write_bug_report(
+    context: dict[str, Any] | None = None,
+    *,
+    cfg: CrashConfig = _DEFAULT_CONFIG,
+) -> Path | None:
+    """Capture the tool's CURRENT live state as a bug report and return the JSON
+    path — or ``None`` if disabled/failed.
+
+    For the failure a crash report can never catch: the tool ran to completion,
+    exited cleanly, and produced a wrong answer. There is no exception and no
+    traceback, so every live thread's frames are captured instead — in a GUI the
+    values that explain the wrong answer are usually in a worker thread, not in the
+    one that pressed the button.
+
+    Guaranteed non-throwing, like its crash twin: an operator asking for help must
+    never be punished with a second failure.
+    """
+    try:
+        if not cfg.enabled:
+            return None
+        path = _emit(_build_bug_report(cfg, context), cfg, KIND_BUG)
+        log.info(f"Bug report written to {path}")
+        return path
+    except Exception:  # noqa: BLE001 - reporting a bug must not itself raise.
+        log.exception("Failed to write bug report")
+        return None
+
+
+def list_reports(
+    crash_dir: Path | None = None,
+    *,
+    kind: str | None = None,
+) -> list[Path]:
+    """Saved reports, newest first. *kind* selects ``KIND_CRASH`` or ``KIND_BUG``;
+    ``None`` returns both. The redacted ``*.shared.json`` copies are excluded.
+
+    WHY the kind filter: a shell offering one control for "something is wrong" picks
+    its caption from the number of ERROR reports. Counting bug reports there would
+    be self-fulfilling — filing one would make the tool claim it had errored.
+    """
+    directory = crash_dir if crash_dir is not None else _DEFAULT_CONFIG.crash_dir
+    if not directory.is_dir():
+        return []
+    prefixes = [_FILENAME_PREFIX[kind]] if kind else list(_FILENAME_PREFIX.values())
+    found: list[tuple[float, Path]] = []
+    for prefix in prefixes:
+        for path in directory.glob(f"{prefix}*.json"):
+            if path.name.endswith(".shared.json"):
+                continue
+            try:
+                found.append((path.stat().st_mtime, path))
+            except OSError:  # noqa: PERF203 - a report deleted mid-scan is simply skipped.
+                continue
+    return [p for _, p in sorted(found, reverse=True)]
+
+
+def report_kind(path: Path) -> str:
+    """``KIND_CRASH`` or ``KIND_BUG`` for a saved report, from its filename prefix.
+    Kept here beside the prefix table so the naming rule has one owner."""
+    return KIND_BUG if path.name.startswith(_FILENAME_PREFIX[KIND_BUG]) else KIND_CRASH
 
 
 def _write_markdown_twin(report: dict[str, Any], json_path: Path) -> None:

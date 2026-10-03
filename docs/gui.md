@@ -152,17 +152,32 @@ Known keys and defaults:
 | Key | Default | Meaning |
 |---|---|---|
 | `recentDb` | `True` | show the recent-databases list atop pipeline steps |
+| `recentsLimit` | `5` | entries each recents list keeps |
 | `tz` | `"utc"` | timestamp rendering — `"utc"` / `"local"` / `"raw"` |
-| `reduceMotion` | `False` | suppress non-essential transitions |
+| `contextSize` | `20` | rows either side of a line in "view context" |
+| `rowCap` | `5000` | most rows the analysis table loads at once |
+| `kbPath` | `""` | knowledge base to annotate with (empty = the shipped one) |
+| `extractJobs` | `0` | default parser jobs on Extract (0 = one per core) |
 
-Unknown keys in the file are ignored on load, so a hand-edited or stray file cannot
-inject state. The store never raises on I/O problems: a missing or corrupt file
-falls back to defaults, because a forensic tool must still open when its
-non-essential preferences file is unreadable.
+Every key has a consumer. A preference that changes nothing is worse than no
+preference, because it tells the analyst the tool behaves in a way it does not —
+`reduceMotion` was removed for exactly that reason, and `tz` was wired up rather
+than removed (see `format_timestamp` in `forensic_aul/engine/utils/time.py`).
+
+`tz` is **display only**. Stored and exported timestamps are always UTC so a case
+stays portable between examiners; the preference changes what the Exploit table
+and record drawer render, nothing else.
+
+Integer keys are read through `get_int`, which coerces and clamps to a bounded
+range — values arrive from a JSON file a user can hand-edit, and a string where an
+int belongs must not reach a spin box. Unknown keys are ignored on load, so a
+stray file cannot inject state. The store never raises on I/O problems: a missing
+or corrupt file falls back to defaults, because a forensic tool must still open
+when its non-essential preferences file is unreadable.
 
 **`RecentStore`** (`gui/recent_store.py`) → `~/.config/faul/recents.json`.
-Per-category lists (most recent first, de-duplicated, capped at 8 entries per
-category) of paths the user actually acquired / extracted / exported. Nothing is
+Per-category lists (most recent first, de-duplicated, capped by the
+`recentsLimit` preference) of paths the user actually acquired / extracted / exported. Nothing is
 fabricated — a forensic tool showing invented case rows would be misleading — and
 display is gated by the `recentDb` preference.
 
@@ -186,8 +201,13 @@ Honest limits as the code stands:
   database can still feel sluggish there. Keyword search is FTS-index-backed or
   absent — there is deliberately no silent `LIKE` fallback, so the search box is
   disabled on a database extracted with `fts=False`.
-- Long operations are cancellable only where the underlying operation offers it;
-  the Identify wizard's pauses are the interactive control points.
+- Acquire and Extract are cancellable: a **Cancel** button sits beside the
+  running-state button, and closing the window or pressing Ctrl+C in the
+  launching terminal asks the same question. Cancelling is cooperative — the
+  current file finishes and the database closes cleanly — so it takes a moment
+  rather than being instant, and the window stays responsive while it drains.
+  A cancelled extract leaves `<name>.sqlite.partial`, never a file at the output
+  path. The Identify wizard's pauses remain its own interactive control points.
 - The window is frameless by design and styled for macOS; it runs on other
   platforms but that is where it looks intended.
 

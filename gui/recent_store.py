@@ -25,17 +25,31 @@ _LOG = logging.getLogger(__name__)
 # Where history lives, beside settings.json. Consumed by: RecentStore.
 _RECENTS_PATH = Path.home() / ".config" / "faul" / "recents.json"
 
-# Keep at most this many entries per category — the mockup shows "last 3"; we
-# retain a few more for the dropdown. Consumed by: RecentStore.add.
+# Fallback cap when no limit is supplied — the mockup shows "last 3"; we retain
+# a few more for the dropdown. The `recentsLimit` preference overrides it.
+# Consumed by: RecentStore.__init__.
 _MAX_PER_KEY = 8
 
 
 class RecentStore:
-    """Per-category lists of recently-used paths (most-recent first)."""
+    """Per-category lists of recently-used paths (most-recent first).
 
-    def __init__(self) -> None:
+    *limit* caps each category (the ``recentsLimit`` preference). It is passed in
+    rather than read from SettingsStore here so this module stays free of any Qt
+    import — it is used by tests and by non-GUI callers.
+    """
+
+    def __init__(self, limit: int = _MAX_PER_KEY) -> None:
         self._data: dict[str, list[dict[str, str]]] = {}
+        self._limit = max(1, limit)
         self._load()
+
+    def set_limit(self, limit: int) -> None:
+        """Change the cap and trim existing lists to it (a live preference change)."""
+        self._limit = max(1, limit)
+        for key, entries in self._data.items():
+            self._data[key] = entries[:self._limit]
+        self._save()
 
     def add(self, key: str, path: str, meta: str = "") -> None:
         """Record *path* under *key* with a short *meta* string, de-duplicated."""
@@ -45,11 +59,13 @@ class RecentStore:
             "meta": meta,
             "ts": datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M"),
         })
-        self._data[key] = entries[:_MAX_PER_KEY]
+        self._data[key] = entries[:self._limit]
         self._save()
 
     def get(self, key: str) -> list[dict[str, str]]:
-        return list(self._data.get(key, []))
+        # Trim on read as well as on write: a limit lowered after the file was
+        # written must not surface entries the analyst asked not to keep.
+        return list(self._data.get(key, []))[:self._limit]
 
     # ── Persistence (best-effort, never raises) ─────────────────────────────────
 

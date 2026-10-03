@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from gui.widgets.components import make_icon
+from gui.widgets.components import icon_button, make_icon, repolish
 
 # Most records to retain — caps memory on long extraction runs. Consumed by:
 # LogPanel._append_record.
@@ -96,6 +96,18 @@ class LogPanel(QFrame):
     # the splitter give the space back, so without this the header would float in
     # a pane that keeps its old height.
     collapsedChanged = Signal(bool)
+
+    # Emitted when the DEBUG level button is toggled. attach_log_panel listens and
+    # raises/lowers the ROOT logger level to match.
+    #
+    # WHY the root level has to move rather than the panel simply filtering: with
+    # root at DEBUG, every ``log.debug`` in the parse path is formatted, timestamped
+    # and pushed across a queued Qt signal for a record the panel then discards —
+    # per chunkset, per firehose block, tens of millions of times. Leaving the
+    # records unemitted is the only way not to pay for them. The cost is that
+    # enabling DEBUG shows debug records only from that moment on, which is what
+    # a log level has always meant.
+    debugRequested = Signal(bool)
 
     # Header is fixed; the body collapses to leave only this strip visible.
     _HEADER_H = 28
@@ -169,7 +181,13 @@ class LogPanel(QFrame):
 
         row.addWidget(self._separator())
 
-        self._auto_button = self._icon_button("down", "Auto-scroll", self._toggle_auto, row=row)
+        # "to-bottom" (arrow onto a baseline), NOT the plain "down" chevron:
+        # the collapse button beside it shows a down chevron whenever the panel
+        # is collapsed, so the two controls were the same glyph meaning
+        # different things.
+        self._auto_button = self._icon_button(
+            "to-bottom", "Auto-scroll to newest", self._toggle_auto, row=row,
+        )
         self._pause_button = self._icon_button("stop", "Pause", self._toggle_pause, row=row)
         self._icon_button("x", "Clear display", self.clear, row=row)
         self._collapse_button = self._icon_button("up", "Collapse", self._toggle_collapsed, row=row)
@@ -177,12 +195,8 @@ class LogPanel(QFrame):
         return header
 
     def _icon_button(self, name, tooltip, slot, row=None) -> QPushButton:
-        button = QPushButton()
-        button.setProperty("iconbtn", "true")
-        button.setIcon(make_icon(name, 13, "#545a68"))
-        button.setToolTip(tooltip)
-        button.setCursor(Qt.CursorShape.PointingHandCursor)
-        button.clicked.connect(slot)
+        """The shared icon button, added to *row* — the header builds four of them."""
+        button = icon_button(name, tooltip, slot)
         if row is not None:
             row.addWidget(button)
         return button
@@ -202,16 +216,27 @@ class LogPanel(QFrame):
         is shown, append one line to the widget (which self-trims via its
         maximumBlockCount). No per-record full re-render — that is what previously
         starved the writer thread.
+
+        Pause freezes the *view* only, never the *data*: the deque append below
+        runs unconditionally. In a forensic tool the on-screen log must not
+        silently miss lines the sealed audit file still has — the previous
+        early-return here dropped every record logged while paused, and Resume
+        never caught up. Rendering (including the header count, which reports
+        what is on screen) is suppressed while paused and rebuilt in one O(n)
+        pass by _rerender() on Resume (see _toggle_pause), so this stays O(1)
+        per record whether paused or not.
         """
-        if self._paused:
-            return
         # If the buffer is full this append evicts the oldest record; adjust the
-        # running visible count for that eviction before it disappears.
-        if len(self._records) == _MAX_RECORDS:
+        # running visible count for that eviction before it disappears. Only
+        # while live — while paused the view is frozen and _rerender() on Resume
+        # recomputes the count from scratch, so there is nothing to adjust here.
+        if len(self._records) == _MAX_RECORDS and not self._paused:
             evicted_level = self._records[0][1]
             if self._enabled.get(evicted_level, True):
                 self._visible_count -= 1
         self._records.append((asctime, level_key, message))
+        if self._paused:
+            return
         if self._enabled.get(level_key, True):
             self._visible_count += 1
             self._body.append(self._format_line(asctime, level_key, message))
@@ -257,12 +282,13 @@ class LogPanel(QFrame):
         self._enabled[key] = not self._enabled[key]
         self._refresh_level_buttons()
         self._rerender()
+        if key == "DEBUG":
+            self.debugRequested.emit(self._enabled[key])
 
     def _refresh_level_buttons(self) -> None:
         for key, button in self._level_buttons.items():
             button.setProperty("on", "true" if self._enabled[key] else "false")
-            button.style().unpolish(button)
-            button.style().polish(button)
+            repolish(button)
 
     def _toggle_auto(self) -> None:
         self._auto_scroll = not self._auto_scroll
@@ -275,9 +301,28 @@ class LogPanel(QFrame):
         self._pause_button.setIcon(make_icon("play" if self._paused else "stop", 13, "#545a68"))
         self._sync_toggle(self._pause_button, self._paused)
         self._pause_button.setToolTip("Resume" if self._paused else "Pause")
+        if not self._paused:
+            # Resume: catch the view up on everything buffered while paused, in
+            # the same one-shot O(n) rebuild a filter toggle already uses — never
+            # per buffered record (see _append_record).
+            self._rerender()
 
     def _toggle_collapsed(self) -> None:
-        collapsed = self._body.isVisible()  # visible now ⇒ we are about to collapse
+        self.set_collapsed(self._body.isVisible())  # visible now ⇒ collapse it
+
+    def is_collapsed(self) -> bool:
+        return not self._body.isVisible()
+
+    def set_collapsed(self, collapsed: bool) -> None:
+        """Collapse the panel to its header strip, or expand it again.
+
+        Public so a screen that needs the vertical space (the Exploit table) can
+        ask for it on entry and hand it back on exit — see
+        ``MainWindow.set_current``. A no-op when already in the requested state,
+        so a repeated request cannot make the shell forget the restore size.
+        """
+        if collapsed == self.is_collapsed():
+            return
         self._body.setVisible(not collapsed)
         self._collapse_button.setIcon(make_icon("down" if collapsed else "up", 13, "#545a68"))
         self._collapse_button.setToolTip("Expand" if collapsed else "Collapse")
@@ -286,8 +331,7 @@ class LogPanel(QFrame):
 
     def _sync_toggle(self, button: QPushButton, on: bool) -> None:
         button.setProperty("on", "true" if on else "false")
-        button.style().unpolish(button)
-        button.style().polish(button)
+        repolish(button)
 
     def clear(self) -> None:
         self._records.clear()
@@ -299,18 +343,31 @@ class LogPanel(QFrame):
 def attach_log_panel(panel: LogPanel, *, level: int = logging.INFO) -> _PanelLogHandler:
     """Wire *panel* onto the root logger; return the handler for later tuning.
 
-    Call once at startup so initialisation logs appear from the first tick. The
-    handler keeps logging at DEBUG so the panel's own level toggles do the
-    filtering — the stream retains everything and the view shows what is enabled.
+    Call once at startup so initialisation logs appear from the first tick.
+
+    The root logger sits at *level* (INFO) and is raised to DEBUG only while the
+    panel's DEBUG button is on. WHY not simply run at DEBUG and let the panel
+    filter, which is what this did before: the parse path logs per chunkset and
+    per firehose block, so root-at-DEBUG charged every extraction a string format,
+    a timestamp and a cross-thread Qt signal for tens of millions of records that
+    the panel then dropped on the floor — the GUI paid the full price of DEBUG
+    with the toggle switched off. A record that is never emitted costs nothing.
     """
     bridge = _LogBridge()
     # Queued across threads via AutoConnection — see module docstring.
     bridge.record.connect(panel._append_record)
 
     handler = _PanelLogHandler(bridge)
-    handler.setLevel(logging.DEBUG)  # panel filters by level itself
+    # The handler passes everything the logger lets through; the level decision
+    # belongs to the root logger alone, so there is only one place to reason about.
+    handler.setLevel(logging.NOTSET)
 
     root = logging.getLogger()
-    root.setLevel(logging.DEBUG)
+    root.setLevel(level)
     root.addHandler(handler)
+
+    def _on_debug(enabled: bool) -> None:
+        root.setLevel(logging.DEBUG if enabled else level)
+
+    panel.debugRequested.connect(_on_debug)
     return handler

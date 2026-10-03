@@ -2,7 +2,8 @@
 
 Tables
 ------
-case_metadata     — one row per extraction session
+case_metadata     — one row per extraction session (incl. ``extract_status``)
+extract_phases    — one row per pipeline phase (started/completed): the run ledger
 source_files      — one row per parsed file (sha256, path, type)
 processes         — lookup: process name
 libraries         — lookup: (name, uuid)
@@ -26,8 +27,9 @@ the event_order sort an integer comparison instead of a TEXT one.
 
 from __future__ import annotations
 
-import sqlite3
+import contextlib
 import logging
+import sqlite3
 
 from forensic_aul.config import WAL_AUTOCHECKPOINT_PAGES
 
@@ -49,6 +51,19 @@ LOG_LEVEL_NAMES: tuple[str, ...] = ("Default", "Info", "Debug", "Error", "Fault"
 # the original ids stable.
 EVENT_TYPE_NAMES: tuple[str, ...] = (
     "Log", "Activity", "Trace", "Signpost", "Loss", "Statedump", "Simpledump",
+)
+
+# The three values ``case_metadata.extract_status`` may hold. RUNNING is written
+# when the metadata row is inserted, so it is what an interrupted run leaves
+# behind with no code having to execute; COMPLETE is written atomically with the
+# finalised metadata; CANCELLED is written by the extract pipeline's cancel
+# handler. Consumed by: database/writer.py (writes), database/access.py (the
+# open gate), ops/extraction/extract.py (the transitions).
+EXTRACT_STATUS_RUNNING = "running"
+EXTRACT_STATUS_COMPLETE = "complete"
+EXTRACT_STATUS_CANCELLED = "cancelled"
+EXTRACT_STATUSES: tuple[str, ...] = (
+    EXTRACT_STATUS_RUNNING, EXTRACT_STATUS_COMPLETE, EXTRACT_STATUS_CANCELLED,
 )
 
 # Rank given to a boot seen in the logs but absent from the timesync layout (so it
@@ -84,7 +99,29 @@ CREATE TABLE IF NOT EXISTS case_metadata (
     log_file_path         TEXT,        -- path to the operational log file
     log_file_sha256       TEXT,        -- SHA-256 of the log file (sealed at end of run)
     acquisition_timestamp TEXT NOT NULL,
-    tool_version          TEXT NOT NULL
+    tool_version          TEXT NOT NULL,
+    -- Run completion. Written 'running' when the row is inserted and updated to
+    -- one of EXTRACT_STATUSES at the end. WHY it is stored rather than inferred:
+    -- it is the only in-band evidence that a database is the COMPLETE parse of
+    -- its source. A run that was cancelled, crashed or lost power leaves
+    -- 'running'/'cancelled' here with no code having to run, and the readers
+    -- refuse it (see database/access.open_analysis_database).
+    extract_status        TEXT,
+    extract_ended_at      TEXT         -- ISO 8601 UTC, set with extract_status
+);
+"""
+
+# One row per pipeline phase of one extract run, in the order the phases ran.
+# Serves three purposes: an audit trail of how long each stage took, the "which
+# phase did an interrupted run die in" answer, and the ledger a future resume
+# reads to decide where to restart. Deliberately NOT keyed by phase name — a
+# resumed or re-run phase appends a new row rather than overwriting the history.
+_DDL_EXTRACT_PHASES = """
+CREATE TABLE IF NOT EXISTS extract_phases (
+    id           INTEGER PRIMARY KEY,
+    phase        TEXT NOT NULL,   -- one of extract._EXTRACT_PHASES' names
+    started_at   TEXT NOT NULL,   -- ISO 8601 UTC
+    completed_at TEXT             -- ISO 8601 UTC; NULL = the phase never finished
 );
 """
 
@@ -100,7 +137,13 @@ CREATE TABLE IF NOT EXISTS source_files (
     -- invalidate the others — their rows stay independently usable.
     integrity_ok INTEGER,
     file_size    INTEGER,
-    parsed_at    TEXT NOT NULL
+    parsed_at    TEXT NOT NULL,         -- registration time (before parsing)
+    -- Set only once every log row of this file has been flushed to the database.
+    -- NULL therefore means "registered but not fully parsed" — which is exactly
+    -- the set of files a future resume must delete and re-parse. Only tracev3
+    -- files are ever marked; the other file types are consumed wholesale during
+    -- setup and have no partial state.
+    parse_completed_at TEXT
 );
 """
 
@@ -237,12 +280,12 @@ CREATE TABLE IF NOT EXISTS logs (
     -- (we never reuse deleted ids, and the rowid is sufficient for FKs).
     id                  INTEGER PRIMARY KEY,
 
-    -- Deterministic forensic ordering (assigned post-load by database/ordering.py;
-    -- both are NULL until that pass runs). Never order by wall-clock for sequence —
-    -- that would hide time-shifting.
-    source_order        INTEGER,  -- physical position WITHIN its tracev3 file (1-based, byte order)
-    event_order         INTEGER,  -- merged real timeline: (boot physical rank, monotonic timestamp_mach)
-
+    -- NOTE the deterministic forensic ordering does NOT live here. It is a
+    -- post-load computation and lives in `logs_order` (below), joined on id.
+    -- WHY it moved out: filling two columns on every row of this table meant
+    -- SQLite rewriting the whole page per row — ~14 GB of writes to store two
+    -- integers each, which was 28% of a large extract's wall time. See
+    -- database/ordering.py.
     -- Source traceability: which file contributed each piece of information
     tracev3_file_id     INTEGER REFERENCES source_files(id),  -- raw Firehose entry source
     format_src_file_id  INTEGER REFERENCES source_files(id),  -- UUIDText or DSC file (format string)
@@ -293,6 +336,31 @@ CREATE TABLE IF NOT EXISTS logs (
 );
 """
 
+# Deterministic forensic ordering, one row per `logs` row, written in a single
+# pass after the bulk load (database/ordering.py). Never order by wall-clock for
+# sequence — that would hide time-shifting.
+#
+# WHY a separate table rather than two columns on `logs`: the ordering can only
+# be computed once every row is loaded, and back-filling it into `logs` rewrote
+# every page of the widest table in the database (~14 GB of writes for two
+# integers per row, plus an FTS trigger delete+insert per row when the
+# full-text index was live). Writing a narrow table instead costs roughly a
+# tenth of that, and makes the pass atomic: it commits whole or not at all.
+#
+# WHY `id` carries no REFERENCES logs(id): apply_pragmas turns foreign_keys ON,
+# so the clause would cost a parent-key probe per row — tens of millions of
+# them — to enforce something the writer cannot violate, since every row here
+# comes from `SELECT ... FROM logs`. The relationship is real; paying SQLite to
+# re-check it is not. Readers LEFT JOIN, so a missing row reads as NULL
+# ordering, exactly as an unfilled column used to.
+_DDL_LOGS_ORDER = """
+CREATE TABLE IF NOT EXISTS logs_order (
+    id            INTEGER PRIMARY KEY,  -- = logs.id (rowid alias: joins are rowid lookups)
+    source_order  INTEGER,  -- physical position WITHIN its tracev3 file (1-based, byte order)
+    event_order   INTEGER   -- merged real timeline: (boot physical rank, monotonic timestamp_mach)
+);
+"""
+
 # Deliberately lean. Each index on a tens-of-millions-row table costs storage and
 # a full sorted build in the finalisation tail, so only the columns that analyst
 # queries actually seek/sort on are indexed:
@@ -312,7 +380,7 @@ _DDL_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_logs_category_id        ON logs(category_id);",
     "CREATE INDEX IF NOT EXISTS idx_logs_process_id         ON logs(process_id);",
     "CREATE INDEX IF NOT EXISTS idx_logs_format_str_id      ON logs(format_str_id);",
-    "CREATE INDEX IF NOT EXISTS idx_logs_event_order        ON logs(event_order);",
+    "CREATE INDEX IF NOT EXISTS idx_logs_order_event_order  ON logs_order(event_order);",
 ]
 
 # Stable read view — the ONLY schema surface external consumers may rely on
@@ -325,8 +393,8 @@ CREATE VIEW IF NOT EXISTS v_logs AS
 SELECT
     l.id                  AS id,
     l.timestamp_unix_ns   AS timestamp_unix_ns,
-    l.source_order        AS source_order,
-    l.event_order         AS event_order,
+    o.source_order        AS source_order,
+    o.event_order         AS event_order,
     p.name                AS process,
     l.pid                 AS pid,
     l.tid                 AS tid,
@@ -338,6 +406,7 @@ SELECT
     fs.value              AS format_string,
     b.boot_uuid           AS boot_uuid
 FROM logs l
+LEFT JOIN logs_order  o  ON o.id  = l.id
 LEFT JOIN processes   p  ON p.id  = l.process_id
 LEFT JOIN subsystems  s  ON s.id  = l.subsystem_id
 LEFT JOIN categories  c  ON c.id  = l.category_id
@@ -429,6 +498,7 @@ def init_schema(
         # lookup must exist before _DDL_LOGS.
         for ddl in (
             _DDL_CASE_METADATA,
+            _DDL_EXTRACT_PHASES,
             _DDL_SOURCE_FILES,
             _DDL_PROCESSES,
             _DDL_LIBRARIES,
@@ -441,6 +511,7 @@ def init_schema(
             _DDL_BOOTS,
             _DDL_TIMESYNC_ANCHORS,
             _DDL_LOGS,
+            _DDL_LOGS_ORDER,
             _DDL_SHUTDOWN_EVENTS,
             _DDL_SHUTDOWN_CLIENTS,
         ):
@@ -519,24 +590,39 @@ def finalize_deferred_fts(conn: sqlite3.Connection) -> None:
         conn.executescript(_DDL_FTS5_TRIGGERS)
 
 
+@contextlib.contextmanager
+def temp_store_on_disk(conn: sqlite3.Connection):
+    """Spill SQLite's temporary sorter to a FILE for the duration of the block.
+
+    ``apply_pragmas`` sets ``temp_store=MEMORY``, which is right for the small
+    temporaries of ordinary queries and badly wrong for the two passes that sort
+    the whole ``logs`` table: the index builds and the ordering pass. Each of
+    those materialises tens of millions of rows in the sorter, and in MEMORY
+    mode that is resident RAM — measured at a 9.6–11 GB peak on a 47 M-row
+    extract. On disk it is bounded by free space instead.
+
+    Restores whatever the connection had, so a caller that deliberately chose
+    MEMORY elsewhere keeps it.
+    """
+    prev = conn.execute("PRAGMA temp_store").fetchone()[0]
+    conn.execute("PRAGMA temp_store=FILE;")
+    try:
+        yield
+    finally:
+        conn.execute(f"PRAGMA temp_store={int(prev)};")
+
+
 def finalize_indexes(conn: sqlite3.Connection) -> None:
     """Build the secondary ``logs`` indexes after a bulk load.
 
     Counterpart to ``init_schema(..., create_indexes=False)``. Each index is one
     sequential sorted build over the finished table — far cheaper than updating
     every index on every INSERT during the load. The sort spills to a temp FILE
-    (not RAM) so a multi-million-row build cannot exhaust memory; the setting is
-    restored afterwards.
+    (not RAM) so a multi-million-row build cannot exhaust memory.
     """
-    # Force on-disk temp storage just for the (potentially large) index sorts,
-    # then restore whatever the connection had (apply_pragmas sets MEMORY).
-    prev = conn.execute("PRAGMA temp_store").fetchone()[0]
-    conn.execute("PRAGMA temp_store=FILE;")
-    try:
+    with temp_store_on_disk(conn):
         for ddl in _DDL_INDEXES:
             conn.execute(ddl)
-    finally:
-        conn.execute(f"PRAGMA temp_store={int(prev)};")
 
 
 def apply_pragmas(

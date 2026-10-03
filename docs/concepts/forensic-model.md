@@ -279,10 +279,26 @@ so `archive_fingerprint` is `None` and the check reports pass vacuously.
 ### 2. Content SHA-256 of the logarchive
 
 `hash_logarchive()` is a deterministic whole-tree fingerprint: it walks the root
-in **sorted path order**, SHA-256s each regular file, and hashes the concatenated
-digests. It returns both the global digest and the per-file map. Symlinks are
-skipped — following them could pull in files outside the root and make the hash
-non-reproducible.
+in **sorted path order** and, for each regular file, folds in **both its relative
+path and its content digest** (`path ‖ NUL ‖ digest`). It returns the global
+digest and the per-file map. Symlinks are skipped — following them could pull in
+files outside the root and make the hash non-reproducible.
+
+Paths are part of the hash because a file's *name* is part of the evidence:
+hashing digests alone would let a rename that keeps the file's position in sorted
+order produce an identical global hash, declaring the archive unchanged when a
+file had been renamed.
+
+Paths are **relative to the logarchive root**, so moving or copying the whole
+archive elsewhere does not change its hash — only a change *inside* it does.
+(`verify-hash` locates the archive via the absolute `case_metadata.logarchive_path`,
+so after a move you point it at the new location with `--logarchive`; the hash
+itself still matches.)
+
+When the global hash fails, `verify-hash` reports *which kind* of change it is —
+content altered, a recorded file no longer at its recorded path, or paths
+differing while every recorded digest still matches — rather than a bare
+"mismatch" on the check most likely to be read as tampering.
 
 The result lands in `case_metadata.logarchive_sha256` and seeds
 `source_files.sha256`.
@@ -413,7 +429,7 @@ time and returns a structured `VerifyResult`. It performs:
 
 | Check | Result states |
 |---|---|
-| logarchive global SHA-256 | `ok` · `fail` (mismatch, directory missing, unhashable, or no path stored) · `skip` (none stored) |
+| logarchive global SHA-256 | `ok` · `fail` (mismatch, directory missing, unhashable, or no path stored) · `skip` (none stored). A mismatch names which kind of change it is: content altered, a file moved from its recorded path, or paths differing with all recorded content intact |
 | per-file SHA-256 (`source_files`) | counted as matched / mismatched / missing file / missing stored hash |
 | operational log SHA-256 | `ok` · `fail` (mismatch or file missing) · `skip` (no path or no stored digest) |
 

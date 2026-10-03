@@ -8,7 +8,13 @@ import pytest
 
 from forensic_aul.ops.knowledge_base.lint import lint_labels, signature_labels
 from forensic_aul.ops.knowledge_base.loader import KnowledgeBaseError, load_kb
-from forensic_aul.ops.annotation.matcher import annotate_connection
+from forensic_aul.ops.annotation.matcher import (
+    annotate_connection,
+    annotation_state,
+    clear_annotations,
+)
+from forensic_aul.ops.summary.cache import load_summary, store_summary
+from forensic_aul.ops.summary.summary import summarise_connection
 from forensic_aul.engine.database.schema import apply_pragmas, init_schema
 
 
@@ -85,6 +91,91 @@ def test_loader_rejects_invalid_regex(tmp_path):
 """
     _write_kb(tmp_path, bad)
     with pytest.raises(KnowledgeBaseError):
+        load_kb(tmp_path)
+
+
+# ── Schema additions: interpretation/caveats/provenance/status ────────────────
+
+def test_new_fields_default(tmp_path):
+    _write_kb(tmp_path, _WIFI_SIG)
+    sig = load_kb(tmp_path).signatures[0]
+    assert sig.interpretation == ""
+    assert sig.caveats == ""
+    assert sig.author == ""
+    assert sig.created == ""
+    assert sig.version == ""
+    assert sig.status == "validated"
+    assert sig.match.event_type is None
+    assert sig.match.library is None
+
+
+def test_loader_accepts_new_fields(tmp_path):
+    sig_yaml = """\
+  - id: net.wifi
+    action: "Wi-Fi association"
+    interpretation: "The device joined this network."
+    caveats: "Also fires on captive-portal probes."
+    author: "analyst"
+    created: "2026-01-15"
+    version: "1.0.0"
+    status: draft
+    match:
+      format_str: "Associated to %@ with bssid %@"
+      process: wifid
+      event_type: Log
+      library: "/usr/lib/libnetwork.dylib"
+"""
+    _write_kb(tmp_path, sig_yaml)
+    sig = load_kb(tmp_path).signatures[0]
+    assert sig.interpretation == "The device joined this network."
+    assert sig.caveats == "Also fires on captive-portal probes."
+    assert sig.author == "analyst"
+    assert sig.created == "2026-01-15"
+    assert sig.version == "1.0.0"
+    assert sig.status == "draft"
+    assert sig.match.event_type == "Log"
+    assert sig.match.library == "/usr/lib/libnetwork.dylib"
+
+
+def test_loader_rejects_unknown_status(tmp_path):
+    bad = """\
+  - id: net.wifi
+    action: "x"
+    status: experimental
+    match:
+      format_str: "Associated to %@"
+      process: wifid
+"""
+    _write_kb(tmp_path, bad)
+    with pytest.raises(KnowledgeBaseError, match="status"):
+        load_kb(tmp_path)
+
+
+def test_loader_rejects_malformed_created_date(tmp_path):
+    bad = """\
+  - id: net.wifi
+    action: "x"
+    created: "15 Jan 2026"
+    match:
+      format_str: "Associated to %@"
+      process: wifid
+"""
+    _write_kb(tmp_path, bad)
+    with pytest.raises(KnowledgeBaseError, match="created"):
+        load_kb(tmp_path)
+
+
+def test_loader_rejects_unknown_event_type(tmp_path):
+    bad = """\
+  - id: net.wifi
+    action: "x"
+    match:
+      format_str: "Associated to %@"
+      process: wifid
+      event_type: Bogus
+"""
+    _write_kb(tmp_path, bad)
+    with pytest.raises(KnowledgeBaseError, match="event_type"):
         load_kb(tmp_path)
 
 
@@ -188,3 +279,175 @@ def test_lint_warns_without_suggestion_when_nothing_close(tmp_path):
     _write_kb(tmp_path, sig, labels_yaml=_LABELS)
     warnings = lint_labels(load_kb(tmp_path))
     assert len(warnings) == 1 and warnings[0].suggestion is None
+
+
+# ── Summary cache refresh ─────────────────────────────────────────────────────
+
+def _db_with_metadata(path) -> sqlite3.Connection:
+    """A matchable database that also carries case_metadata, so it can be summarised."""
+    conn = _db_with_match(path)
+    conn.execute(
+        "INSERT INTO case_metadata(case_number, acquisition_timestamp, tool_version) "
+        "VALUES ('C1', '2024-01-15T00:00:00Z', '0.1.0')"
+    )
+    conn.commit()
+    return conn
+
+
+def test_annotate_refreshes_summary_cache(tmp_path):
+    """Annotating rewrites the cached statistics so annotated_count is not stale."""
+    _write_kb(tmp_path / "kb", _WIFI_SIG)
+    kb = load_kb(tmp_path / "kb")
+    conn = _db_with_metadata(tmp_path / "a.db")
+
+    # Cache the pre-annotation state, as extract would have done.
+    before = summarise_connection(conn, top=5, buckets=10)
+    store_summary(conn, before, top=5, buckets=10)
+    assert load_summary(conn).annotated_count == 0
+
+    annotate_connection(conn, kb)
+
+    after = load_summary(conn)
+    assert after is not None
+    assert after.annotated_count == 1
+    assert after.signature_count == 1
+    conn.close()
+
+
+def test_annotate_survives_unsummarisable_database(tmp_path):
+    """No case_metadata → the refresh is skipped, not fatal, and leaves no stale cache."""
+    _write_kb(tmp_path / "kb", _WIFI_SIG)
+    kb = load_kb(tmp_path / "kb")
+    conn = _db_with_match(tmp_path / "a.db")  # deliberately no case_metadata row
+
+    result = annotate_connection(conn, kb)
+
+    assert result.total_matches == 1
+    assert load_summary(conn) is None
+    conn.close()
+
+
+# ── Applicability gating (review item L6) ─────────────────────────────────────
+
+_GATED_SIG = """\
+  - id: net.wifi
+    action: "Wi-Fi association"
+    ios_min: "16.0"
+    ios_max: "17.9"
+    match:
+      format_str: "Associated to %@ with bssid %@"
+      process: wifid
+"""
+
+
+def _db_with_ios(path, version: str | None):
+    conn = _db_with_match(path)
+    conn.execute(
+        "INSERT INTO case_metadata(case_number, ios_version, acquisition_timestamp, "
+        "tool_version) VALUES ('C1', ?, '2024-01-15T00:00:00Z', '0.1.0')",
+        (version,),
+    )
+    conn.commit()
+    return conn
+
+
+@pytest.mark.parametrize("version,expected", [
+    ("17.5.1", 1),   # inside the declared range
+    ("16.0", 1),     # lower bound is inclusive
+    ("15.7", 0),     # below ios_min
+    ("18.0", 0),     # above ios_max
+])
+def test_ios_version_gate(tmp_path, version, expected):
+    _write_kb(tmp_path / "kb", _GATED_SIG)
+    kb = load_kb(tmp_path / "kb")
+    conn = _db_with_ios(tmp_path / f"a{version}.db", version)
+    assert annotate_connection(conn, kb).total_matches == expected
+    conn.close()
+
+
+def test_unknown_ios_version_applies_every_signature(tmp_path):
+    """An absent version must not silently suppress annotations — see the WHY."""
+    _write_kb(tmp_path / "kb", _GATED_SIG)
+    kb = load_kb(tmp_path / "kb")
+    conn = _db_with_ios(tmp_path / "unknown.db", None)
+    assert annotate_connection(conn, kb).total_matches == 1
+    conn.close()
+
+
+def test_other_platform_is_skipped(tmp_path):
+    sig = _GATED_SIG.replace('    ios_min: "16.0"', '    platform: macos\n    ios_min: "16.0"')
+    _write_kb(tmp_path / "kb", sig)
+    kb = load_kb(tmp_path / "kb")
+    conn = _db_with_ios(tmp_path / "mac.db", "17.5")
+    assert annotate_connection(conn, kb).total_matches == 0
+    conn.close()
+
+
+# ── Self-describing annotations ───────────────────────────────────────────────
+
+def test_kb_signatures_carries_the_whole_rule(tmp_path):
+    """The database must explain a flag without the knowledge base on disk."""
+    _write_kb(tmp_path / "kb", _WIFI_SIG)
+    kb = load_kb(tmp_path / "kb")
+    conn = _db_with_metadata(tmp_path / "a.db")
+    annotate_connection(conn, kb)
+
+    row = conn.execute(
+        "SELECT match_json, extract_json, platform, status, tags "
+        "FROM kb_signatures WHERE signature_id = 'net.wifi'"
+    ).fetchone()
+    import json as _json
+    match = _json.loads(row[0])
+    assert match["format_str"] == "Associated to %@ with bssid %@"
+    assert match["process"] == "wifid"
+    assert "extract_regex" in _json.loads(row[1])
+    assert row[2] == "ios"
+    assert row[3] == "validated"
+    assert _json.loads(row[4]) == ["wifi"]
+    conn.close()
+
+
+# ── clear_annotations ─────────────────────────────────────────────────────────
+
+def test_clear_annotations_empties_all_three_tables(tmp_path):
+    _write_kb(tmp_path / "kb", _WIFI_SIG)
+    kb = load_kb(tmp_path / "kb")
+    conn = _db_with_metadata(tmp_path / "a.db")
+    annotate_connection(conn, kb)
+    assert annotation_state(conn)["annotated"] == 1
+
+    removed = clear_annotations(conn)
+    assert removed == 1
+    for table in ("extracted_values", "log_annotations", "kb_signatures"):
+        assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+    # The cached statistics follow the data rather than reporting the old counts.
+    assert load_summary(conn).annotated_count == 0
+    conn.close()
+
+
+def test_clear_annotations_on_a_never_annotated_db(tmp_path):
+    conn = _db_with_metadata(tmp_path / "clean.db")
+    assert clear_annotations(conn) == 0
+    assert annotation_state(conn) == {
+        "annotated": 0, "signatures": 0, "kb_versions": [], "applied_at": [],
+    }
+    conn.close()
+
+
+def test_annotate_twice_duplicates_and_clearing_fixes_it(tmp_path):
+    """The append-only behaviour is real — this is why the GUI refuses a re-run."""
+    _write_kb(tmp_path / "kb", _WIFI_SIG)
+    kb = load_kb(tmp_path / "kb")
+    conn = _db_with_metadata(tmp_path / "a.db")
+    annotate_connection(conn, kb)
+    annotate_connection(conn, kb)
+
+    state = annotation_state(conn)
+    assert state["annotated"] == 1        # COUNT(DISTINCT log_id) hides it…
+    assert state["signatures"] == 2       # …but the signature rows doubled
+    assert conn.execute("SELECT COUNT(*) FROM log_annotations").fetchone()[0] == 2
+
+    clear_annotations(conn)
+    annotate_connection(conn, kb)
+    assert annotation_state(conn)["signatures"] == 1
+    conn.close()

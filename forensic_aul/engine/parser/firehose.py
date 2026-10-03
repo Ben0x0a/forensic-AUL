@@ -235,6 +235,26 @@ def _locate_private_data(
     return stripped
 
 
+def _private_strings_ref(entry: Firehose) -> tuple[int, int]:
+    """Return ``(offset, size)`` of *entry*'s private strings, or ``(0, 0)``.
+
+    The pair lives on the activity-type-specific sub-record: only non-activity
+    and signpost entries carry one (both parse it under flag 0x0100 — see
+    _parse_single_firehose). WHY a dispatch rather than reading
+    ``firehose_non_activity`` directly: a signpost entry leaves that sub-record
+    at its zero defaults, so a direct read reported "no private strings" for
+    every signpost — its offset and size were parsed off disk and then never
+    used, leaving the entry's private items as ``<private>`` placeholders for
+    ever. Same per-activity-type dispatch as ``_get_unknown_pc_id`` in
+    engine/parser/format_string.py.
+    """
+    if entry.unknown_log_activity_type == ACTIVITY_TYPE_SIGNPOST:
+        sp = entry.firehose_signpost
+        return sp.private_strings_offset, sp.private_strings_size
+    na = entry.firehose_non_activity
+    return na.private_strings_offset, na.private_strings_size
+
+
 def _apply_private_data(
     private_data: bytes,
     entries: list[Firehose],
@@ -242,10 +262,10 @@ def _apply_private_data(
 ) -> None:
     """Update entries' private item values from the private data section."""
     for entry in entries:
-        if entry.firehose_non_activity.private_strings_size == 0:
+        strings_offset, strings_size = _private_strings_ref(entry)
+        if strings_size == 0:
             continue
-        str_offset = (entry.firehose_non_activity.private_strings_offset
-                      - private_data_virtual_offset)
+        str_offset = strings_offset - private_data_virtual_offset
         if str_offset < 0 or str_offset >= len(private_data):
             continue
         private_slice = private_data[str_offset:]
@@ -306,15 +326,24 @@ def _parse_firehose_entries(
     return entries
 
 
+# The fixed 24-byte header every firehose entry starts with, precompiled because
+# it is unpacked once per log entry:
+#   B  unknown_log_activity_type   B  unknown_log_type
+#   H  flags                       I  format_string_location
+#   Q  thread_id                   I  continuous_time_delta
+#   H  continuous_time_delta_upper H  data_size
+# "<" keeps it byte-exact (little-endian, no alignment padding) — with a native
+# prefix the compiler would insert padding before the Q and shift every field
+# after it.
+_ENTRY_HEADER = struct.Struct("<BBHIQIHH")
+
+
 def _parse_single_firehose(data: bytes, base_pos: int) -> tuple[Firehose | None, int]:
     """Parse one Firehose entry at *base_pos* within *data*.
 
     Returns (Firehose, bytes_consumed) or (None, 0).
     """
     pos = base_pos
-
-    def avail() -> int:
-        return len(data) - pos
 
     def read(n: int) -> bytes:
         nonlocal pos
@@ -325,14 +354,16 @@ def _parse_single_firehose(data: bytes, base_pos: int) -> tuple[Firehose | None,
         return chunk
 
     try:
-        act_type = struct.unpack_from("<B", read(1))[0]
-        log_type = struct.unpack_from("<B", read(1))[0]
-        flags = struct.unpack_from("<H", read(2))[0]
-        fmt_loc = struct.unpack_from("<I", read(4))[0]
-        thread_id = struct.unpack_from("<Q", read(8))[0]
-        ct_delta = struct.unpack_from("<I", read(4))[0]
-        ct_delta_upper = struct.unpack_from("<H", read(2))[0]
-        data_size = struct.unpack_from("<H", read(2))[0]
+        # One unpack for the whole 24-byte header instead of eight read+unpack
+        # pairs. This runs once per log entry — tens of millions of times on a
+        # large archive — so the eight slices, eight format-string parses and
+        # eight one-element tuples were pure per-entry overhead. Same bytes, same
+        # order, same little-endian layout; see _ENTRY_HEADER.
+        if pos + _ENTRY_HEADER.size > len(data):
+            raise EOFError(f"Truncated at pos={pos}, need {_ENTRY_HEADER.size}")
+        (act_type, log_type, flags, fmt_loc, thread_id,
+         ct_delta, ct_delta_upper, data_size) = _ENTRY_HEADER.unpack_from(data, pos)
+        pos += _ENTRY_HEADER.size
 
         entry_data_start = pos
         entry_data = read(data_size)
@@ -798,10 +829,32 @@ def collect_items(data: bytes, num_items: int, flags: int) -> FirehoseItemData:
 
         if itype in STRING_ITEMS_COLLECT_PHASE:
             msg_size = item["message_string_size"]
-            if sp + msg_size > len(string_pool):
-                msg_size = len(string_pool) - sp
-            if msg_size <= 0:
+
+            # An item that declares zero bytes IS an empty string — it consumes
+            # nothing from the pool and says nothing about the items after it.
+            # WHY this is its own branch: the two conditions below used to be
+            # collapsed into one ``msg_size <= 0: break``, so a legitimately
+            # empty argument aborted resolution for every LATER item in the
+            # entry. A message like "%s = %s" whose first argument was empty
+            # silently lost its second one — the value was in the pool, parsed,
+            # and then discarded.
+            if msg_size == 0:
+                item["message_strings"] = ""
+                continue
+
+            # A non-empty item with nothing left in the pool means the item data
+            # was truncated. Later items cannot resolve either, so stop — but log
+            # it, because this is data loss and the previous code was silent
+            # about it.
+            available = len(string_pool) - sp
+            if available <= 0:
+                log.debug(
+                    "String pool exhausted with %d byte(s) still requested — "
+                    "remaining items left empty (truncated item data?)", msg_size,
+                )
                 break
+            msg_size = min(msg_size, available)
+
             raw = string_pool[sp:sp+msg_size]
             sp += msg_size
             if itype in ARBITRARY_ITEMS or itype == BASE64_RAW_BYTES:

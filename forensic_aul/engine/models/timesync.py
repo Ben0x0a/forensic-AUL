@@ -50,6 +50,27 @@ class TimesyncBoot:
     # note on TimesyncEntry.timesync_file_id). 0 only for synthetic test boots.
     timesync_file_id: int = 0
 
+    # ── Derived cache, not parsed data ────────────────────────────────────────
+    # Ascending ``kernel_time`` keys for the binary anchor search in
+    # engine/utils/time.py::_select_anchor, which runs once per log entry. Built
+    # lazily there, never by the parser.
+    #
+    # WHY it lives on the boot rather than in a module-level dict: the obvious
+    # cache is keyed by ``id(boot)``, and that is a trap. TimesyncBoot is a
+    # mutable dataclass (so unhashable — no WeakKeyDictionary either), boots are
+    # discarded after ``merge_timesync_dicts`` folds them together, and CPython
+    # reuses the freed addresses — so a later boot inherits an earlier one's
+    # index and resolves timestamps against the wrong records. Owning the cache
+    # makes that impossible.
+    #
+    # ``_kernel_keys_count`` is the record count the keys were built from:
+    # merging APPENDS records to an existing boot, so the index must be rebuilt
+    # when the list grows. ``compare=False``/``repr=False`` keep a cache out of
+    # equality and debug output.
+    _kernel_keys: list[int] | None = field(
+        default=None, repr=False, compare=False)
+    _kernel_keys_count: int = field(default=-1, repr=False, compare=False)
+
 
 @dataclass
 class TimesyncAnchor:
@@ -82,7 +103,13 @@ class TimesyncAnchor:
 
 @dataclass
 class TimestampResolution:
-    """Output of the mach → wall-clock conversion with full traceability."""
+    """Output of the mach → wall-clock conversion with full traceability.
+
+    Deliberately carries no ISO string: it is a pure function of *unix_ns*, and
+    this object is built once per log entry, so formatting one here charged every
+    extract a datetime conversion per row for a value nothing stored. Callers
+    that want the readable form ask for it — see
+    :func:`~forensic_aul.engine.utils.time.iso8601_from_unix_ns`.
+    """
     unix_ns: int                       # nanoseconds since 1970, 0 on failure
-    iso: str                           # ISO 8601 UTC string, "1970-…Z" on failure
     anchor: TimesyncAnchor | None      # None when no usable anchor was found

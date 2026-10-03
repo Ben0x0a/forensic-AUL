@@ -26,7 +26,7 @@ import gui.recent_store as recent_store  # noqa: E402
 import gui.settings_store as settings_store  # noqa: E402
 from gui.recent_store import RecentStore  # noqa: E402
 from gui.settings_store import SettingsStore  # noqa: E402
-from gui.views.screens_data import VerifyHashScreen  # noqa: E402
+from gui.views.screens_data import ExportScreen, VerifyHashScreen  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -83,6 +83,86 @@ def test_combo_items_get_size_hint(qapp):
     vh = _verify()
     sizes = [vh._algo.itemData(i, Qt.ItemDataRole.SizeHintRole) for i in range(vh._algo.count())]
     assert all(s is not None and s.height() == 28 for s in sizes), "combo items need a uniform height hint"
+
+
+# ── VerifyHash / Export: G7 — error surfacing must not leak internals or drop
+# detail, and a result row must not be mislabelled by a mid-run edit ────────────
+
+def _stub_run_task(screen):
+    """Replace the screen's off-thread host with a recorder; return the call list.
+
+    Mirrors test_gui_pipeline.py's helper — the real op is never invoked, tests
+    drive ``task`` / ``on_finished`` / ``on_failed`` directly instead.
+    """
+    calls: list[tuple] = []
+
+    def record(task, on_finished, on_failed=None):
+        calls.append((task, on_finished, on_failed))
+
+    screen.run_task = record  # type: ignore[method-assign]
+    return calls
+
+
+def test_verify_hash_row_uses_name_captured_at_dispatch_time(qapp, tmp_path):
+    """The result row previously read ``self._file.path()`` *after* hashing
+    finished, so editing the field mid-run mislabelled the row. The name must
+    be captured when _start() dispatches, before the (possibly slow) hash runs."""
+    vh = _verify()
+    first = tmp_path / "first.bin"
+    first.write_bytes(b"hello")
+    vh._file.set_path(str(first))
+    calls = _stub_run_task(vh)
+    vh._start()
+    assert len(calls) == 1
+    task, on_finished, _on_failed = calls[0]
+
+    # Simulate the analyst editing the field while the hash is still "running".
+    vh._file.set_path(str(tmp_path / "second.bin"))
+
+    computed = task()  # the real hashing function, run synchronously here
+    on_finished(computed)
+    assert vh._table.item(0, 0).text() == "first.bin", (
+        "the row must be labelled with the file that was actually hashed"
+    )
+
+
+def test_verify_hash_failure_reason_is_not_discarded(qapp, tmp_path):
+    """A VerifyHash failure previously showed an ERROR pill with the reason
+    thrown away (``del last``). The reason must now survive, as a tooltip on
+    the status pill — a bare ERROR gives an analyst nothing to act on."""
+    from gui.widgets.components import Pill
+
+    vh = _verify()
+    vh._file.set_path(str(tmp_path / "missing.bin"))  # never created
+    calls = _stub_run_task(vh)
+    vh._start()
+    _task, _on_finished, on_failed = calls[0]
+
+    tb = (
+        'Traceback (most recent call last):\n  File "x.py", line 1, in <module>\n'
+        "FileNotFoundError: [Errno 2] No such file or directory: 'missing.bin'\n"
+    )
+    on_failed(tb)
+
+    pill = vh._table.cellWidget(0, 3).findChild(Pill)
+    assert pill is not None
+    assert pill.toolTip(), "the failure reason must not be discarded"
+    assert "missing.bin" in pill.toolTip()
+
+
+def test_export_on_failed_uses_phrase_failure(qapp):
+    """Export's failure path duplicated the raw last-line logic inline; it must
+    go through the same GUI-phrasing map as the pipeline controllers."""
+    exp = ExportScreen(SettingsStore(), RecentStore())
+    captured: dict = {}
+    exp.show_result = lambda ok, msg: captured.update(ok=ok, msg=msg)
+
+    tb = (
+        'Traceback (most recent call last):\n  File "x.py", line 1, in <module>\n'
+        "FileNotFoundError: /nope.db is not a file\n"
+    )
+    exp._on_failed(tb)
+    assert captured == {"ok": False, "msg": "File not found — /nope.db is not a file"}
 
 
 def test_combo_popup_aligns_under_field(qapp):

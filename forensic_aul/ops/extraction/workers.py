@@ -6,7 +6,8 @@ Used by : forensic_aul.ops.extraction.extract (_run_parse, parallel path)
 Uses    : forensic_aul.ops.extraction.tracev3_parse (process_tracev3),
           forensic_aul.ops.extraction.oversize_pass (OversizeCache),
           forensic_aul.engine.models (TimesyncBoot, LogEntry),
-          forensic_aul.engine.parser.string_cache (StringCacheProvider)
+          forensic_aul.engine.parser.string_cache (StringCacheProvider),
+          forensic_aul.engine.utils.cancellation (CancelToken)
 
 Pickling note
 -------------
@@ -21,10 +22,30 @@ batches to the single writer (the main process). All DB ids a row needs are
 resolved from maps prepared in the main process, so a worker never opens the
 database. The read-only string cache is loaded from disk in each worker
 (cross-platform: works under spawn and fork) rather than pickled across.
+
+Cancellation across the process boundary
+----------------------------------------
+The parent's :class:`CancelToken` cannot be handed to a worker directly, so this
+module owns the bridge — which is what keeps ``cancellation.py`` free of any
+``multiprocessing`` import:
+
+1. a ``multiprocessing.Event`` is created here and passed via the pool's
+   ``initargs``. **It must ride ``initargs`` and nothing else**: a synchronisation
+   primitive survives inheritance at process start, but putting one through
+   ``ex.submit(...)`` (i.e. through the call queue) raises ``RuntimeError:
+   Condition objects should only be shared between processes through
+   inheritance``;
+2. a daemon thread mirrors the parent token into that event, so setting the
+   token propagates without the parent having to poll from its result loop;
+3. each worker wraps the inherited event in an ordinary :class:`CancelToken`
+   (both expose ``set`` / ``is_set`` / ``wait``) and hands it to
+   ``process_tracev3``, which checks it per chunk.
 """
 
 from __future__ import annotations
 
+import multiprocessing
+import threading
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from itertools import islice
 from pathlib import Path
@@ -32,8 +53,17 @@ from typing import Callable
 
 from forensic_aul.engine.models import LogEntry, TimesyncBoot
 from forensic_aul.engine.parser.string_cache import StringCacheProvider
+from forensic_aul.engine.utils.cancellation import NEVER_CANCELLED, CancelToken
+from forensic_aul.errors import OperationCancelled
 from forensic_aul.ops.extraction.oversize_pass import OversizeCache
 from forensic_aul.ops.extraction.tracev3_parse import process_tracev3
+
+# How often the mirror thread copies the parent token into the workers'
+# multiprocessing.Event. Small enough that it adds nothing measurable to the
+# observed cancel latency (which is dominated by one chunkset), large enough
+# that the thread is invisible in a profile.
+_CANCEL_MIRROR_INTERVAL_S = 0.1
+
 
 # ── Bounded-window scheduler (runs in the main / writer process) ──────────────
 
@@ -42,6 +72,8 @@ def parallel_parse(
     n_workers: int,
     init_args: tuple,
     handle_result: Callable[[str, tuple[str, str, str, int, int], list[LogEntry]], None],
+    *,
+    cancel: CancelToken = NEVER_CANCELLED,
 ) -> None:
     """Parse *rels* across *n_workers* processes, streaming results to one writer.
 
@@ -58,28 +90,82 @@ def parallel_parse(
     workers' worth of files in flight keeps every core fed while capping
     resident results to a handful of files' entries. The output is identical
     regardless of the window size.
+
+    On cancellation the pool is drained with ``shutdown(wait=True,
+    cancel_futures=True)`` before propagating: queued files are dropped, running
+    workers stop at their next chunk boundary, and every process has exited by
+    the time the caller regains control — so the caller can safely finish
+    writing to the database it shares with nobody.
+
+    Raises:
+        OperationCancelled: *cancel* was cancelled during the parse.
     """
-    with ProcessPoolExecutor(
-        max_workers=n_workers,
-        initializer=worker_init,
-        initargs=init_args,
-    ) as ex:
-        max_in_flight = max(2, n_workers * 2)
-        rel_iter = iter(rels)
-        in_flight: dict[object, str] = {
-            ex.submit(worker_parse, rel): rel
-            for rel in islice(rel_iter, max_in_flight)
-        }
-        while in_flight:
-            finished, _ = wait(in_flight, return_when=FIRST_COMPLETED)
-            for fut in finished:
-                rel = in_flight.pop(fut)
-                stats, entries = fut.result()
-                handle_result(rel, stats, entries)
-                # Refill: keep the in-flight window full until files run out.
-                nxt = next(rel_iter, None)
-                if nxt is not None:
-                    in_flight[ex.submit(worker_parse, nxt)] = nxt
+    # One context for both the event and the pool: an Event built by a different
+    # start method than the pool uses would not be the primitive the children
+    # inherit. get_context() (no argument) keeps the platform default this
+    # module has always used.
+    ctx = multiprocessing.get_context()
+    cancel_event = ctx.Event()
+    mirror_stop = threading.Event()
+    mirror = threading.Thread(
+        target=_mirror_cancel,
+        args=(cancel, cancel_event, mirror_stop),
+        name="faul-cancel-mirror",
+        daemon=True,
+    )
+    mirror.start()
+    try:
+        with ProcessPoolExecutor(
+            max_workers=n_workers,
+            mp_context=ctx,
+            initializer=worker_init,
+            initargs=(*init_args, cancel_event),
+        ) as ex:
+            max_in_flight = max(2, n_workers * 2)
+            rel_iter = iter(rels)
+            in_flight: dict[object, str] = {
+                ex.submit(worker_parse, rel): rel
+                for rel in islice(rel_iter, max_in_flight)
+            }
+            try:
+                while in_flight:
+                    finished, _ = wait(in_flight, return_when=FIRST_COMPLETED)
+                    for fut in finished:
+                        rel = in_flight.pop(fut)
+                        stats, entries = fut.result()
+                        handle_result(rel, stats, entries)
+                        cancel.check()
+                        # Refill: keep the in-flight window full until files run out.
+                        nxt = next(rel_iter, None)
+                        if nxt is not None:
+                            in_flight[ex.submit(worker_parse, nxt)] = nxt
+            except OperationCancelled:
+                # Drop everything still queued and wait for the running workers to
+                # notice the event and return. WHY wait: the `with` block would
+                # join them anyway, and doing it explicitly makes the contract
+                # visible — no worker is still touching the evidence when the
+                # caller starts marking the database cancelled.
+                ex.shutdown(wait=True, cancel_futures=True)
+                raise
+    finally:
+        mirror_stop.set()
+
+
+def _mirror_cancel(
+    cancel: CancelToken, cancel_event, stop: threading.Event
+) -> None:
+    """Copy *cancel* into the workers' event until cancelled or *stop* is set.
+
+    Runs on a daemon thread in the parent. WHY a thread rather than a check in
+    the result loop: that loop blocks in ``wait(...)`` until a worker finishes a
+    whole file, which on a large tracev3 is tens of seconds — the workers would
+    only learn of the cancellation after the very thing the operator is waiting
+    to stop had finished.
+    """
+    while not stop.is_set():
+        if cancel.wait(_CANCEL_MIRROR_INTERVAL_S):
+            cancel_event.set()
+            return
 
 
 # ── Worker-process parsing (multiprocessing) ──────────────────────────────────
@@ -96,8 +182,14 @@ def worker_init(
     tracev3_file_ids: dict[str, int],
     uuid_file_ids: dict[str, int],
     keep_raw: bool,
+    cancel_event,
 ) -> None:
-    """Initialise one worker: load the read-only string cache from disk once."""
+    """Initialise one worker: load the read-only string cache from disk once.
+
+    *cancel_event* is the ``multiprocessing.Event`` inherited from the parent
+    (see the module docstring); it is wrapped in a plain :class:`CancelToken`
+    here so the parsing code below the boundary is identical to the serial path.
+    """
     strings = StringCacheProvider(logarchive_root)
     strings.load_content()
     strings.set_uuid_file_ids(uuid_file_ids)
@@ -111,6 +203,7 @@ def worker_init(
         anchor_id_map=anchor_id_map,
         tracev3_file_ids=tracev3_file_ids,
         keep_raw=keep_raw,
+        cancel=CancelToken(cancel_event),
     )
 
 
@@ -129,5 +222,6 @@ def worker_parse(rel_path: str) -> tuple[tuple[str, str, str, int, int], list[Lo
         _WORKER["anchor_id_map"],                  # type: ignore[arg-type]
         entries.append,
         keep_raw=bool(_WORKER["keep_raw"]),
+        cancel=_WORKER["cancel"],                  # type: ignore[arg-type]
     )
     return stats, entries

@@ -146,11 +146,18 @@ def _run(
 # in exactly one place. ``event_order`` is the forensic ordering rank (monotonic
 # with physical layout); it is emitted so the tamper signal — wall-clock going
 # backwards while event_order keeps rising — is visible in the primary analyst
-# output.
+# output. ``source_order`` + ``source_file`` add the other half of that evidence:
+# event_order alone shows *that* the merged timeline is monotonic, but not
+# *where* a given entry physically sat — source_order is the row's rank within
+# its own tracev3 file and source_file names that file, so a reader can point at
+# the exact physical slot a row came from (and, e.g., notice a file whose
+# source_order run is short relative to its neighbours).
 _BASE_FIELDS: dict[str, Callable[[LogRow], object]] = {
     "timestamp": lambda r: r.timestamp_iso,
     "timestamp_unix_ns": lambda r: r.timestamp_unix_ns,
     "event_order": lambda r: r.event_order,
+    "source_order": lambda r: r.source_order,
+    "source_file": lambda r: r.source_file,
     "process": lambda r: r.process,
     "pid": lambda r: r.pid,
     "tid": lambda r: r.tid,

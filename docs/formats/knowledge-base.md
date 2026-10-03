@@ -6,7 +6,7 @@ action, and optionally pull named values out of the message. It is applied to an
 analysis database by [`annotate`](../cli/annotate.md) and linted by
 [`kb validate`](../cli/kb.md).
 
-Source: `forensic_aul/ops/knowledge_base/{models,loader,lint}.py`,
+Source: `forensic_aul/ops/knowledge_base/{models,loader,lint,writer}.py`,
 `forensic_aul/ops/annotation/matcher.py`, and the shipped `knowledge_base/`.
 
 ## Directory layout
@@ -58,6 +58,8 @@ rejected** (typos surface immediately).
 | `id` | string | yes | Unique identifier. Must match `^[a-z0-9][a-z0-9._-]*$` (lowercase, dot/dash/underscore) |
 | `action` | string | yes | The behaviour asserted, in plain language — stored in `kb_signatures.action` and filterable with `export --action` |
 | `description` | string | no (default `""`) | Longer explanation |
+| `interpretation` | string | no (default `""`) | What an analyst may conclude from a match — `action` is only a title |
+| `caveats` | string | no (default `""`) | Known false positives / conditions where the conclusion does not hold |
 | `match` | mapping | yes | The matching specification (below) |
 | `extract-regex` / `extract_regex` | string | no | One regex whose **named groups** become extracted labels |
 | `extract-fields` / `extract_fields` | mapping | no | `label → regex`, one regex per value |
@@ -67,9 +69,15 @@ rejected** (typos surface immediately).
 | `ios_max` | string | no | Upper iOS bound (recorded, not enforced by the matcher) |
 | `references` | list of strings | no | Provenance / research notes |
 | `tags` | list of strings | no | Free-form tags; stored as a JSON list and filterable with `--tag` |
+| `author` | string | no (default `""`) | Who wrote the rule |
+| `created` | string | no (default `""`) | ISO date the rule was authored, `YYYY-MM-DD` (loosely shape-checked, not calendar-validated) |
+| `version` | string | no (default `""`) | Per-signature semver, independent of the KB-wide `VERSION` |
+| `status` | string | no (default `validated`) | `draft` \| `validated` \| `deprecated` — a signature's review state |
 
 Both spellings (`extract-regex` / `extract_regex`, `extract-fields` /
-`extract_fields`) are accepted; the hyphenated form is used in the shipped KB.
+`extract_fields`) are accepted; **the hyphenated form is canonical** and is what
+the shipped KB and the writer (see below) both use — prefer `extract-fields` /
+`extract-regex` for new signatures.
 
 ### `match`
 
@@ -84,6 +92,8 @@ Both spellings (`extract-regex` / `extract_regex`, `extract-fields` /
 | `subsystem` | string | Exact subsystem |
 | `category` | string | Exact category |
 | `log_level` | string | One of `Default`, `Info`, `Debug`, `Error`, `Fault` |
+| `event_type` | string | One of `Log`, `Activity`, `Trace`, `Signpost`, `Loss`, `Statedump`, `Simpledump` (`engine/database/schema.py:EVENT_TYPE_NAMES`) |
+| `library` | string | Exact match on the library path (`libraries.name`) |
 | `message_regex` | string | Post-filter regex applied to the **rendered** message |
 
 Validation rules:
@@ -92,6 +102,7 @@ Validation rules:
   present — no more, no fewer.
 - `dynamic: true` **requires** `message_regex` (there would be no anchor otherwise).
 - `log_level` must be one of the five names above.
+- `event_type` must be one of the seven names above.
 - `message_regex` must compile.
 
 ### Matching semantics
@@ -106,11 +117,16 @@ regex post-filter in Python:
 2. **Indexed refinements.** `process`, `subsystem`, `category` are resolved to
    their lookup ids; a name absent from the database again short-circuits to 0.
    These become `AND`-ed equality predicates on indexed columns.
-3. **Residual refinement.** `log_level` is resolved to `log_levels.id` and added as
-   a non-indexed predicate over the already-narrow candidate set.
+3. **Residual refinement.** `log_level`, `event_type`, and `library` are resolved
+   to their lookup ids (`log_levels`, `event_types`, `libraries`) and added as
+   non-indexed predicates over the already-narrow candidate set. `library` is the
+   odd one out: `libraries` is keyed `UNIQUE(name, uuid)` — the same path can
+   appear under several UUIDs (e.g. across OS builds) — so a `library` match
+   resolves to *every* matching id and uses `library_id IN (…)`, not a single `=`.
 4. **Safety guard.** If a signature produces *no* WHERE clause at all (a `dynamic`
-   signature with no process/subsystem/category/log_level refinement), the matcher
-   logs a warning and refuses to run it rather than scanning the whole table.
+   signature with no process/subsystem/category/log_level/event_type/library
+   refinement), the matcher logs a warning and refuses to run it rather than
+   scanning the whole table.
 5. **`message_regex`** is then evaluated with `re.search` (not `fullmatch`) on each
    candidate's `message`; a NULL message never matches.
 
@@ -227,6 +243,28 @@ The `extract-fields` alternative, for values that sit apart in the message:
       bundle_id: '(?P<bundle_id>[\w.\-]+)'
       error_code: 'error=(-?\d+)'
 ```
+
+## Writing signatures programmatically
+
+`forensic_aul/ops/knowledge_base/writer.py` emits house-style YAML for signatures
+built in memory — e.g. by a GUI "new signature" dialog — rather than typed by
+hand. It is a template-string emitter, not a generic YAML serialiser: it
+reproduces `example.yaml`'s exact layout (two-space indent, block scalars for
+multi-line prose, single-quoted regexes, `tags: [a, b]` flow style) and omits
+every field left at its `Signature` default.
+
+- `SignatureDraft` (in `models.py`, beside `Signature`/`Match`) holds everything
+  needed to emit one signature. Its own default `status` is `"draft"` — unlike
+  `Signature`'s default of `"validated"` — so an interactively-created signature
+  is written out as `status: draft` unless the caller sets it otherwise.
+- `render_signature(draft) -> str` renders the draft to a complete YAML file
+  (the `signatures:` wrapper included).
+- `write_signature(kb_dir, draft) -> Path` writes `<kb_dir>/signatures/<id>.yaml`
+  (one signature per file), refusing to overwrite an existing file. It then
+  reloads the whole KB via `load_kb` — the same validation every hand-written
+  signature goes through — and **deletes the file it just wrote if that
+  reload fails**, so an invalid signature (a bad regex, two match anchors, a
+  duplicate id, …) can never be left on disk.
 
 ## Authoring checklist
 

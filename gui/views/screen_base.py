@@ -36,19 +36,44 @@ from PySide6.QtWidgets import (
 )
 
 from gui.recent_store import RecentStore
-from gui.widgets.components import Divider, Panel, field_row, h2, make_icon, primary_button
+from gui.widgets.components import (
+    Divider,
+    Panel,
+    clear_layout,
+    field_row,
+    h2,
+    make_icon,
+    primary_button,
+    result_panel,
+)
 from gui.widgets.path_picker import PathPicker
 from gui.workers.base import Worker, start_worker
+
+
+# Content-column widths, named so a screen declares its shape rather than a number.
+# WHY a cap at all: a form or a page of prose is unreadable when its lines run the
+# full width of a large display. WHY an uncapped option: a log table is the
+# opposite — every pixel of width is another column or another few words of the
+# message, so capping it wastes the screen.
+# Consumed by: every ScrollScreen subclass (screens_pipeline, screens_data,
+# screens_prefs, screen_exploit, screen_identify_results).
+WIDTH_FORM = 880    # forms and prose — the default
+WIDTH_WIDE = 1040   # form-plus-table screens
+WIDTH_FULL = None   # data screens: no cap, use the whole window
 
 
 class ScrollScreen(QWidget):
     """A scrolling screen with a left-aligned, max-width content column.
 
     Subclasses add widgets to :attr:`content` (a QVBoxLayout). *max_width* caps
-    the column so long-line screens stay readable, mirroring the mockup.
+    the column so long-line screens stay readable, mirroring the mockup; pass
+    :data:`WIDTH_FULL` (``None``) for a data screen that should use the whole
+    window.
     """
 
-    def __init__(self, max_width: int = 880, parent: QWidget | None = None) -> None:
+    def __init__(
+        self, max_width: int | None = WIDTH_FORM, parent: QWidget | None = None
+    ) -> None:
         super().__init__(parent)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -67,7 +92,8 @@ class ScrollScreen(QWidget):
         host_layout.setSpacing(0)
 
         column = QWidget()
-        column.setMaximumWidth(max_width)
+        if max_width is not None:
+            column.setMaximumWidth(max_width)
         self.content = QVBoxLayout(column)
         self.content.setContentsMargins(0, 0, 0, 0)
         self.content.setSpacing(12)
@@ -78,31 +104,114 @@ class ScrollScreen(QWidget):
         host_layout.addWidget(column, 1)
         scroll.setWidget(host)
 
+        self._result_host: QVBoxLayout | None = None
+
+    # ── Result line ───────────────────────────────────────────────────────────────
+
+    def make_result_host(self) -> QVBoxLayout:
+        """Create (once) and return the layout :meth:`show_result` renders into.
+
+        Screens call this while building :attr:`content`, at the point where the
+        outcome line should appear.
+        """
+        if self._result_host is None:
+            self._result_host = QVBoxLayout()
+        return self._result_host
+
+    def show_result(self, ok: bool, message: str) -> None:
+        """Replace the screen's outcome line with a success/failure panel.
+
+        A no-op on a screen that never called :meth:`make_result_host` — a view
+        with nowhere to show an outcome should not crash when an op reports one.
+        """
+        if self._result_host is None:
+            return
+        clear_layout(self._result_host)
+        self._result_host.addWidget(result_panel(ok, message))
+
+    def clear_result(self) -> None:
+        """Remove the outcome line (e.g. when a new run starts)."""
+        if self._result_host is not None:
+            clear_layout(self._result_host)
+
 
 class OperationScreen(ScrollScreen):
     """A :class:`ScrollScreen` that can run one core operation off-thread.
 
-    Call :meth:`run_task` with a zero-arg callable; results/errors are delivered
-    to the supplied callbacks on the GUI thread. The screen owns the thread/worker
-    references so neither is garbage-collected mid-run.
+    Call :meth:`run_task` with a zero-arg callable; results/errors/cancellations
+    are delivered to the supplied callbacks on the GUI thread. The screen owns
+    the thread/worker references so neither is garbage-collected mid-run.
+
+    Two public questions any host may ask of a screen — :meth:`is_busy` and
+    :meth:`request_cancel` — make the shutdown path possible without the shell
+    knowing anything about a particular screen's internals (see gui/shutdown.py).
     """
 
     # Relayed to the shell so the title-bar / status can reflect a running op.
     busyChanged = Signal(bool)
     progressChanged = Signal(float, str)  # fraction 0..1, short phase label
 
-    def __init__(self, max_width: int = 880, parent: QWidget | None = None) -> None:
+    def __init__(
+        self, max_width: int | None = WIDTH_FORM, parent: QWidget | None = None
+    ) -> None:
         super().__init__(max_width, parent)
         self._thread = None
         self._worker = None
         self._on_finished_cb: Callable[[Any], None] | None = None
         self._on_failed_cb: Callable[[str], None] | None = None
+        self._on_cancelled_cb: Callable[[Any], None] | None = None
+        self._cancel_handler: Callable[[], None] | None = None
+
+    # ── Cancellation contract ─────────────────────────────────────────────────
+
+    def set_cancel_handler(self, handler: Callable[[], None] | None) -> None:
+        """Register what :meth:`request_cancel` should do (the controller's stop).
+
+        WHY the view holds a callback rather than the token itself: the token —
+        or, for the Identify wizard, a pair of ``threading.Event`` objects — is
+        the controller's business, and the shapes differ per operation. The view
+        only needs to know that *something* can stop the run, which keeps it free
+        of any core import (see this module's header).
+        """
+        self._cancel_handler = handler
+
+    def is_busy(self) -> bool:
+        """True while an operation is running on this screen's worker thread.
+
+        Public because it is the question the shutdown path asks of every screen.
+        The previous implementation reached in for a ``_thread`` attribute, which
+        silently answered "not busy" for any screen that did not happen to have
+        one — see gui/shutdown.py.
+        """
+        thread = self._thread
+        if thread is None:
+            return False
+        try:
+            return bool(thread.isRunning())
+        except RuntimeError:
+            # The C++ QThread was already finalised — nothing is running.
+            return False
+
+    def request_cancel(self) -> bool:
+        """Ask the running operation to stop; True if a request was actually made.
+
+        False means there was nothing to cancel, or this screen's operation has
+        no stop mechanism — the caller must not assume the screen will now become
+        idle.
+        """
+        if not self.is_busy() or self._cancel_handler is None:
+            return False
+        self._cancel_handler()
+        return True
+
+    # ── Off-thread run ────────────────────────────────────────────────────────
 
     def run_task(
         self,
         task: Callable[[], Any],
         on_finished: Callable[[Any], None],
         on_failed: Callable[[str], None] | None = None,
+        on_cancelled: Callable[[Any], None] | None = None,
     ) -> None:
         # WHY route through @Slot methods of *self* (a main-thread QObject) rather
         # than connecting the closures directly: a signal connected to a plain
@@ -113,9 +222,13 @@ class OperationScreen(ScrollScreen):
         # the GUI thread after the event loop is spinning.
         self._on_finished_cb = on_finished
         self._on_failed_cb = on_failed
+        self._on_cancelled_cb = on_cancelled
         self.busyChanged.emit(True)
         self._worker = Worker(task)
-        self._thread = start_worker(self, self._worker, self._handle_finished, self._handle_failed)
+        self._thread = start_worker(
+            self, self._worker,
+            self._handle_finished, self._handle_failed, self._handle_cancelled,
+        )
 
     @Slot(object)
     def _handle_finished(self, result: Any) -> None:
@@ -128,6 +241,17 @@ class OperationScreen(ScrollScreen):
         self.busyChanged.emit(False)
         if self._on_failed_cb is not None:
             self._on_failed_cb(tb)
+
+    @Slot(object)
+    def _handle_cancelled(self, exc: Any) -> None:
+        self.busyChanged.emit(False)
+        if self._on_cancelled_cb is not None:
+            self._on_cancelled_cb(exc)
+        elif self._on_failed_cb is not None:
+            # A screen that never asked about cancellation still has to leave its
+            # RUNNING state, so fall back to its failure path rather than freezing
+            # the form mid-run with no way back.
+            self._on_failed_cb(f"{type(exc).__name__}: {exc}")
 
     def emit_progress(self, fraction: float, label: str = "") -> None:
         """Thread-safe progress relay (Qt queues the signal to the GUI thread)."""
