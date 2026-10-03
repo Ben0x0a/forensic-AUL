@@ -294,7 +294,9 @@ class TestPagedAccess:
 
         # Assign a simple event_order (the fixture has none by default).
         conn = sqlite3.connect(str(db))
-        conn.execute("UPDATE logs SET event_order = id * 10")
+        conn.execute(
+            "INSERT INTO logs_order(id, event_order) SELECT id, id * 10 FROM logs"
+        )
         conn.commit(); conn.close()
 
         anchor = next(iter(query_logs(db, message_prefix="Hello again")))
@@ -379,7 +381,9 @@ class TestLogStore:
         from forensic_aul import LogStore
 
         conn = sqlite3.connect(str(db))
-        conn.execute("UPDATE logs SET event_order = id * 10")
+        conn.execute(
+            "INSERT INTO logs_order(id, event_order) SELECT id, id * 10 FROM logs"
+        )
         conn.commit(); conn.close()
         with LogStore(db) as store:
             ctx = store.context(3, before=10, after=10)

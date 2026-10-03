@@ -45,14 +45,6 @@ WAL_AUTOCHECKPOINT_PAGES: int = 20_000  # ~80 MiB at a 4 KiB page
 
 # ── Ordering finalisation (consumed by database/ordering.py:assign_ordering) ───
 
-# Rows per batch when writing the post-load ordering columns (source_order,
-# event_order) back into ``logs``. WHY batched: assign_ordering used to UPDATE all
-# ~40 M rows in ONE transaction, so the WAL grew to the size of a whole-table
-# rewrite (observed 24 GB) and filled the disk mid-run. Committing and truncating
-# the WAL after every batch caps it at roughly one batch's worth of dirtied pages.
-# The final ordering is computed in full beforehand, so batching the write-back
-# changes nothing about the result — only the WAL footprint. Lower on tiny disks.
-ORDERING_UPDATE_BATCH_ROWS: int = 2_000_000
 
 # Page-cache size (SQLite ``PRAGMA cache_size``; negative ⇒ KiB) applied only for
 # the duration of the ordering pass, then restored. WHY larger here: the batched

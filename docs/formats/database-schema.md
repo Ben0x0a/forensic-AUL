@@ -2,7 +2,7 @@
 
 Reference for the SQLite database produced by [`extract`](../cli/extract.md). Source
 of truth: `forensic_aul/engine/database/schema.py` (DDL), `writer.py` (inserts),
-`ordering.py` (the two ordering columns), plus the annotation tables created by
+`ordering.py` (the forensic ordering), plus the annotation tables created by
 `forensic_aul/ops/annotation/matcher.py`.
 
 ## Stable surface vs internal schema
@@ -59,8 +59,6 @@ The main table: one row per parsed log entry.
 | Column | Type | Meaning |
 |---|---|---|
 | `id` | INTEGER PK | rowid alias (no `AUTOINCREMENT`) |
-| `source_order` | INTEGER | Physical position **within its own tracev3 file** (1-based, byte order). NULL until the ordering pass runs |
-| `event_order` | INTEGER | Merged real timeline: `(boot physical rank, timestamp_mach)`. NULL until the ordering pass runs |
 | `tracev3_file_id` | INTEGER FK → `source_files.id` | File the raw Firehose entry came from |
 | `format_src_file_id` | INTEGER FK → `source_files.id` | UUIDText or DSC file that supplied the format string |
 | `timesync_file_id` | INTEGER FK → `source_files.id` | `.timesync` file used for the timestamp conversion |
@@ -92,9 +90,9 @@ Notes:
   per row. The read layer emits `""` — not a 1970 date — for the `0` sentinel.
 
 - All FK columns are nullable; an unresolved lookup simply leaves NULL.
-- `source_order` / `event_order` are assigned **after** the bulk load, so they are
-  independent of insertion order (and therefore of how many parser processes ran).
-  An interrupted extract can leave them NULL.
+- The forensic ordering is **not** stored here. It is assigned after the bulk
+  load, into [`logs_order`](#logs_order), so it is independent of insertion order
+  (and therefore of how many parser processes ran).
 
 ### How the `0` sentinel behaves downstream
 
@@ -121,7 +119,8 @@ Regression tests live in `tests/unit/test_export.py`, `test_diff.py` and
 
 ### Ordering semantics
 
-`ordering.py` computes both columns in one pass:
+`ordering.py` computes both values in one pass, into
+[`logs_order`](#logs_order):
 
 - `source_order` — `ROW_NUMBER() PARTITION BY tracev3_file_id ORDER BY (chunkset
   offset, firehose inner offset, entry inner offset, id)`. Combined with
@@ -148,7 +147,8 @@ full sorted build:
 | `idx_logs_category_id` | `category_id` |
 | `idx_logs_process_id` | `process_id` |
 | `idx_logs_format_str_id` | `format_str_id` |
-| `idx_logs_event_order` | `event_order` |
+
+The ordering index lives with its column, on `logs_order` — see below.
 
 Not indexed on purpose: `log_level_id` / `event_type_id` (never selective),
 `boot_id` (only sorted, and `event_order` already leads with its rank), `pid`,
@@ -159,6 +159,38 @@ built afterwards by `finalize_indexes()`.
 
 ---
 
+## `logs_order`
+
+The deterministic forensic ordering: one row per `logs` row, joined on `id`.
+Written in a single pass after the bulk load (`database/ordering.py`). A `logs`
+row with no matching row here has no ordering yet — readers LEFT JOIN, so it
+reads as NULL.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `id` | INTEGER PK | = `logs.id` (rowid alias, so the join is a rowid lookup) |
+| `source_order` | INTEGER | Physical position **within its own tracev3 file** (1-based, byte order) |
+| `event_order` | INTEGER | Merged real timeline: `(boot physical rank, timestamp_mach)` |
+
+| Index | Column |
+|---|---|
+| `idx_logs_order_event_order` | `event_order` |
+
+**Why a separate table.** The ordering can only be computed once every row is
+loaded. Back-filling it into `logs` meant an `UPDATE` over every row of the
+widest table in the database, and SQLite rewrites a whole page per row touched —
+roughly 14 GB of writes to store two integers per row on a 47 M-row extract, or
+28% of the run. Writing a narrow table instead costs about a tenth of that.
+
+It also makes the pass **atomic**: one `INSERT` in one transaction commits whole
+or rolls back to an empty table, so a database never holds a half-assigned
+ordering. An interrupted extract has either a complete ordering or none.
+
+`id` carries no `REFERENCES logs(id)` on purpose. `foreign_keys` is ON, so the
+clause would cost a parent-key probe per row to enforce something the writer
+cannot violate — every row here comes from `SELECT … FROM logs`.
+
+---
 ## `case_metadata`
 
 One row per extraction session.
@@ -336,12 +368,13 @@ Indexes: `idx_shutdown_events_time(shutdown_unix_ns)`,
 
 ```sql
 CREATE VIEW v_logs AS
-SELECT l.id, l.timestamp_unix_ns, l.source_order, l.event_order,
+SELECT l.id, l.timestamp_unix_ns, o.source_order, o.event_order,
        p.name AS process, l.pid, l.tid,
        ll.name AS log_level, et.name AS event_type,
        s.name AS subsystem, c.name AS category,
        l.message, fs.value AS format_string, b.boot_uuid
 FROM logs l
+LEFT JOIN logs_order o ON o.id = l.id
 LEFT JOIN processes p … LEFT JOIN boots b ON b.id = l.boot_id;
 ```
 

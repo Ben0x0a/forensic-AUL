@@ -451,8 +451,11 @@ def test_post_parse_phases_are_rerunnable_with_identical_results(tmp_path):
             refresh_summary(conn)
 
         def _snapshot() -> list[tuple]:
+            # Through v_logs: the ordering lives in the logs_order side table,
+            # and what this test pins is that a replayed tail yields the same
+            # ordering — not where it is stored.
             return conn.execute(
-                "SELECT id, source_order, event_order FROM logs ORDER BY id"
+                "SELECT id, source_order, event_order FROM v_logs ORDER BY id"
             ).fetchall()
 
         _run_tail()

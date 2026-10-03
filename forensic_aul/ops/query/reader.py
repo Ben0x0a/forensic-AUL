@@ -331,11 +331,11 @@ def _in_clause(col: str, ids: list[int]) -> str:
 # answer "where in which file did this row physically sit" — the other half
 # of the ordering evidence alongside event_order (the merged real timeline).
 _LOG_COLS = (
-    "l.id", "l.timestamp_unix_ns", "l.event_order",
+    "l.id", "l.timestamp_unix_ns", "o.event_order",
     "p.name", "l.pid", "l.tid",
     "ll.name", "et.name", "s.name", "c.name", "l.message",
     "fs.value",
-    "l.source_order", "sf.file_path",
+    "o.source_order", "sf.file_path",
 )
 _N_LOG_COLS = len(_LOG_COLS)
 # Trailing annotation trio = (kbs.signature_id, ev.label, ev.value).
@@ -345,6 +345,7 @@ _COL_VALUE = _N_LOG_COLS + 2
 
 _LOG_JOINS = """
     FROM logs l
+    LEFT JOIN logs_order   o  ON o.id  = l.id
     LEFT JOIN processes    p  ON p.id  = l.process_id
     LEFT JOIN subsystems   s  ON s.id  = l.subsystem_id
     LEFT JOIN categories   c  ON c.id  = l.category_id
@@ -524,7 +525,7 @@ def fetch_event_window(
     event_order show what actually surrounded the entry.
     """
     rows = list(iter_logs(
-        conn, "l.event_order BETWEEN ? AND ?", [eo_low, eo_high], has_kb=has_kb,
+        conn, "o.event_order BETWEEN ? AND ?", [eo_low, eo_high], has_kb=has_kb,
     ))
     # iter_logs orders by (timestamp, id) for rollup contiguity; the context
     # view wants the forensic sequence, so re-sort the small window here.

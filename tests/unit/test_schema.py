@@ -105,7 +105,7 @@ class TestInitSchema:
         assert "idx_logs_category_id"       in indexes
         assert "idx_logs_process_id"        in indexes
         assert "idx_logs_format_str_id"     in indexes
-        assert "idx_logs_event_order"       in indexes
+        assert "idx_logs_order_event_order" in indexes
         # Deliberately dropped: low-selectivity / provenance / redundant indexes.
         for gone in ("idx_logs_timestamp_mach", "idx_logs_log_level",
                      "idx_logs_event_type", "idx_logs_boot_uuid", "idx_logs_boot_id",
@@ -199,7 +199,7 @@ class TestDeferredIndexes:
         idx = {r[0] for r in c.execute(
             "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_logs_%'"
         )}
-        assert "idx_logs_event_order" in idx and "idx_logs_process_id" in idx
+        assert "idx_logs_order_event_order" in idx and "idx_logs_process_id" in idx
         # temp_store restored to MEMORY (2) after the build.
         assert c.execute("PRAGMA temp_store").fetchone()[0] == 2
         c.close()

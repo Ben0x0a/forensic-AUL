@@ -245,8 +245,14 @@ class LogStore:
                 ordering assigned (event_order NULL — extract was interrupted
                 before the ordering pass).
         """
+        # LEFT JOIN, so the three outcomes below stay distinguishable: no row at
+        # all means the id does not exist, while a row with a NULL event_order
+        # means the log exists but the ordering pass never ran for it.
         row = self._conn.execute(
-            "SELECT event_order FROM logs WHERE id = ?", (log_id,)
+            """SELECT o.event_order FROM logs l
+               LEFT JOIN logs_order o ON o.id = l.id
+               WHERE l.id = ?""",
+            (log_id,),
         ).fetchone()
         if row is None:
             raise ValueError(f"log id {log_id} does not exist in this database")

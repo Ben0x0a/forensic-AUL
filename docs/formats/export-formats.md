@@ -37,8 +37,8 @@ so the order below is exact and identical across formats.
 |---|---|---|---|
 | 1 | `timestamp` | `LogRow.timestamp_iso` | ISO 8601, ns-precise, formatted from `timestamp_unix_ns`. **Empty string** when the stored value is the `0` failure sentinel (never a misleading 1970 date) |
 | 2 | `timestamp_unix_ns` | `logs.timestamp_unix_ns` | integer |
-| 3 | `event_order` | `logs.event_order` | The forensic ordering rank — the merged real timeline across every source file; emitted so the tamper signal (wall-clock going backwards while `event_order` rises) is visible in the primary analyst output. NULL/empty if the extract never ran its ordering pass |
-| 4 | `source_order` | `logs.source_order` | Physical position **within its own tracev3 file** (1-based, byte order) — the other half of the ordering evidence: `event_order` shows the merged timeline stays monotonic, `source_order` + `source_file` pin down exactly where in which file a row physically sat. NULL/empty if the ordering pass never ran |
+| 3 | `event_order` | `logs_order.event_order` | The forensic ordering rank — the merged real timeline across every source file; emitted so the tamper signal (wall-clock going backwards while `event_order` rises) is visible in the primary analyst output. NULL/empty if the extract never ran its ordering pass |
+| 4 | `source_order` | `logs_order.source_order` | Physical position **within its own tracev3 file** (1-based, byte order) — the other half of the ordering evidence: `event_order` shows the merged timeline stays monotonic, `source_order` + `source_file` pin down exactly where in which file a row physically sat. NULL/empty if the ordering pass never ran |
 | 5 | `source_file` | `source_files.file_path`, via `logs.tracev3_file_id` | The tracev3 file `source_order` ranks within, path relative to the logarchive root. NULL when the source file's provenance was not resolved |
 | 6 | `process` | `processes.name` | |
 | 7 | `pid` | `logs.pid` | |

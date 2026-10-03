@@ -67,8 +67,8 @@ log = logging.getLogger(__name__)
 _CSV_SQL_TEMPLATE = """
 SELECT
     l.timestamp_unix_ns   AS timestamp_unix_ns,
-    l.event_order         AS event_order,
-    l.source_order        AS source_order,
+    o.event_order         AS event_order,
+    o.source_order        AS source_order,
     sf.file_path          AS source_file,
     p.name                AS process,
     l.pid                 AS pid,
@@ -80,6 +80,7 @@ SELECT
     l.message             AS message,
     {matched_signatures}  AS matched_signatures
 FROM logs l
+LEFT JOIN logs_order   o  ON o.id  = l.id
 LEFT JOIN processes    p  ON p.id  = l.process_id
 LEFT JOIN subsystems   s  ON s.id  = l.subsystem_id
 LEFT JOIN categories   c  ON c.id  = l.category_id

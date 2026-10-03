@@ -27,8 +27,9 @@ the event_order sort an integer comparison instead of a TEXT one.
 
 from __future__ import annotations
 
-import sqlite3
+import contextlib
 import logging
+import sqlite3
 
 from forensic_aul.config import WAL_AUTOCHECKPOINT_PAGES
 
@@ -279,12 +280,12 @@ CREATE TABLE IF NOT EXISTS logs (
     -- (we never reuse deleted ids, and the rowid is sufficient for FKs).
     id                  INTEGER PRIMARY KEY,
 
-    -- Deterministic forensic ordering (assigned post-load by database/ordering.py;
-    -- both are NULL until that pass runs). Never order by wall-clock for sequence —
-    -- that would hide time-shifting.
-    source_order        INTEGER,  -- physical position WITHIN its tracev3 file (1-based, byte order)
-    event_order         INTEGER,  -- merged real timeline: (boot physical rank, monotonic timestamp_mach)
-
+    -- NOTE the deterministic forensic ordering does NOT live here. It is a
+    -- post-load computation and lives in `logs_order` (below), joined on id.
+    -- WHY it moved out: filling two columns on every row of this table meant
+    -- SQLite rewriting the whole page per row — ~14 GB of writes to store two
+    -- integers each, which was 28% of a large extract's wall time. See
+    -- database/ordering.py.
     -- Source traceability: which file contributed each piece of information
     tracev3_file_id     INTEGER REFERENCES source_files(id),  -- raw Firehose entry source
     format_src_file_id  INTEGER REFERENCES source_files(id),  -- UUIDText or DSC file (format string)
@@ -335,6 +336,31 @@ CREATE TABLE IF NOT EXISTS logs (
 );
 """
 
+# Deterministic forensic ordering, one row per `logs` row, written in a single
+# pass after the bulk load (database/ordering.py). Never order by wall-clock for
+# sequence — that would hide time-shifting.
+#
+# WHY a separate table rather than two columns on `logs`: the ordering can only
+# be computed once every row is loaded, and back-filling it into `logs` rewrote
+# every page of the widest table in the database (~14 GB of writes for two
+# integers per row, plus an FTS trigger delete+insert per row when the
+# full-text index was live). Writing a narrow table instead costs roughly a
+# tenth of that, and makes the pass atomic: it commits whole or not at all.
+#
+# WHY `id` carries no REFERENCES logs(id): apply_pragmas turns foreign_keys ON,
+# so the clause would cost a parent-key probe per row — tens of millions of
+# them — to enforce something the writer cannot violate, since every row here
+# comes from `SELECT ... FROM logs`. The relationship is real; paying SQLite to
+# re-check it is not. Readers LEFT JOIN, so a missing row reads as NULL
+# ordering, exactly as an unfilled column used to.
+_DDL_LOGS_ORDER = """
+CREATE TABLE IF NOT EXISTS logs_order (
+    id            INTEGER PRIMARY KEY,  -- = logs.id (rowid alias: joins are rowid lookups)
+    source_order  INTEGER,  -- physical position WITHIN its tracev3 file (1-based, byte order)
+    event_order   INTEGER   -- merged real timeline: (boot physical rank, monotonic timestamp_mach)
+);
+"""
+
 # Deliberately lean. Each index on a tens-of-millions-row table costs storage and
 # a full sorted build in the finalisation tail, so only the columns that analyst
 # queries actually seek/sort on are indexed:
@@ -354,7 +380,7 @@ _DDL_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_logs_category_id        ON logs(category_id);",
     "CREATE INDEX IF NOT EXISTS idx_logs_process_id         ON logs(process_id);",
     "CREATE INDEX IF NOT EXISTS idx_logs_format_str_id      ON logs(format_str_id);",
-    "CREATE INDEX IF NOT EXISTS idx_logs_event_order        ON logs(event_order);",
+    "CREATE INDEX IF NOT EXISTS idx_logs_order_event_order  ON logs_order(event_order);",
 ]
 
 # Stable read view — the ONLY schema surface external consumers may rely on
@@ -367,8 +393,8 @@ CREATE VIEW IF NOT EXISTS v_logs AS
 SELECT
     l.id                  AS id,
     l.timestamp_unix_ns   AS timestamp_unix_ns,
-    l.source_order        AS source_order,
-    l.event_order         AS event_order,
+    o.source_order        AS source_order,
+    o.event_order         AS event_order,
     p.name                AS process,
     l.pid                 AS pid,
     l.tid                 AS tid,
@@ -380,6 +406,7 @@ SELECT
     fs.value              AS format_string,
     b.boot_uuid           AS boot_uuid
 FROM logs l
+LEFT JOIN logs_order  o  ON o.id  = l.id
 LEFT JOIN processes   p  ON p.id  = l.process_id
 LEFT JOIN subsystems  s  ON s.id  = l.subsystem_id
 LEFT JOIN categories  c  ON c.id  = l.category_id
@@ -484,6 +511,7 @@ def init_schema(
             _DDL_BOOTS,
             _DDL_TIMESYNC_ANCHORS,
             _DDL_LOGS,
+            _DDL_LOGS_ORDER,
             _DDL_SHUTDOWN_EVENTS,
             _DDL_SHUTDOWN_CLIENTS,
         ):
@@ -562,24 +590,39 @@ def finalize_deferred_fts(conn: sqlite3.Connection) -> None:
         conn.executescript(_DDL_FTS5_TRIGGERS)
 
 
+@contextlib.contextmanager
+def temp_store_on_disk(conn: sqlite3.Connection):
+    """Spill SQLite's temporary sorter to a FILE for the duration of the block.
+
+    ``apply_pragmas`` sets ``temp_store=MEMORY``, which is right for the small
+    temporaries of ordinary queries and badly wrong for the two passes that sort
+    the whole ``logs`` table: the index builds and the ordering pass. Each of
+    those materialises tens of millions of rows in the sorter, and in MEMORY
+    mode that is resident RAM — measured at a 9.6–11 GB peak on a 47 M-row
+    extract. On disk it is bounded by free space instead.
+
+    Restores whatever the connection had, so a caller that deliberately chose
+    MEMORY elsewhere keeps it.
+    """
+    prev = conn.execute("PRAGMA temp_store").fetchone()[0]
+    conn.execute("PRAGMA temp_store=FILE;")
+    try:
+        yield
+    finally:
+        conn.execute(f"PRAGMA temp_store={int(prev)};")
+
+
 def finalize_indexes(conn: sqlite3.Connection) -> None:
     """Build the secondary ``logs`` indexes after a bulk load.
 
     Counterpart to ``init_schema(..., create_indexes=False)``. Each index is one
     sequential sorted build over the finished table — far cheaper than updating
     every index on every INSERT during the load. The sort spills to a temp FILE
-    (not RAM) so a multi-million-row build cannot exhaust memory; the setting is
-    restored afterwards.
+    (not RAM) so a multi-million-row build cannot exhaust memory.
     """
-    # Force on-disk temp storage just for the (potentially large) index sorts,
-    # then restore whatever the connection had (apply_pragmas sets MEMORY).
-    prev = conn.execute("PRAGMA temp_store").fetchone()[0]
-    conn.execute("PRAGMA temp_store=FILE;")
-    try:
+    with temp_store_on_disk(conn):
         for ddl in _DDL_INDEXES:
             conn.execute(ddl)
-    finally:
-        conn.execute(f"PRAGMA temp_store={int(prev)};")
 
 
 def apply_pragmas(
