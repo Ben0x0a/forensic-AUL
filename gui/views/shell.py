@@ -1,7 +1,7 @@
-"""The FAUL application shell — frameless window, sidebar, screen stack, log panel.
+"""The FAUL application shell — native window, sidebar, screen stack, log panel.
 
-Defines : MainWindow — a macOS-style frameless window with a draggable titlebar
-          (functional traffic-light controls), a left sidebar navigating the
+Defines : MainWindow — a window using the OS's own titlebar (its title carries
+          the current-screen breadcrumb), a left sidebar navigating the
           pipeline / reference / preferences sections, a stacked screen area, and
           a docked, resizable application-log panel. Future screens appear in the
           sidebar greyed-out with a "available in vN" tooltip.
@@ -10,9 +10,8 @@ Uses    : PySide6, the v1 screens (gui.views.screens_*), gui.widgets.components,
           gui.widgets.log_panel, gui.settings_store, gui.recent_store, gui.theme,
           gui.shutdown (the non-blocking close/drain sequence).
 
-WHY frameless: the design is explicitly a macOS window; a custom titlebar with
-traffic lights is core to its identity. Native resize is preserved with a corner
-QSizeGrip, and the window stays movable via titlebar drag.
+WHY the native titlebar: a custom macOS-style bar looked foreign on Windows and
+Linux and re-implemented move / resize / snap that the OS already provides.
 """
 
 from __future__ import annotations
@@ -23,11 +22,9 @@ from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QButtonGroup,
-    QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QSizeGrip,
     QSplitter,
     QStackedWidget,
     QVBoxLayout,
@@ -37,13 +34,13 @@ from PySide6.QtWidgets import (
 from gui.recent_store import RecentStore
 from gui.settings_store import SettingsStore
 from gui.shutdown import ShutdownCoordinator
-from gui.theme import DARK_TOKENS, build_stylesheet
+from gui.theme import build_stylesheet
 from gui.views.screen_exploit import ExploitScreen
 from gui.views.screen_identify_hub import IdentifyHub
 from gui.views.screens_data import ExportScreen, VerifyHashScreen
 from gui.views.screens_pipeline import AcquireScreen, ExtractScreen
 from gui.views.screens_prefs import SettingsScreen
-from gui.widgets.components import TrafficLights, asset_pixmap, make_icon
+from gui.widgets.components import asset_pixmap, make_icon
 from gui.widgets.log_panel import LogPanel
 
 _LOG = logging.getLogger(__name__)
@@ -71,7 +68,7 @@ _PREFS = [
     ("validate-faul", "Validate FAUL", False, "v2"),
 ]
 
-# Human labels for the titlebar breadcrumb. Consumed by: MainWindow._set_title.
+# Human labels for the window-title breadcrumb. Consumed by: MainWindow._set_title.
 _SCREEN_LABELS = {
     "acquire": "Acquire", "extract": "Extract", "exploit": "Exploit",
     "export": "Export", "verify-hash": "Verify hash", "settings": "Settings",
@@ -79,41 +76,14 @@ _SCREEN_LABELS = {
 }
 
 
-class _TitleBar(QWidget):
-    """Draggable titlebar; double-click toggles maximise (macOS convention)."""
-
-    def __init__(self, window: QWidget, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setObjectName("titlebar")
-        self.setFixedHeight(36)
-        self._window = window
-        self._press_pos = None
-
-    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt override
-        if event.button() == Qt.MouseButton.LeftButton:
-            # Remember the offset from the window origin to drag it 1:1.
-            self._press_pos = event.globalPosition().toPoint() - self._window.frameGeometry().topLeft()
-
-    def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt override
-        if self._press_pos is not None and event.buttons() & Qt.MouseButton.LeftButton:
-            self._window.move(event.globalPosition().toPoint() - self._press_pos)
-
-    def mouseReleaseEvent(self, _event) -> None:  # noqa: N802 - Qt override
-        self._press_pos = None
-
-    def mouseDoubleClickEvent(self, _event) -> None:  # noqa: N802 - Qt override
-        self._window.toggle_maximise()
-
-
 class MainWindow(QWidget):
-    """Top-level window: titlebar + (sidebar | stacked screens + log panel)."""
+    """Top-level window: sidebar | (stacked screens + log panel), under the OS titlebar."""
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
-        # Translucent so the area outside the rounded #appRoot corners is see-through,
-        # giving the frameless window genuine rounded corners (see _build_main / QSS).
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        # A QWidget subclass only paints a QSS background with this attribute set.
+        self.setObjectName("appRoot")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setWindowTitle("FAUL · forensic-aul")
         icon = asset_pixmap("faul-icon.png")
         if not icon.isNull():
@@ -132,31 +102,11 @@ class MainWindow(QWidget):
         self._nav_group.setExclusive(True)
         self._screen_index: dict[str, int] = {}
 
-        # All content lives in a rounded #appRoot frame; the window itself is
-        # transparent, so #appRoot's border-radius reads as rounded window corners.
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
-        self._app_root = QFrame()
-        self._app_root.setObjectName("appRoot")
-        outer.addWidget(self._app_root)
-
-        root = QVBoxLayout(self._app_root)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
-        root.addWidget(self._build_titlebar())
-
-        body = QHBoxLayout()
+        body = QHBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
         body.addWidget(self._build_sidebar())
         body.addWidget(self._build_main(), 1)
-        root.addLayout(body, 1)
-
-        # Corner grip for native-feeling resize on a frameless window (child of the
-        # rounded frame so it sits inside the visible window area).
-        self._grip = QSizeGrip(self._app_root)
-        self._grip.resize(16, 16)
 
         # Built after the stack exists — it questions the screens in it.
         self._shutdown = ShutdownCoordinator(self, self._stacked_screens)
@@ -164,44 +114,11 @@ class MainWindow(QWidget):
         self.apply_theme()
         self.set_current("acquire")
 
-    # ── Titlebar ────────────────────────────────────────────────────────────────
-
-    def _build_titlebar(self) -> QWidget:
-        bar = _TitleBar(self)
-        layout = QHBoxLayout(bar)
-        layout.setContentsMargins(12, 0, 12, 0)
-        layout.setSpacing(10)
-        layout.addWidget(TrafficLights(self.close, self.showMinimized, self.toggle_maximise))
-        layout.addStretch(1)
-        self._title_label = QLabel()
-        self._title_label.setObjectName("titleText")
-        self._title_label.setTextFormat(Qt.TextFormat.RichText)
-        layout.addWidget(self._title_label)
-        layout.addStretch(1)
-        # Right-side spacer balances the traffic lights so the title stays centred.
-        spacer = QWidget()
-        spacer.setFixedWidth(56)
-        layout.addWidget(spacer)
-        return bar
+    # ── Window title ─────────────────────────────────────────────────────────────
 
     def _set_title(self, screen_id: str) -> None:
         label = _SCREEN_LABELS.get(screen_id, "")
-        # Colours sourced from DARK_TOKENS (not literals) so the breadcrumb stays
-        # in lock-step with the rest of the palette (review item G8).
-        t = DARK_TOKENS
-        self._title_label.setText(
-            f"<span id='titleApp' style='color:{t['text_hi']};font-weight:600'>FAUL</span>"
-            f"<span style='color:{t['text_mute']}'> · </span>"
-            f"<span style='color:{t['text_dim']}'>forensic-aul</span>"
-            f"<span style='color:{t['text_mute']}'> &nbsp;—&nbsp; </span>"
-            f"<span style='color:{t['text']}'>{label}</span>"
-        )
-
-    def toggle_maximise(self) -> None:
-        if self.isMaximized():
-            self.showNormal()
-        else:
-            self.showMaximized()
+        self.setWindowTitle(f"FAUL · forensic-aul — {label}" if label else "FAUL · forensic-aul")
 
     # ── Sidebar ────────────────────────────────────────────────────────────────
 
@@ -501,13 +418,6 @@ class MainWindow(QWidget):
     def apply_theme(self) -> None:
         # Single dark theme — no per-setting re-theming to react to.
         self.setStyleSheet(build_stylesheet())
-
-    # ── Window plumbing ───────────────────────────────────────────────────────────
-
-    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override
-        super().resizeEvent(event)
-        # Keep the resize grip pinned to the bottom-right corner.
-        self._grip.move(self.width() - self._grip.width(), self.height() - self._grip.height())
 
     # ── Shutdown ──────────────────────────────────────────────────────────────
 

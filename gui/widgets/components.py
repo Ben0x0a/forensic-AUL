@@ -3,7 +3,7 @@
 Defines : the small building blocks every screen reuses — stroke icons rendered
           from SVG (``make_icon``), heading/label factories (``eyebrow``, ``h1``,
           ``subtitle`` …), :class:`Pill`, :class:`Panel`, :class:`Divider`,
-          :class:`Stat`, :func:`field_row`, and :class:`TrafficLights`.
+          :class:`Stat`, and :func:`field_row`.
 Used by : gui.views.shell and gui.views.screens.* (composition only).
 Uses    : PySide6 (QtWidgets/QtGui/QtCore, QtSvg when available); gui.theme
           (DARK_TOKENS, so colours are sourced from the palette, never literals).
@@ -21,7 +21,7 @@ from collections.abc import Callable
 from importlib.resources import files
 
 from PySide6.QtCore import QByteArray, QPoint, QSize, Qt
-from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -300,57 +300,6 @@ def field_row(label: str, field: QWidget, *, required: bool = False) -> QWidget:
     layout.addWidget(lbl)
     layout.addWidget(field, 1)
     return row
-
-
-class TrafficLights(QWidget):
-    """The macOS window-control dots — close / minimise / zoom, left to right.
-
-    Each dot triggers the matching callback when clicked. Painted (not styled)
-    because QSS cannot render the inset highlight; hovering brightens the row.
-    """
-
-    _COLOURS = ("#ff5f57", "#febc2e", "#28c840")
-    _SPACING = 20
-    _DIAMETER = 12
-
-    def __init__(
-        self,
-        on_close: Callable[[], None],
-        on_minimise: Callable[[], None],
-        on_zoom: Callable[[], None],
-        parent: QWidget | None = None,
-    ) -> None:
-        super().__init__(parent)
-        self._callbacks = (on_close, on_minimise, on_zoom)
-        self._hover = False
-        self.setFixedSize(56, 14)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setMouseTracking(True)
-
-    def enterEvent(self, _event) -> None:  # noqa: N802 - Qt override
-        self._hover = True
-        self.update()
-
-    def leaveEvent(self, _event) -> None:  # noqa: N802 - Qt override
-        self._hover = False
-        self.update()
-
-    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt override
-        index = int(event.position().x()) // self._SPACING
-        if 0 <= index < len(self._callbacks):
-            self._callbacks[index]()
-
-    def paintEvent(self, _event) -> None:  # noqa: N802 - Qt override
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(Qt.PenStyle.NoPen)
-        for i, colour in enumerate(self._COLOURS):
-            dot = QColor(colour)
-            if not self._hover:
-                dot.setAlpha(235)
-            painter.setBrush(dot)
-            painter.drawEllipse(i * self._SPACING, 1, self._DIAMETER, self._DIAMETER)
-        painter.end()
 
 
 def repolish(widget: QWidget) -> None:

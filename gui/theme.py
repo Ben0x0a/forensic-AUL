@@ -14,8 +14,8 @@ Widgets opt into looks via object names and dynamic properties (``nav="true"``,
 in code when a widget is built.
 
 Not 1:1 with the web mock: QSS has no box-shadow, CSS transitions, flex/grid or
-:focus-within. Those are dropped or approximated (e.g. the toggle switch and
-traffic-light dots are custom-painted, not styled here). The palette, surfaces,
+:focus-within. Those are dropped or approximated (e.g. the toggle switch is
+custom-painted, not styled here). The palette, surfaces,
 radii, tables, fields, pills and the violet accent carry the visual identity.
 """
 
@@ -54,9 +54,6 @@ DARK_TOKENS: dict[str, str] = {
     "warn": "#f5b544",
     "err": "#f87171",
     "info": "#60a5fa",
-    # Titlebar gradient stops
-    "title_top": "#1f242c",
-    "title_bottom": "#181c22",
     # Metrics
     "radius": "6px",
     "radius_lg": "10px",
@@ -136,14 +133,9 @@ QWidget {{
     font-family: {_FONT_UI};
     font-size: 13px;
 }}
-/* Rounded window: the frameless window is translucent, so this frame's rounded
-   corners read as the window's corners. The corner-touching children below
-   (titlebar, sidebar, #main, log panel) repeat the matching radius so no square
-   corner pokes through the rounding. */
-#appRoot {{ background: {t['bg_window']}; border-radius: 10px; }}
-/* Paint the page surface behind the (transparent) screens and splitter; round the
-   bottom-right so the window corner stays clean behind the log panel. */
-#main {{ background: {t['bg_window']}; border-bottom-right-radius: 10px; }}
+#appRoot {{ background: {t['bg_window']}; }}
+/* Paint the page surface behind the (transparent) screens and splitter. */
+#main {{ background: {t['bg_window']}; }}
 QToolTip {{
     background: {t['bg_elev']};
     color: {t['text_hi']};
@@ -151,24 +143,10 @@ QToolTip {{
     padding: 4px 7px;
 }}
 
-/* ── Window / titlebar ────────────────────────────────────────────────── */
-#titlebar {{
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                stop:0 {t['title_top']}, stop:1 {t['title_bottom']});
-    border-bottom: 1px solid {t['border_faint']};
-    border-top-left-radius: 10px;
-    border-top-right-radius: 10px;
-}}
-#titleText {{ color: {t['text_dim']}; font-size: 12px; font-weight: 500; }}
-#titleApp  {{ color: {t['text_hi']}; font-weight: 600; }}
-#titleCase {{ color: {t['text_hi']}; font-weight: 600; }}
-#titleSep  {{ color: {t['text_mute']}; }}
-
 /* ── Sidebar ──────────────────────────────────────────────────────────── */
 #sidebar {{
     background: {t['bg_window']};
     border-right: 1px solid {t['border']};
-    border-bottom-left-radius: 10px;
 }}
 #sidebarBrand {{ border-bottom: 1px solid {t['border_faint']}; }}
 #sidebarBrandName {{ color: {t['text_hi']}; font-size: 14px; font-weight: 700; }}
@@ -492,7 +470,7 @@ QProgressBar::chunk {{
 #contentScroll, #contentScroll > QWidget > QWidget {{ background: {t['bg_window']}; border: none; }}
 
 /* ── Log panel ────────────────────────────────────────────────────────── */
-#logPanel {{ background: {t['bg_base']}; border-top: 1px solid {t['border']}; border-bottom-right-radius: 10px; }}
+#logPanel {{ background: {t['bg_base']}; border-top: 1px solid {t['border']}; }}
 #logPanelHeader {{ background: {t['bg_elev']}; border-bottom: 1px solid {t['border']}; }}
 #logPanelTitle {{
     color: {t['text_dim']}; font-size: 10px; font-weight: 600;

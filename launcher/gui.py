@@ -20,7 +20,7 @@ log = logging.getLogger(__name__)
 def run_gui() -> int:
     """Boot the GUI. Returns the Qt exit code, or 1 if PySide6 is unavailable."""
     try:
-        from PySide6.QtCore import QTimer
+        from PySide6.QtCore import Qt, QTimer
         from PySide6.QtWidgets import QApplication
     except ImportError:
         # WHY: PySide6 is an optional extra (clone-&-run users may not install
@@ -41,6 +41,9 @@ def run_gui() -> int:
     # for every widget, which makes the stylesheet the single source of truth for
     # how the app looks on every platform.
     app.setStyle("Fusion")
+    # The window uses the OS titlebar; ask for its dark variant so it matches the
+    # dark-only theme regardless of the system appearance setting.
+    app.styleHints().setColorScheme(Qt.ColorScheme.Dark)
 
     # Install the crash handler before building the UI or running the event loop,
     # so a main-thread (Qt slot) exception is captured. Worker-thread crashes are
