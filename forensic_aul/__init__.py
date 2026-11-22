@@ -64,7 +64,7 @@ from forensic_aul.ops.acquisition.acquire import (
     AcquisitionError,
     acquire,
 )
-from forensic_aul.ops.acquisition.device import DeviceInfo
+from forensic_aul.device_info import DeviceInfo
 
 # Forensic hashing / chain of custody
 from forensic_aul.engine.integrity import compute_sha256, hash_logarchive

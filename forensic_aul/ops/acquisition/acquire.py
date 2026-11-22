@@ -34,7 +34,8 @@ from forensic_aul.engine.utils.cancellation import NEVER_CANCELLED, CancelToken
 from forensic_aul.engine.utils.time import parse_duration_seconds
 from forensic_aul.engine.faul_format import FAUL_SUFFIX, pack_faul
 from forensic_aul.ops.acquisition.report import build_report_dict, write_acquisition_report
-from forensic_aul.ops.acquisition.device import DeviceInfo, close_lockdown, connect_device
+from forensic_aul.device_info import DeviceInfo
+from forensic_aul.ops.acquisition.device import close_lockdown, connect_device
 from forensic_aul.engine.integrity import hash_logarchive
 from forensic_aul.outcomes import AcquireResult
 

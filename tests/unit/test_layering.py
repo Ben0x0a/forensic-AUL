@@ -47,10 +47,6 @@ _KNOWN_FRONTEND_ENGINE = {
 }
 # Rule 4 — cycles between bricks, each as the set of bricks in one cycle.
 _KNOWN_CYCLES = {
-    # outcomes → ops.acquisition (DeviceInfo).
-    frozenset({
-        "forensic_aul.outcomes", "forensic_aul.ops.acquisition", "forensic_aul.ops.extraction",
-    }),
     frozenset({"app.diagnostics", "app.sanitize"}),
     frozenset({"gui.theme", "gui.widgets"}),
 }

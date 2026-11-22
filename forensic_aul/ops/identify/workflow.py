@@ -48,7 +48,8 @@ from forensic_aul.ops.acquisition.acquire import (
     collect_logarchive,
     sanitise_filename_token,
 )
-from forensic_aul.ops.acquisition.device import DeviceInfo, close_lockdown, connect_device
+from forensic_aul.device_info import DeviceInfo
+from forensic_aul.ops.acquisition.device import close_lockdown, connect_device
 from forensic_aul.ops.acquisition.report import write_acquisition_report
 from forensic_aul.ops.identify.diff import run_diff
 from forensic_aul.outcomes import IdentifyResult

@@ -40,7 +40,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from forensic_aul._version import __version__
-from forensic_aul.ops.acquisition.device import DeviceInfo
+from forensic_aul.device_info import DeviceInfo
 
 log = logging.getLogger(__name__)
 

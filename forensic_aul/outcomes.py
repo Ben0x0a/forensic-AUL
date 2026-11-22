@@ -24,9 +24,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    # Type-only import: keeps results.py free of the optional pymobiledevice3
-    # surface at runtime (DeviceInfo is a plain dataclass defined in acquisition).
-    from forensic_aul.ops.acquisition.device import DeviceInfo
+    # Type-only import of a leaf data module (no runtime dependency at all).
+    from forensic_aul.device_info import DeviceInfo
 
 
 @dataclass(frozen=True)
