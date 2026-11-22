@@ -31,7 +31,7 @@ from forensic_aul import OperationCancelled  # noqa: E402
 from forensic_aul.outcomes import DiffResult, IdentifyResult  # noqa: E402
 from gui.recent_store import RecentStore  # noqa: E402
 from gui.settings_store import SettingsStore  # noqa: E402
-from gui.views.screens_identify import IdentifyScreen, _State  # noqa: E402
+from gui.views.screens_identify import IdentifyScreen  # noqa: E402
 from gui.widgets.device_picker import DevicePicker  # noqa: E402
 
 

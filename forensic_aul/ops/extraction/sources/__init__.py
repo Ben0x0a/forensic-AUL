@@ -42,7 +42,6 @@ from forensic_aul.ops.extraction.sources import (
     faul,
     filesystem,
     logarchive,
-    loose_dirs,
     sysdiagnose,
 )
 from forensic_aul.ops.extraction.sources.base import (

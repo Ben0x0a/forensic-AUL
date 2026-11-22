@@ -224,7 +224,8 @@ def _write_json(
                 obj["extracted_values"] = log_row.values_dict()
             line = json.dumps(obj, ensure_ascii=False)
             if jsonl:
-                fp.write(line); fp.write("\n")
+                fp.write(line)
+                fp.write("\n")
             else:
                 if not first:
                     fp.write(",\n  ")

@@ -224,9 +224,11 @@ def build_where(
     # already drops 0; a to-only bound needs the explicit guard. With no time
     # bound at all, sentinel rows are included (nothing to prove them out of).
     if time_from_ns is not None:
-        clauses.append("l.timestamp_unix_ns >= ?"); params.append(time_from_ns)
+        clauses.append("l.timestamp_unix_ns >= ?")
+        params.append(time_from_ns)
     if time_to_ns is not None:
-        clauses.append("l.timestamp_unix_ns <  ?"); params.append(time_to_ns)
+        clauses.append("l.timestamp_unix_ns <  ?")
+        params.append(time_to_ns)
         if time_from_ns is None:
             clauses.append("l.timestamp_unix_ns > 0")
 
@@ -253,7 +255,8 @@ def build_where(
         clauses.append(_in_clause("l.format_str_id", ids))
         params.extend(ids)
     if f.like:
-        clauses.append("l.message LIKE ?"); params.append(f.like)
+        clauses.append("l.message LIKE ?")
+        params.append(f.like)
     if f.message_prefix:
         # Literal prefix: escape LIKE metacharacters so %/_ in the prefix match
         # themselves (unlike ``like``, which passes the pattern through raw).

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
 
 from forensic_aul.engine.models import (
     CatalogChunk,
@@ -21,7 +20,6 @@ from forensic_aul.engine.models import (
     FirehoseLoss,
     FirehoseNonActivity,
     FirehosePreamble,
-    FirehoseTrace,
     Oversize,
     ProcessInfoEntry,
     UUIDText,

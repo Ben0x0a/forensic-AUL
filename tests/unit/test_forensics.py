@@ -4,7 +4,6 @@ import hashlib
 import sqlite3
 from pathlib import Path
 
-import pytest
 from forensic_aul.engine.integrity import compute_sha256, hash_logarchive, verify_source_files
 from forensic_aul.engine.database.writer import register_source_file
 from forensic_aul.engine.database.schema import init_schema

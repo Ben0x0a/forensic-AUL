@@ -9,6 +9,7 @@ Covers : forensic_aul/ops/extraction/source.py — type detection, the pure FFS 
 from __future__ import annotations
 
 import io
+import os
 import tarfile
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -324,14 +325,15 @@ def test_prepare_loose_dirs_function_and_work_dir(tmp_path):
 def test_prepare_loose_dirs_copy_fallback(tmp_path, monkeypatch):
     # When hard links are unavailable (exFAT / network drive / cross-volume), the
     # files are COPIED instead — the result must be identical and hashes populated.
-    import os as _os
     from forensic_aul.ops.extraction import source as _src
     diagnostics, uuidtext = _build_loose_dirs(tmp_path)
 
     def _no_hardlinks(*_a, **_k):
         raise OSError("simulated: filesystem without hard-link support")
 
-    monkeypatch.setattr(_src.os, "link", _no_hardlinks)
+    # Patch the os module itself: every caller shares it, so no module needs to
+    # (re-)export ``os`` for the test to reach it.
+    monkeypatch.setattr(os, "link", _no_hardlinks)
     with _src.prepare_loose_dirs(diagnostics, uuidtext) as prepared:
         _assert_logarchive_layout(prepared.logarchive_root)
         # Copied (not linked): a regular file, not a symlink, and a *distinct* inode.

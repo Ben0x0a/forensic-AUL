@@ -1,6 +1,5 @@
 """Tests for forensic_aul.engine.parser.message — Apple printf formatter."""
 
-import pytest
 from forensic_aul.engine.parser.message import format_message
 from forensic_aul.engine.models import FirehoseItemData, FirehoseItemInfo
 

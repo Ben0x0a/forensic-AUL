@@ -5,7 +5,6 @@ any real logarchive file.
 """
 
 import struct
-import pytest
 import lz4.block as lz4_block
 
 from forensic_aul.engine.parser.chunkset import (
@@ -18,7 +17,6 @@ from forensic_aul.engine.parser.chunkset import (
     CHUNK_PREAMBLE_SIZE,
     decompress_chunkset,
     iter_subchunks,
-    SubChunkRef,
 )
 
 

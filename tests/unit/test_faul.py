@@ -11,7 +11,6 @@ from __future__ import annotations
 import zipfile
 from pathlib import Path
 
-import pytest
 
 from forensic_aul.engine import faul_format
 from forensic_aul.ops.extraction.sources import (

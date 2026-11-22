@@ -404,25 +404,30 @@ def _annotate_one(
             where.append(f"format_str_id IN ({','.join('?' * len(fmt_ids))})")
             params.extend(fmt_ids)
     if proc_id is not None:
-        where.append("process_id = ?"); params.append(proc_id)
+        where.append("process_id = ?")
+        params.append(proc_id)
     if subs_id is not None:
-        where.append("subsystem_id = ?"); params.append(subs_id)
+        where.append("subsystem_id = ?")
+        params.append(subs_id)
     if cat_id is not None:
-        where.append("category_id = ?"); params.append(cat_id)
+        where.append("category_id = ?")
+        params.append(cat_id)
     if sig.match.log_level is not None:
         # log_level is normalised — translate the signature's level name to its
         # log_levels.id once. _NO_MATCH means the DB has no such level → no hits.
         lvl_id = _resolve_lookup_id(conn, "log_levels", sig.match.log_level)
         if lvl_id is _NO_MATCH:
             return 0
-        where.append("log_level_id = ?"); params.append(lvl_id)
+        where.append("log_level_id = ?")
+        params.append(lvl_id)
     if sig.match.event_type is not None:
         # Same normalised-lookup shape as log_level; also a non-indexed residual
         # refinement, applied on the already-narrowed candidate set.
         et_id = _resolve_lookup_id(conn, "event_types", sig.match.event_type)
         if et_id is _NO_MATCH:
             return 0
-        where.append("event_type_id = ?"); params.append(et_id)
+        where.append("event_type_id = ?")
+        params.append(et_id)
     if sig.match.library is not None:
         # WHY every matching id and not one: `libraries` is UNIQUE(name, uuid), so
         # the same path legitimately recurs under several UUIDs (one per build of

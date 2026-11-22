@@ -1,6 +1,5 @@
 """Tests for forensic_aul.validation.comparator — comparison engine and report renderer."""
 
-import pytest
 from forensic_aul.validation.ndjson_loader import RefKey, RefRecord, LoadResult
 from forensic_aul.validation.comparator import (
     DbRecord,
@@ -205,7 +204,7 @@ class TestTableHelper:
     def test_output_is_list_of_strings(self):
         lines = _table(["A", "B"], [["1", "2"], ["3", "4"]])
         assert isinstance(lines, list)
-        assert all(isinstance(l, str) for l in lines)
+        assert all(isinstance(line, str) for line in lines)
 
     def test_has_top_and_bottom_borders(self):
         lines = _table(["H"], [["v"]])
@@ -215,8 +214,8 @@ class TestTableHelper:
     def test_data_rows_have_same_column_separator_count(self):
         lines = _table(["Col1", "Col2", "Col3"], [["a", "b", "c"], ["d", "e", "f"]])
         # Border lines (╔╚╠) have no ║; header and data rows do
-        data_lines = [l for l in lines if l.startswith("║")]
-        counts = [l.count("║") for l in data_lines]
+        data_lines = [line for line in lines if line.startswith("║")]
+        counts = [line.count("║") for line in data_lines]
         assert len(set(counts)) == 1, f"Inconsistent ║ counts: {counts}"
 
 

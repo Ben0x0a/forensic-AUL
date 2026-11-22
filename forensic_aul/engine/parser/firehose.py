@@ -158,8 +158,6 @@ def parse_firehose_preamble(data: bytes) -> FirehosePreamble | None:
         public_data_start = pos
         public_data_end = pos + public_data_bytes_count
 
-        # Slice of remaining data (may include private data after public data)
-        remaining_after_header = data[pos:]
         public_data_bytes = data[pos:public_data_end]
         after_public = data[public_data_end:]
 
@@ -365,9 +363,7 @@ def _parse_single_firehose(data: bytes, base_pos: int) -> tuple[Firehose | None,
          ct_delta, ct_delta_upper, data_size) = _ENTRY_HEADER.unpack_from(data, pos)
         pos += _ENTRY_HEADER.size
 
-        entry_data_start = pos
         entry_data = read(data_size)
-        entry_data_end = pos
 
         fhose = Firehose(
             unknown_log_activity_type=act_type,

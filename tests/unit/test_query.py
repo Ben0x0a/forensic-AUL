@@ -304,7 +304,8 @@ class TestPagedAccess:
         conn.execute(
             "INSERT INTO logs_order(id, event_order) SELECT id, id * 10 FROM logs"
         )
-        conn.commit(); conn.close()
+        conn.commit()
+        conn.close()
 
         anchor = next(iter(query_logs(db, message_prefix="Hello again")))
         ctx = fetch_context(db, anchor.log_id, before=10, after=10)
@@ -350,7 +351,8 @@ class TestMessageMatch:
         for trigger in ("logs_ai", "logs_ad", "logs_au"):
             conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
         conn.execute("DROP TABLE IF EXISTS logs_fts")
-        conn.commit(); conn.close()
+        conn.commit()
+        conn.close()
         with pytest.raises(ValueError, match="full-text index"):
             list(query_logs(db, message_match="hello"))
 
@@ -359,7 +361,8 @@ class TestMessageMatch:
         # rows; searching it would silently miss everything, so it must raise.
         conn = sqlite3.connect(str(db))
         conn.execute("INSERT INTO logs_fts(logs_fts) VALUES('delete-all')")
-        conn.commit(); conn.close()
+        conn.commit()
+        conn.close()
         with pytest.raises(ValueError, match="full-text index"):
             list(query_logs(db, message_match="hello"))
 
@@ -391,7 +394,8 @@ class TestLogStore:
         conn.execute(
             "INSERT INTO logs_order(id, event_order) SELECT id, id * 10 FROM logs"
         )
-        conn.commit(); conn.close()
+        conn.commit()
+        conn.close()
         with LogStore(db) as store:
             ctx = store.context(3, before=10, after=10)
             assert [r.log_id for r in ctx] == [2, 3, 4]

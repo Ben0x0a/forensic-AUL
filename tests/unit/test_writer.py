@@ -2,9 +2,7 @@
 
 import json
 import sqlite3
-import pytest
 from forensic_aul.engine.database.writer import BatchWriter
-from forensic_aul.engine.database.schema import apply_pragmas, init_schema
 
 
 def _row_count(conn: sqlite3.Connection, table: str) -> int:

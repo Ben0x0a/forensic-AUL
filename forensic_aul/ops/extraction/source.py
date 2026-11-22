@@ -12,7 +12,6 @@ New code should import from :mod:`forensic_aul.ops.extraction.sources` directly.
 
 from __future__ import annotations
 
-import os  # re-exported: some tests monkeypatch ``source.os.link`` to force copies
 
 from forensic_aul.ops.extraction.sources import (
     INTEGRITY_MODES,
