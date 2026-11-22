@@ -30,6 +30,7 @@ from forensic_aul.ops.query.reader import (
     LogFilters,
     LogRow,
     build_where,
+    check_time_filters,
     count_rows,
     fetch_event_window,
     fetch_page,
@@ -129,15 +130,15 @@ def query_logs(
         tag=_as_list(tag),
         annotated_only=annotated_only,
     )
-    time_from_ns, time_to_ns = resolve_time_bounds(filters)
-    return _stream_rows(db, filters, time_from_ns, time_to_ns, limit)
+    # Reject a bad value now, before the caller starts iterating; the
+    # archive-relative bound itself needs the open database (see _stream_rows).
+    check_time_filters(filters)
+    return _stream_rows(db, filters, limit)
 
 
 def _stream_rows(
     db: Path,
     filters: LogFilters,
-    time_from_ns: int | None,
-    time_to_ns: int | None,
     limit: int | None,
 ) -> Iterator[LogRow]:
     """Generator body of :func:`query_logs` — owns the database connection.
@@ -153,6 +154,7 @@ def _stream_rows(
         _ensure_views_best_effort(conn)
         has_kb = has_kb_tables(conn)
         _require_kb_filters(has_kb, filters)
+        time_from_ns, time_to_ns = resolve_time_bounds(conn, filters)
         where, params = build_where(conn, filters, time_from_ns, time_to_ns)
         yield from iter_logs(conn, where, params, has_kb=has_kb, limit=limit)
     finally:
@@ -293,7 +295,7 @@ class LogStore:
     def _where(self, f: LogFilters) -> tuple[str, list]:
         """Shared filters → WHERE step behind :meth:`count` and :meth:`fetch`."""
         _require_kb_filters(self.has_kb, f)
-        time_from_ns, time_to_ns = resolve_time_bounds(f)
+        time_from_ns, time_to_ns = resolve_time_bounds(self._conn, f)
         return build_where(self._conn, f, time_from_ns, time_to_ns)
 
 

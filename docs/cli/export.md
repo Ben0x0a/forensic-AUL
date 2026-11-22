@@ -48,7 +48,7 @@ suffix is unknown and `--format` is absent, the command errors.
 |---|---|---|
 | `--from ISO` | none | Lower bound, **inclusive**. ISO 8601 datetime. |
 | `--to ISO` | none | Upper bound, **exclusive**. ISO 8601 datetime. |
-| `--last DURATION` | none | Shortcut for `--from now-DURATION`. Accepts `10m`, `1h`, `24h`, `7d`. |
+| `--last DURATION` | none | Shortcut for `--from <end of archive> - DURATION`, where the end of the archive is the newest resolved timestamp in the database (never the current time). Accepts `10m`, `1h`, `24h`, `7d`. |
 
 ### Log-column filters
 
@@ -100,7 +100,7 @@ annotation tables; on an un-annotated database the flag is a no-op.
 # Everything, as CSV (format inferred from the suffix)
 faul.py export cases/case.db -o out/all.csv
 
-# One process, last 24 hours, JSON Lines
+# One process, the last 24 hours of the archive, JSON Lines
 faul.py export cases/case.db -o out/locationd.jsonl --process locationd --last 24h
 
 # Two processes, errors and faults only, explicit window

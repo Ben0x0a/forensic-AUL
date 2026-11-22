@@ -210,6 +210,13 @@ class TestQueryErrors:
         with pytest.raises(ValueError):
             query_logs(db, last="10x")
 
+
+class TestLastWindow:
+    def test_last_is_relative_to_the_end_of_the_archive(self, db):
+        # Rows at +0/+1/+2/+3 s (Jan 2024): "1s" back from the newest = last two.
+        rows = list(query_logs(db, last="1s"))
+        assert [r.message for r in rows] == ["Hello again", "progress 100%_x done"]
+
     def test_kb_filter_without_kb_raises_on_iteration(self, db):
         it = query_logs(db, annotated_only=True)
         with pytest.raises(ValueError):

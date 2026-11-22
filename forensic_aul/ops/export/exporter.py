@@ -42,6 +42,7 @@ from forensic_aul.ops.query.reader import (
     LogFilters,
     LogRow,
     build_where,
+    check_time_filters,
     discover_labels,
     has_kb_tables,
     iter_logs,
@@ -100,10 +101,13 @@ def run_export(
     if fmt not in _WRITERS:
         raise ValueError(f"unknown export format {fmt!r}; expected one of {export_formats()}")
 
-    time_from_ns, time_to_ns = resolve_time_bounds(f)
+    # Validate before opening (a bad value never touches the database); the
+    # archive-relative ``last`` bound is resolved against the open database.
+    check_time_filters(f)
 
     conn = open_analysis_database(database)
     try:
+        time_from_ns, time_to_ns = resolve_time_bounds(conn, f)
         rows = _run(conn, output, f, fmt, time_from_ns, time_to_ns)
     finally:
         conn.close()

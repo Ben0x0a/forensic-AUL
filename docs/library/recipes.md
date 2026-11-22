@@ -219,7 +219,7 @@ AND-combined. List fields accept a bare string as a convenience in `query_logs`.
 | Field | Meaning |
 |---|---|
 | `time_from` / `time_to` | ISO 8601 bounds (lower inclusive, upper exclusive) |
-| `last` | shortcut for `time_from = now - DURATION` (`10m`, `1h`, `24h`, `7d`) |
+| `last` | shortcut for `time_from = <end of archive> - DURATION` (`10m`, `1h`, `24h`, `7d`); the end of the archive is the newest resolved timestamp in the database, never the current time |
 | `process`, `subsystem`, `level` | list filters on the lookup columns |
 | `message_prefix` | literal prefix on the composed message (`%`/`_` escaped) |
 | `message_contains` | literal substring on the composed message |

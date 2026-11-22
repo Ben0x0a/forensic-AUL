@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Iterator
 
 from forensic_aul.engine.utils.time import iso8601_from_unix_ns, parse_duration_seconds
@@ -45,7 +45,10 @@ class LogFilters:
 
     time_from: str | None = None        # ISO 8601 lower bound (inclusive)
     time_to: str | None = None          # ISO 8601 upper bound (exclusive)
-    last: str | None = None             # shortcut for time_from = now - DURATION (10m/1h/24h/7d)
+    # Shortcut for time_from = <end of the archive> - DURATION (10m/1h/24h/7d).
+    # The end of the archive is the newest resolved timestamp in the database,
+    # never the wall clock: evidence is analysed long after it was acquired.
+    last: str | None = None
     process: list[str] | None = None
     subsystem: list[str] | None = None
     # Resolved through categories.id, exactly like process/subsystem, and
@@ -134,10 +137,44 @@ def fts_match_query(text: str) -> str | None:
     return " ".join(quoted) if quoted else None
 
 
-def resolve_time_bounds(f: LogFilters) -> tuple[int | None, int | None]:
+def check_time_filters(f: LogFilters) -> None:
+    """Validate the time filters without touching a database.
+
+    Lets a caller reject a bad value up front (before opening or iterating),
+    while the archive-relative bound is resolved later by
+    :func:`resolve_time_bounds`.
+
+    Raises:
+        ValueError: a datetime or duration value cannot be parsed.
+    """
+    if f.time_from:
+        _to_unix_ns(f.time_from)
+    if f.time_to:
+        _to_unix_ns(f.time_to)
+    if f.last is not None:
+        _last_seconds(f.last)
+
+
+def archive_end_ns(conn: sqlite3.Connection) -> int | None:
+    """The newest *resolved* timestamp in the database, or None when there is none.
+
+    Timestamps of 0 are the "could not resolve" sentinel and are ignored: they
+    say nothing about when the archive ends. Index-assisted (MAX over
+    idx_logs_timestamp_unix_ns).
+    """
+    return conn.execute(
+        "SELECT MAX(timestamp_unix_ns) FROM logs WHERE timestamp_unix_ns > 0"
+    ).fetchone()[0]
+
+
+def resolve_time_bounds(
+    conn: sqlite3.Connection, f: LogFilters,
+) -> tuple[int | None, int | None]:
     """Resolve the time filters to (from_ns, to_ns) unix-nanosecond bounds.
 
-    ``last`` is folded into the lower bound (the tighter of the two wins).
+    ``last`` counts back from the **end of the archive** (:func:`archive_end_ns`),
+    never from the wall clock, and is folded into the lower bound (the tighter
+    of the two wins).
 
     Raises:
         ValueError: a datetime or duration value cannot be parsed.
@@ -145,12 +182,22 @@ def resolve_time_bounds(f: LogFilters) -> tuple[int | None, int | None]:
     time_from_ns = _to_unix_ns(f.time_from) if f.time_from else None
     time_to_ns = _to_unix_ns(f.time_to) if f.time_to else None
     if f.last is not None:
-        sec = parse_duration_seconds(f.last)
-        if sec is None:
-            raise ValueError(f"bad duration value {f.last!r}")
-        cutoff = int((datetime.now(tz=timezone.utc) - timedelta(seconds=sec)).timestamp() * 1_000_000_000)
+        sec = _last_seconds(f.last)
+        end_ns = archive_end_ns(conn)
+        # No resolved timestamp at all: no row can be proven to fall inside any
+        # window, so the honest result is empty. A 1 ns lower bound excludes the
+        # only rows present (the 0 sentinel) without a special query path.
+        cutoff = 1 if end_ns is None else end_ns - sec * 1_000_000_000
         time_from_ns = cutoff if time_from_ns is None else max(time_from_ns, cutoff)
     return time_from_ns, time_to_ns
+
+
+def _last_seconds(value: str) -> int:
+    """Parse a ``last`` duration (10m/1h/24h/7d) to seconds, or raise ValueError."""
+    sec = parse_duration_seconds(value)
+    if sec is None:
+        raise ValueError(f"bad duration value {value!r}")
+    return sec
 
 
 def build_where(

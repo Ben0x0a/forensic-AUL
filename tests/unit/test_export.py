@@ -493,6 +493,28 @@ def test_any_time_bound_excludes_the_unresolved_row(tmp_path, filters):
     assert rows, "the time filter should still match the resolved rows"
 
 
+def test_last_counts_back_from_the_end_of_the_archive_not_now(tmp_path):
+    """``last`` is relative to the newest resolved timestamp, never the wall clock.
+
+    The fixture's rows sit at +0 s, +1 s and +2 s in January 2024; measured from
+    today no row would be inside a 1-second window.
+    """
+    db = tmp_path / "a.db"
+    _make_db(db)
+    rows = _export_rows(db, tmp_path / "last.csv", last="1s")
+    assert [r["message"] for r in rows] == ["Location updated", "Goodbye"]
+
+
+def test_last_on_an_archive_with_no_resolved_timestamp_is_empty(tmp_path):
+    """No resolved instant → no row can be proven to fall in the window."""
+    db = _db_with_unresolved(tmp_path)
+    conn = sqlite3.connect(str(db))
+    conn.execute("DELETE FROM logs WHERE timestamp_unix_ns > 0")
+    conn.commit()
+    conn.close()
+    assert _export_rows(db, tmp_path / "none.csv", last="7d") == []
+
+
 def test_non_time_filters_keep_the_unresolved_row(tmp_path):
     """Only *time* bounds may exclude it — a process filter must not."""
     db = _db_with_unresolved(tmp_path)

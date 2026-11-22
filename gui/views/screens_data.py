@@ -187,6 +187,7 @@ class ExportScreen(OperationScreen):
         self._level = mono_input("Default,Error,…")
         self._like = mono_input("SQL LIKE on message, e.g. %wifi%")
         self._last = mono_input("10m / 1h / 24h / 7d")
+        self._last.setToolTip("Counted back from the newest log entry in the database, not from now.")
         filters.add(field_row("Process", self._process))
         filters.add(field_row("Subsystem", self._subsystem))
         filters.add(field_row("Level", self._level))
