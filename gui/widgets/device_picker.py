@@ -8,7 +8,7 @@ Defines : DevicePicker, a small composite that lists connected iOS devices in a
           owning screen's controller drives the scan and consumes ``selected_udid``.
 Used by : gui.views.screens_pipeline (AcquireScreen), gui.views.screens_identify
           (IdentifyScreen).
-Uses    : PySide6, gui.widgets.components (ComboBox, make_icon).
+Uses    : PySide6, gui.widgets.components (ComboBox), gui.icons (make_icon).
 """
 
 from __future__ import annotations
@@ -18,7 +18,8 @@ from typing import Any
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QHBoxLayout, QPushButton, QWidget
 
-from gui.widgets.components import ComboBox, make_icon
+from gui.icons import make_icon
+from gui.widgets.components import ComboBox
 
 
 class DevicePicker(QWidget):

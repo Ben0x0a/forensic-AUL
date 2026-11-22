@@ -32,6 +32,7 @@ from forensic_aul import __version__
 from gui.paths import DEFAULT_KB_DIR
 from gui.settings_store import SettingsStore
 from gui.views.screen_base import WIDTH_FORM, ScrollScreen
+from gui.icons import make_icon
 from gui.widgets.components import (
     ComboBox,
     Divider,
@@ -41,7 +42,6 @@ from gui.widgets.components import (
     h1,
     h2,
     help_label,
-    make_icon,
     mono,
     style_combo,
     subtitle,

@@ -33,7 +33,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from gui.widgets.components import icon_button, make_icon, repolish
+from gui.icons import make_icon
+from gui.widgets.components import icon_button, repolish
 
 # Most records to retain — caps memory on long extraction runs. Consumed by:
 # LogPanel._append_record.

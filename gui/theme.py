@@ -1,11 +1,10 @@
 """FAUL design system → Qt Style Sheet (QSS).
 
-Defines : DARK_TOKENS (the design palette + metrics ported from the
-          mockup's ``styles.css``) and build_stylesheet(), which interpolates a
-          token set into the application-wide QSS string.
+Defines : build_stylesheet(), which interpolates a token set (gui.tokens)
+          into the application-wide QSS string.
 Used by : gui.views.shell (applies the sheet), gui.app (initial application).
-Uses    : gui.widgets.components (the check glyph rendered for the checkbox
-          indicator); otherwise pure string assembly.
+Uses    : gui.tokens (the palette), gui.icons (glyphs rasterised for QSS
+          indicators); otherwise pure string assembly.
 
 WHY generate QSS from a token dict: QSS has no CSS custom properties, so the
 single source of truth lives here as Python and is interpolated into the rules.
@@ -24,48 +23,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-# ── Design tokens (ported from project/styles.css) ───────────────────────────
-# Dark is the primary, forensic-tuned theme. Consumed by: build_stylesheet().
-DARK_TOKENS: dict[str, str] = {
-    # Cool-gray dark surfaces
-    "bg_base": "#0a0c0f",
-    "bg_window": "#14171c",
-    "bg_surface": "#1a1e25",
-    "bg_elev": "#232830",
-    "bg_input": "#0c0e12",
-    "bg_row_hover": "#1f242c",
-    "bg_row_sel": "#2a2235",
-    # Borders
-    "border": "#262b34",
-    "border_strong": "#353b46",
-    "border_faint": "#1d2129",
-    # Text
-    "text_hi": "#e6e9ef",
-    "text": "#b8bdc7",
-    "text_dim": "#7a8090",
-    "text_faint": "#545a68",
-    "text_mute": "#3f4452",
-    # Accent (violet)
-    "accent": "#8b5cf6",
-    "accent_hi": "#a78bfa",
-    "accent_dim": "#6d44d4",
-    # Semantic
-    "ok": "#4ade80",
-    "warn": "#f5b544",
-    "err": "#f87171",
-    "info": "#60a5fa",
-    # Metrics
-    "radius": "6px",
-    "radius_lg": "10px",
-    "field_h": "30px",
-    "row_h": "30px",
-    "pad": "14px",
-}
-
-# Back-compat alias: older callers imported ``TOKENS``.
-# FAUL ships a single, dark theme — it is a forensic lab tool tuned for dark, and a
-# second (light) palette was unused gold-plating that doubled token maintenance.
-TOKENS = DARK_TOKENS
+from gui.tokens import DARK_TOKENS
 
 # System font stacks (Qt resolves the first available family).
 _FONT_UI = '"SF Pro Text", "Segoe UI", system-ui, "Helvetica Neue", sans-serif'
@@ -95,7 +53,7 @@ def _glyph_url(name: str, colour: str, size: int = 12) -> str:
     try:
         from PySide6.QtCore import QSize, Qt
 
-        from gui.widgets.components import make_icon
+        from gui.icons import make_icon
 
         pixmap = make_icon(name, size, colour).pixmap(QSize(size, size))
         if pixmap.isNull():

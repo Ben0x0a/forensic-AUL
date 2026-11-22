@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
 from forensic_aul import IdentifyResults
 from gui.recent_store import RecentStore
 from gui.settings_store import SettingsStore
-from gui.theme import DARK_TOKENS
+from gui.tokens import DARK_TOKENS
 from gui.views.dialog_signature import SignatureDialog, signature_kb_dir
 from gui.views.screen_base import OpenDbPanel, ScrollScreen
 from gui.widgets.components import (

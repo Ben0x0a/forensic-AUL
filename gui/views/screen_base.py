@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from gui.icons import make_icon
 from gui.recent_store import RecentStore
 from gui.widgets.components import (
     Divider,
@@ -42,7 +43,6 @@ from gui.widgets.components import (
     clear_layout,
     field_row,
     h2,
-    make_icon,
     primary_button,
     result_panel,
 )

@@ -48,7 +48,6 @@ _KNOWN_FRONTEND_ENGINE = {
 # Rule 4 — cycles between bricks, each as the set of bricks in one cycle.
 _KNOWN_CYCLES = {
     frozenset({"app.diagnostics", "app.sanitize"}),
-    frozenset({"gui.theme", "gui.widgets"}),
 }
 
 

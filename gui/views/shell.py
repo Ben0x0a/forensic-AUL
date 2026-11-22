@@ -40,7 +40,8 @@ from gui.views.screen_identify_hub import IdentifyHub
 from gui.views.screens_data import ExportScreen, VerifyHashScreen
 from gui.views.screens_pipeline import AcquireScreen, ExtractScreen
 from gui.views.screens_prefs import SettingsScreen
-from gui.widgets.components import asset_pixmap, make_icon
+from gui.icons import make_icon
+from gui.widgets.components import asset_pixmap
 from gui.widgets.log_panel import LogPanel
 
 _LOG = logging.getLogger(__name__)
