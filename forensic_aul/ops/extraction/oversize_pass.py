@@ -69,6 +69,9 @@ def collect_oversize(
                         catalog = parse_catalog_chunk(raw.data)
                     except Exception as exc:
                         log.warning(f"oversize pass: bad catalog in {path.name}: {exc}")
+                        # Same rule as the main pass: never let the following
+                        # chunksets borrow the previous catalog.
+                        catalog = None
                 elif raw.tag == CHUNK_TAG_CHUNKSET and catalog is not None:
                     decompressed = decompress_chunkset(raw.data)
                     if decompressed is None:

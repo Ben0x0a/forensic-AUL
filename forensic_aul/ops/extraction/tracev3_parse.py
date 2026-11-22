@@ -145,10 +145,17 @@ def process_tracev3(
                 except Exception as exc:
                     n_parse_errors += 1
                     log.warning(f"{rel}  catalog parse error: {exc}")
+                    # WHY reset: the chunksets that follow belong to THIS catalog.
+                    # Keeping the previous one would decode them against another
+                    # catalog's process/subsystem table — wrong attribution, silently.
+                    catalog = None
 
             elif raw.tag == CHUNK_TAG_CHUNKSET:
                 if catalog is None:
-                    log.warning(f"{rel}  chunkset at offset 0x{raw.file_offset:x} encountered before catalog — skipped")
+                    # No usable catalog (none yet, or its parse failed): the entries
+                    # cannot be attributed, so the chunkset is lost — count it.
+                    n_parse_errors += 1
+                    log.warning(f"{rel}  chunkset at offset 0x{raw.file_offset:x} has no usable catalog — skipped")
                     continue
                 n_chunksets += 1
                 decompressed = decompress_chunkset(raw.data)
