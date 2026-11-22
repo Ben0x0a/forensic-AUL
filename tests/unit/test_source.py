@@ -28,8 +28,21 @@ from forensic_aul.ops.extraction.source import (
 
 # ── detect_source_type ──────────────────────────────────────────────────────
 
-def test_detect_directory_is_logarchive(tmp_path):
+@pytest.mark.parametrize("marker", ["Info.plist", "timesync", "Persist", "logdata.LiveData.tracev3"])
+def test_detect_directory_with_a_logarchive_structure(tmp_path, marker):
+    target = tmp_path / marker
+    if "." in marker:
+        target.write_bytes(b"")
+    else:
+        target.mkdir()
     assert detect_source_type(tmp_path) is SourceType.LOGARCHIVE
+
+
+def test_detect_unrelated_directory_raises(tmp_path):
+    """A wrong folder must not be recorded as a logarchive with zero entries."""
+    (tmp_path / "notes.txt").write_text("not evidence", encoding="utf-8")
+    with pytest.raises(ValueError, match="Unrecognised source"):  # SourceError is a ValueError
+        detect_source_type(tmp_path)
 
 
 def test_detect_gzip_is_sysdiagnose(tmp_path):

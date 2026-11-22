@@ -1,7 +1,8 @@
 """LOGARCHIVE source — a ``.logarchive`` directory used in place.
 
-The simplest handler: any directory is a logarchive, parsed where it sits (no
-copy). Hashing honours the integrity mode; there is no archive to fingerprint.
+The simplest handler: a directory that *looks like* a logarchive (see
+``_LOGARCHIVE_MARKERS``) is parsed where it sits (no copy). Hashing honours the
+integrity mode; there is no archive to fingerprint.
 """
 
 from __future__ import annotations
@@ -20,9 +21,23 @@ from forensic_aul.ops.extraction.sources.base import (
 )
 
 
+# Top-level entries of which at least one is present in every logarchive layout
+# (log collect, pymobiledevice3, sysdiagnose, a diagnostics/ folder): the archive
+# manifest, the timesync store, the tracev3 stores, or the live buffer.
+# Consumed by: matches.
+_LOGARCHIVE_MARKERS: tuple[str, ...] = (
+    "Info.plist", "timesync", "Persist", "Special", "Signpost", "HighVolume",
+    "logdata.LiveData.tracev3",
+)
+
+
 def matches(path: Path) -> bool:
-    """A directory is always a logarchive (used as-is)."""
-    return path.is_dir()
+    """A directory holding at least one logarchive structure (used as-is).
+
+    WHY content, not "any directory": a wrong folder would otherwise be accepted,
+    parsed to zero entries and recorded as a logarchive in the case metadata.
+    """
+    return path.is_dir() and any((path / name).exists() for name in _LOGARCHIVE_MARKERS)
 
 
 def prepare(
