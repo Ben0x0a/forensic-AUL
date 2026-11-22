@@ -397,11 +397,12 @@ what the tool did, in the same directory as the output database:
 
 This is why `--case-number` and `--imei` are required: they name the file.
 Special characters are sanitised to underscores so the name is valid on Windows
-and macOS. Two handlers are configured (`engine/utils/logging_setup.py`):
+and macOS. Two handlers are configured by the frontend (`app/logging_config.py`;
+the library itself only names its loggers and adds a `NullHandler`):
 
 | Handler | Level | Format |
 |---|---|---|
-| Console | INFO, or DEBUG with `-v` | includes filename, line number, function and process info, for debugging |
+| Console | INFO, or DEBUG with `-v` | UTC time + level + message; with `-v` also filename, line number, function and process |
 | File | always INFO | clean UTC timestamp + level + message — an operational audit trail |
 
 The file is opened in **append** mode: successive runs on the same case

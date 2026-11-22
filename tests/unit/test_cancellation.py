@@ -481,7 +481,7 @@ class TestCliSigint:
         """A cancelled session exits 130 and tells the analyst where the file is.
 
         Asserted against stderr rather than caplog: ``run_extract_session`` calls
-        ``setup_logging``, which replaces the root logger's handlers — including
+        ``app.logging_config.configure_console``, which replaces the root logger's handlers — including
         the one caplog installs.
         """
         import app.extract_session as session

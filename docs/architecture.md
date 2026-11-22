@@ -122,6 +122,7 @@ library never imports it.
 
 | Module | Responsibility |
 |---|---|
+| `app/logging_config.py` | The one place logging is configured: console logging (`dictConfig`, UTC, detailed with `-v`), the forensic operational log file of a session, and attaching a frontend's own handler (the GUI log panel). The library never configures logging — it only adds a `NullHandler`. |
 | `app/extract_session.py` | The shared *session* framing around an extract: set up the forensic operational log, log the invocation banner, run the pipeline, and **seal** the log (hash → `case_metadata` → close handler) on every exit path — success, `SIGINT` or failure. Used by both `extract` and `acquire --extract`, so every route produces the same sealed audit log. |
 | `app/diagnostics.py` | Forensic crash capture. Installs `sys.excepthook` + `threading.excepthook`; `capture_exception` covers the catch-log-and-return paths. Walks the traceback and records the type and value of every variable in every frame, classified `safe` / `sensitive`. Imports the **standard library only** — domain types are recognised by *name*, never imported, so it still works when a domain import is what crashed. |
 | `app/sanitize.py` | Turns a full plaintext crash report into a shareable pair: `redact_report` (every sensitive value → type + SHA-256 placeholder, paths anonymised) and `render_markdown` (a scannable summary that doubles as a bug template). |
@@ -165,7 +166,7 @@ Nothing here knows about CLI commands, prompting, or human presentation.
 | `engine/parser/` | Apple Unified Log binary parsing — `reader` (the single source of all `struct.unpack` calls), `tracev3`, `header`, `catalog`, `chunkset`, `firehose`, `oversize`, `statedump`, `uuidtext`, `dsc`, `timesync`, `format_string`, `message`, `decoder_tables`, `string_cache`. See [concepts/unified-logs.md](concepts/unified-logs.md). |
 | `engine/models/` | Dataclasses mirroring the Rust `macos-unifiedlogs` structs field-for-field: `chunks`, `firehose`, `strings`, `timesync`, `dumps`, `log_entry`. All re-exported from the package root. |
 | `engine/database/` | `schema.py` (tables, pragmas, the `v_logs` view), `writer.py` (`BatchWriter` — lookup-table management + batched `executemany`), `ordering.py` (`assign_ordering`), `access.py` (the one validated path→connection gate). |
-| `engine/utils/` | `time.py` (mach → wall-clock via timesync anchors), `progress.py` (the UI-agnostic progress standard), `logging_setup.py` (console + operational-log handlers), `system.py` (physical cores / RAM → the auto `--jobs` budget), `files.py`. |
+| `engine/utils/` | `time.py` (mach → wall-clock via timesync anchors), `progress.py` (the UI-agnostic progress standard), `system.py` (physical cores / RAM → the auto `--jobs` budget), `files.py`. |
 | `engine/integrity.py` | `compute_sha256`, `hash_logarchive`, `seal_log_file`, `verify_source_files`. |
 | `engine/faul_format.py` | Single source of truth for the `.faul` container — constants, `pack_faul`, the O(1) `is_faul` detector, and the readers. See [formats/faul-format.md](formats/faul-format.md). |
 | `engine/ios_builds.py` | Best-effort, deliberately partial build-code → marketing-version table. Unknown builds return `None` rather than a guess. |

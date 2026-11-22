@@ -14,7 +14,8 @@ rather than inside the library.
 
 Used by : launcher.cmds.extract_cmd and launcher.cmds.acquire_cmd (the shells
           call ``run_extract_session``).
-Uses    : forensic_aul.* (the extract pipeline, integrity sealing, logging setup).
+Uses    : forensic_aul.* (the extract pipeline, integrity sealing), app.logging_config
+          (console + operational log file).
 """
 
 from __future__ import annotations
@@ -28,10 +29,11 @@ from forensic_aul import __version__
 from forensic_aul.config import BATCH_SIZE
 from forensic_aul.engine.integrity import seal_log_file
 from forensic_aul.engine.utils.cancellation import NEVER_CANCELLED, CancelToken
-from forensic_aul.engine.utils.logging_setup import close_file_handler, setup_logging
 from forensic_aul.engine.utils.progress import ProgressSink
 from forensic_aul.errors import OperationCancelled
 from forensic_aul.ops.extraction.extract import run_extract
+
+from app.logging_config import close_case_log, configure_console, open_case_log
 
 log = logging.getLogger(__name__)
 
@@ -75,9 +77,8 @@ def run_extract_session(
     naming it here is the only way the analyst learns where it is.
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    log_path = setup_logging(
-        verbose=verbose, case_number=case_number, imei=imei, db_path=db_path
-    )
+    configure_console(verbose=verbose)
+    log_path = open_case_log(case_number=case_number, imei=imei, db_path=db_path)
 
     _log_banner(
         log_path=log_path, case_number=case_number, imei=imei,
@@ -193,7 +194,7 @@ def _seal(log_path: Path, db_path: Path, metadata_id: int | None) -> None:
     the whole ``.partial`` scheme rests on, that a file at the final name means a
     completed extract.
     """
-    close_file_handler()
+    close_case_log()
     if metadata_id is not None and not db_path.exists():
         log.warning(f"Database {db_path} is absent — log hash not stored (log still hashed below)")
         metadata_id = None

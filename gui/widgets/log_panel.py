@@ -6,7 +6,8 @@ Defines : LogPanel — a collapsible panel with a header (title, visible/total
           wires it onto the root logger via a thread-safe bridge.
 Used by : gui.views.shell (docked in the bottom of the main splitter),
           gui.app (calls attach_log_panel at startup).
-Uses    : PySide6, gui.widgets.components (icons), stdlib logging.
+Uses    : PySide6, gui.icons, gui.widgets.components, app.logging_config (root
+          level + handler attachment), stdlib logging.
 
 WHY a QObject bridge rather than touching the widget from the handler: a log
 record can arrive on a worker thread, but Qt widgets are GUI-thread only. The
@@ -33,6 +34,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.logging_config import attach_handler, set_root_level
 from gui.icons import make_icon
 from gui.widgets.components import icon_button, repolish
 
@@ -363,12 +365,10 @@ def attach_log_panel(panel: LogPanel, *, level: int = logging.INFO) -> _PanelLog
     # belongs to the root logger alone, so there is only one place to reason about.
     handler.setLevel(logging.NOTSET)
 
-    root = logging.getLogger()
-    root.setLevel(level)
-    root.addHandler(handler)
+    attach_handler(handler, level=level)
 
     def _on_debug(enabled: bool) -> None:
-        root.setLevel(logging.DEBUG if enabled else level)
+        set_root_level(logging.DEBUG if enabled else level)
 
     panel.debugRequested.connect(_on_debug)
     return handler

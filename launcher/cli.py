@@ -19,6 +19,7 @@ import importlib
 import logging
 import sys
 
+from app.logging_config import configure_console
 from forensic_aul import __version__
 
 log = logging.getLogger(__name__)
@@ -78,13 +79,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    # Minimal bootstrap logging (console only, INFO) so that any errors
-    # that occur before a command sets up its own logging are still visible.
-    logging.basicConfig(
-        format="%(asctime)s  %(levelname)-8s — %(message)s",
-        datefmt="%H:%M:%S",
-        level=logging.INFO,
-    )
+    # Console logging from the first line, so errors raised before a command
+    # configures its own logging (e.g. an extract session) are still visible.
+    configure_console()
 
     parser = _build_parser()
     args = parser.parse_args()

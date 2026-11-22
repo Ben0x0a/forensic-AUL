@@ -11,6 +11,8 @@ Uses    : the package's own submodules (extraction, annotation, identify, export
 
 from __future__ import annotations
 
+import logging
+
 from forensic_aul._version import __version__
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -107,6 +109,11 @@ from forensic_aul.outcomes import (
     ExtractResult,
     IdentifyResult,
 )
+
+# A library only names its loggers; the application decides where records go.
+# The NullHandler keeps an unconfigured host from printing our warnings through
+# logging's last-resort handler.
+logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 __all__ = [
     "__version__",
