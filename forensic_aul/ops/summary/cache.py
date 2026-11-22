@@ -31,6 +31,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+from forensic_aul._version import __version__
 from forensic_aul.engine.database.access import open_analysis_database
 from forensic_aul.ops.summary.summary import (
     AnnotatedAction,
@@ -80,10 +81,6 @@ def store_summary(
     *top* and *buckets* are recorded alongside so a reader can tell which
     parameters produced the stored top-N lists and histogram resolution.
     """
-    # Local import: forensic_aul/__init__.py imports this package, so a
-    # module-level ``from forensic_aul import __version__`` would be circular.
-    from forensic_aul import __version__
-
     payload = json.dumps(_summary_to_dict(summary), separators=(",", ":"))
     params = json.dumps({"top": top, "buckets": buckets}, separators=(",", ":"))
     computed_at = datetime.now(tz=timezone.utc).isoformat(timespec="seconds")

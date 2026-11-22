@@ -45,7 +45,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from forensic_aul import __version__
+from forensic_aul._version import __version__
 from forensic_aul.config import BATCH_SIZE, PARTIAL_SUFFIX
 from forensic_aul.engine.database.ordering import assign_ordering
 from forensic_aul.engine.database.schema import (

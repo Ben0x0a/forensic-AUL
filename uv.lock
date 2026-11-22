@@ -786,7 +786,6 @@ wheels = [
 
 [[package]]
 name = "forensic-aul"
-version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "lz4" },

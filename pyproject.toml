@@ -4,7 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "forensic-aul"
-version = "0.1.0"
+# Single source: forensic_aul/_version.py (read statically, see [tool.setuptools.dynamic]).
+dynamic = ["version"]
 description = "Forensic Apple Unified Log parser — converts .logarchive to SQLite"
 requires-python = ">=3.11,<3.16"
 license = { file = "LICENSE" }
@@ -20,6 +21,9 @@ dependencies = [
 # layer (launcher/, gui/, faul.py) is clone-&-run and is intentionally excluded.
 [tool.setuptools.packages.find]
 include = ["forensic_aul*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "forensic_aul._version.__version__" }
 
 # Ship the PEP 561 marker so downstream type-checkers use the library's hints.
 [tool.setuptools.package-data]

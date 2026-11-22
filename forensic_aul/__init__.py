@@ -11,7 +11,7 @@ Uses    : the package's own submodules (extraction, annotation, identify, export
 
 from __future__ import annotations
 
-__version__ = "0.1.0"
+from forensic_aul._version import __version__
 
 # ── Public API ────────────────────────────────────────────────────────────────
 # Common exception hierarchy: every purposeful library error derives from
