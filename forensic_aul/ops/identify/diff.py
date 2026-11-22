@@ -240,7 +240,7 @@ def run_diff(
         # and is never rewritten after the diff runs; hidden_keys is reversible
         # (the viewer's "hide identical lines"), persisted here so a reopened
         # session keeps the pruning across runs.
-        _create_hidden_keys_objects(dst)
+        create_hidden_keys_objects(dst)
 
         if writer is not None:
             writer.writerow(_CSV_HEADER)
@@ -309,7 +309,7 @@ def run_diff(
     )
 
 
-def _create_hidden_keys_objects(conn: sqlite3.Connection) -> None:
+def create_hidden_keys_objects(conn: sqlite3.Connection) -> None:
     """Create hidden_keys + v_identified_visible (idempotent — CREATE ... IF NOT EXISTS).
 
     Shared with :mod:`forensic_aul.ops.identify.results` so an older diff DB
@@ -331,7 +331,7 @@ def _create_hidden_keys_objects(conn: sqlite3.Connection) -> None:
     """)
 
 
-def _ensure_source_columns(conn: sqlite3.Connection) -> None:
+def ensure_source_columns(conn: sqlite3.Connection) -> None:
     """Add ``source_order``/``source_file`` to ``identified_logs`` if absent.
 
     Shared with :mod:`forensic_aul.ops.identify.results` so a pre-L10 diff DB

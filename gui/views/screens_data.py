@@ -43,7 +43,7 @@ from gui.widgets.components import (
     Divider,
     Panel,
     Pill,
-    _repolish,
+    repolish,
     eyebrow,
     field_row,
     h1,
@@ -105,7 +105,7 @@ class _ChoiceGroup:
             on = card.value == value
             card.setChecked(on)
             card.setProperty("choiceOn", "true" if on else "false")
-            _repolish(card)
+            repolish(card)
 
     @property
     def value(self) -> str:

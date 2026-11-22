@@ -31,7 +31,7 @@ from forensic_aul.engine.parser.firehose import (
     ACTIVITY_TYPE_TRACE,
 )
 from forensic_aul.engine.parser.uuidtext import DYNAMIC_STRING_OFFSET
-from forensic_aul.ops.extraction.entry_builder import _firehose_to_log_entry
+from forensic_aul.ops.extraction.entry_builder import firehose_to_log_entry
 from forensic_aul.ops.extraction.oversize_pass import OversizeCache
 
 # ── Boot UUID matching conftest.py fixtures ───────────────────────────────────
@@ -144,7 +144,7 @@ def _call(
     )
     td = timesync_data if timesync_data is not None else {_BOOT_UUID: boot}
 
-    return _firehose_to_log_entry(
+    return firehose_to_log_entry(
         firehose=firehose,
         preamble=preamble or _preamble(),
         catalog=_minimal_catalog(),
@@ -200,7 +200,7 @@ class TestNonActivity:
 
     def test_tracev3_file_id_propagated(self):
         fh = _base_firehose(ACTIVITY_TYPE_NON_ACTIVITY)
-        entry = _firehose_to_log_entry(
+        entry = firehose_to_log_entry(
             firehose=fh,
             preamble=_preamble(),
             catalog=_minimal_catalog(),
@@ -411,7 +411,7 @@ class TestNormalisedFields:
 
     def test_chunkset_offset_stored(self):
         fh = _base_firehose(ACTIVITY_TYPE_NON_ACTIVITY)
-        entry = _firehose_to_log_entry(
+        entry = firehose_to_log_entry(
             firehose=fh,
             preamble=_preamble(),
             catalog=_minimal_catalog(),
@@ -493,7 +493,7 @@ def _main_exe_firehose() -> Firehose:
 
 
 def _call_with_strings(fh: Firehose, strings, catalog: CatalogChunk):
-    return _firehose_to_log_entry(
+    return firehose_to_log_entry(
         firehose=fh,
         preamble=_preamble(),
         catalog=catalog,

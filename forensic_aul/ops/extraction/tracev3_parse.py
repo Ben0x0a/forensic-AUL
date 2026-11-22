@@ -3,7 +3,7 @@
 Defines : process_tracev3
 Used by : forensic_aul.ops.extraction.workers (worker_parse),
           forensic_aul.ops.extraction.extract (_run_parse, serial path)
-Uses    : forensic_aul.ops.extraction.entry_builder (_firehose_to_log_entry),
+Uses    : forensic_aul.ops.extraction.entry_builder (firehose_to_log_entry),
           forensic_aul.ops.extraction.oversize_pass (OversizeCache),
           forensic_aul.engine.models (CatalogChunk, LogEntry, TimesyncBoot),
           forensic_aul.engine.parser.catalog, .chunkset, .firehose, .header,
@@ -42,9 +42,9 @@ from forensic_aul.engine.parser.tracev3 import (
     iter_chunks,
 )
 from forensic_aul.ops.extraction.entry_builder import (
-    _firehose_to_log_entry,
-    _simpledump_to_log_entry,
-    _statedump_to_log_entry,
+    firehose_to_log_entry,
+    simpledump_to_log_entry,
+    statedump_to_log_entry,
 )
 from forensic_aul.engine.utils.cancellation import NEVER_CANCELLED, CancelToken
 from forensic_aul.errors import OperationCancelled
@@ -183,7 +183,7 @@ def process_tracev3(
                         try:
                             sd = parse_statedump(sub.data)
                             entry = (
-                                _statedump_to_log_entry(
+                                statedump_to_log_entry(
                                     sd, catalog, timesync_data, boot_uuid,
                                     tracev3_file_id, tsf_id, anchor_id_map,
                                     chunkset_file_offset=raw.file_offset,
@@ -207,7 +207,7 @@ def process_tracev3(
                         try:
                             sdp = parse_simpledump(sub.data)
                             entry = (
-                                _simpledump_to_log_entry(
+                                simpledump_to_log_entry(
                                     sdp, catalog, timesync_data, boot_uuid,
                                     tracev3_file_id, tsf_id, anchor_id_map,
                                     chunkset_file_offset=raw.file_offset,
@@ -277,7 +277,7 @@ def process_tracev3(
                                     if key in oversize_cache:
                                         n_oversize_hits += 1
 
-                            log_entry = _firehose_to_log_entry(
+                            log_entry = firehose_to_log_entry(
                                 entry, preamble, catalog, strings,
                                 oversize_cache, timesync_data, boot_uuid,
                                 tracev3_file_id, timesync_file_id, anchor_id_map,

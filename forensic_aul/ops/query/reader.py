@@ -261,7 +261,7 @@ def build_where(
         # Literal prefix: escape LIKE metacharacters so %/_ in the prefix match
         # themselves (unlike ``like``, which passes the pattern through raw).
         clauses.append(r"l.message LIKE ? ESCAPE '\'")
-        params.append(_escape_like(f.message_prefix) + "%")
+        params.append(escape_like(f.message_prefix) + "%")
     if f.message_contains:
         # Literal substring: same escaping, wildcards on both sides. WHY a
         # dedicated filter instead of building a ``like`` pattern at the call
@@ -269,7 +269,7 @@ def build_where(
         # never matches — the escaping and the ESCAPE declaration must live
         # together.
         clauses.append(r"l.message LIKE ? ESCAPE '\'")
-        params.append("%" + _escape_like(f.message_contains) + "%")
+        params.append("%" + escape_like(f.message_contains) + "%")
     if f.message_match:
         # Keyword search through the FTS5 index — an index lookup, not a table
         # scan, which is what makes an interactive search box viable on
@@ -322,7 +322,7 @@ def build_where(
     return where, params
 
 
-def _escape_like(value: str) -> str:
+def escape_like(value: str) -> str:
     r"""Escape LIKE metacharacters (\, %, _) for use with ``ESCAPE '\'``."""
     return value.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
 

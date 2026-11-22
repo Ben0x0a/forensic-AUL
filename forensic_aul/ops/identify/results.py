@@ -10,9 +10,9 @@ Used by : any front-end (CLI, GUI) that wants to browse/filter/hide rows in an
           existing diff DB after ``run_diff``/``run_identify_workflow`` has
           produced it; re-exported from ``forensic_aul/__init__.py``.
 Uses    : forensic_aul.errors (InvalidDatabaseError), forensic_aul.ops.identify
-          .diff (_create_hidden_keys_objects and _ensure_source_columns, for
+          .diff (create_hidden_keys_objects and ensure_source_columns, for
           backward-compatible upgrade of older diff DBs), forensic_aul.ops
-          .query.reader (_escape_like — the one source of truth for LIKE
+          .query.reader (escape_like — the one source of truth for LIKE
           escaping), sqlite3, csv.
 """
 
@@ -27,10 +27,10 @@ from pathlib import Path
 from forensic_aul.errors import InvalidDatabaseError
 from forensic_aul.ops.identify.diff import (
     _CSV_HEADER,
-    _create_hidden_keys_objects,
-    _ensure_source_columns,
+    create_hidden_keys_objects,
+    ensure_source_columns,
 )
-from forensic_aul.ops.query.reader import _escape_like
+from forensic_aul.ops.query.reader import escape_like
 
 log = logging.getLogger(__name__)
 
@@ -98,8 +98,8 @@ class IdentifyResults:
         # Best-effort: a read-only file still serves reads even if this write
         # fails.
         try:
-            _create_hidden_keys_objects(conn)
-            _ensure_source_columns(conn)
+            create_hidden_keys_objects(conn)
+            ensure_source_columns(conn)
             conn.commit()
         except sqlite3.OperationalError as exc:
             log.warning(f"could not create hidden_keys/v_identified_visible (read-only database?): {exc}")
@@ -272,10 +272,10 @@ class IdentifyResults:
             )""")
         if search:
             # Literal substring match: escape LIKE metacharacters so %/_ in the
-            # search text match themselves — the same _escape_like the query
+            # search text match themselves — the same escape_like the query
             # layer pairs with its ESCAPE declaration (one source of truth for
             # a subtle rule; a drifted copy would silently never match).
             clauses.append(r"il.message LIKE ? ESCAPE '\'")
-            params.append(f"%{_escape_like(search)}%")
+            params.append(f"%{escape_like(search)}%")
         where = " AND ".join(clauses) if clauses else "1=1"
         return where, params

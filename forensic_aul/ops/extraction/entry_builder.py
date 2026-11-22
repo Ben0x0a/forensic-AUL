@@ -1,8 +1,8 @@
 """Firehose-entry → LogEntry assembly.
 
 Defines : _LOG_LEVELS, _EVENT_TYPES, _resolve_oversize, _basename,
-          _process_image_path, _firehose_to_log_entry
-Used by : forensic_aul.ops.extraction.tracev3_parse (_firehose_to_log_entry),
+          _process_image_path, firehose_to_log_entry
+Used by : forensic_aul.ops.extraction.tracev3_parse (firehose_to_log_entry),
           forensic_aul.ops.extraction.workers (transitively)
 Uses    : forensic_aul.ops.extraction.oversize_pass (OversizeCache, OversizeKey),
           forensic_aul.engine.models (Firehose, FirehosePreamble, CatalogChunk, …),
@@ -96,7 +96,7 @@ def _process_image_path(process_uuid: str, strings: StringCacheProvider) -> str:
     UUIDText/SharedCacheStrings. WHY memoise: this runs once per log entry (tens
     of millions) while an archive holds only tens of distinct process UUIDs, so
     without a memo every entry would repeat the provider lookup. WHY on the
-    provider rather than a module global: ``_firehose_to_log_entry`` runs inside
+    provider rather than a module global: ``firehose_to_log_entry`` runs inside
     worker processes and a module global would either be copied per process
     anyway or, in the main process, leak one archive's UUID→path map into the
     next one; the cache lives and dies with the provider it was derived from.
@@ -119,7 +119,7 @@ def _process_image_path(process_uuid: str, strings: StringCacheProvider) -> str:
     return path
 
 
-def _firehose_to_log_entry(
+def firehose_to_log_entry(
     firehose: Firehose,
     preamble: FirehosePreamble,
     catalog: CatalogChunk,
@@ -315,7 +315,7 @@ def _resolve_dump_anchor(
     return resolution, anchor_file_id, anchor_id
 
 
-def _statedump_to_log_entry(
+def statedump_to_log_entry(
     sd: Statedump,
     catalog: CatalogChunk,
     timesync_data: dict[str, TimesyncBoot],
@@ -363,7 +363,7 @@ def _statedump_to_log_entry(
     )
 
 
-def _simpledump_to_log_entry(
+def simpledump_to_log_entry(
     sd: SimpleDump,
     catalog: CatalogChunk,
     timesync_data: dict[str, TimesyncBoot],

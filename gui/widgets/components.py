@@ -213,10 +213,6 @@ def repolish(widget: QWidget) -> None:
     widget.style().polish(widget)
 
 
-# Back-compat alias for the in-module call sites that predate the rename.
-_repolish = repolish
-
-
 # ── Shared inputs / buttons / result panel ─────────────────────────────────────
 # Moved here from screens_pipeline.py: these are cross-screen primitives (the
 # data screens use them too), so they belong in the shared component layer.

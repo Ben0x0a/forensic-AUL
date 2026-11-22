@@ -39,7 +39,7 @@ from gui.widgets.components import (
     ComboBox,
     Divider,
     Panel,
-    _repolish,
+    repolish,
     clear_layout,
     eyebrow,
     ghost_button,
@@ -215,7 +215,7 @@ class AcquireScreen(OperationScreen):
         # it to primary when the shortcut is hidden again (a fresh run or a
         # form reset — see AcquireController.reset()).
         self._start_btn.setProperty("variant", "ghost" if visible else "primary")
-        _repolish(self._start_btn)
+        repolish(self._start_btn)
 
     def clear_form(self) -> None:
         for edit in (self._case, self._exhibit, self._analyst, self._notes):
