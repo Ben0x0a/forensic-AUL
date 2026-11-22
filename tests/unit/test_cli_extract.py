@@ -14,11 +14,9 @@ together, so a keyword the CLI passed and the session did not accept
 from __future__ import annotations
 
 import hashlib
-import io
 import logging
 import sqlite3
 import sys
-import tarfile
 import threading
 from pathlib import Path
 
@@ -26,21 +24,7 @@ import pytest
 
 import app.diagnostics
 from launcher import cli
-
-
-def _synthetic_sysdiagnose(tmp_path: Path) -> Path:
-    """A minimal sysdiagnose tarball the real pipeline accepts (0 log entries)."""
-    arc = tmp_path / "sd.tar.gz"
-    files = {
-        "sysdiagnose_DEMO/system_logs.logarchive/timesync/0.timesync": b"",
-        "sysdiagnose_DEMO/system_logs.logarchive/Info.plist": b"",
-    }
-    with tarfile.open(arc, "w:gz") as tf:
-        for name, data in files.items():
-            info = tarfile.TarInfo(name)
-            info.size = len(data)
-            tf.addfile(info, io.BytesIO(data))
-    return arc
+from tests.synthetic import synthetic_sysdiagnose as _synthetic_sysdiagnose
 
 
 @pytest.fixture

@@ -188,8 +188,8 @@ def _ingest_shutdown_log(
 # ── Public entry point ────────────────────────────────────────────────────────
 
 def run_extract(
-    logarchive: Path | Mapping[str, Path] | PreparedSource,
-    db_path: Path,
+    logarchive: Path | str | Mapping[str, Path] | PreparedSource,
+    db_path: Path | str,
     *,
     case_number: str | None = None,
     imei: str | None = None,
@@ -292,6 +292,8 @@ def run_extract(
             is False.
         OperationCancelled: *cancel* was cancelled during the run.
     """
+    # Library callers routinely pass plain strings; normalise once, here.
+    db_path = Path(db_path)
     # For a caller-supplied PreparedSource the integrity mode was decided at
     # preparation time; derive it from the prepared state so the finaliser's
     # re-hash decision matches reality (there is no baseline to re-check when

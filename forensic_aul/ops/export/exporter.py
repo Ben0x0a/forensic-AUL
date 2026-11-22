@@ -72,8 +72,8 @@ class ExportFilters(LogFilters):
 # ── Public entry point ────────────────────────────────────────────────────────
 
 def run_export(
-    database: Path,
-    output: Path,
+    database: Path | str,
+    output: Path | str,
     filters: ExportFilters | None = None,
 ) -> ExportResult:
     """Export rows from *database* to *output*.
@@ -93,6 +93,8 @@ def run_export(
             or a knowledge-base filter is requested on a database with no
             annotations.
     """
+    # Library callers routinely pass plain strings; normalise once, here.
+    database, output = Path(database), Path(output)
     f = filters or ExportFilters()
 
     fmt = f.fmt or _infer_format(output)

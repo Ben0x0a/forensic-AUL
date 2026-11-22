@@ -23,10 +23,8 @@ suite, which runs the whole real pipeline in milliseconds.
 
 from __future__ import annotations
 
-import io
 import pickle
 import sqlite3
-import tarfile
 from pathlib import Path
 
 import pytest
@@ -39,23 +37,10 @@ from forensic_aul.errors import (
     InvalidDatabaseError,
     OperationCancelled,
 )
+from tests.synthetic import synthetic_sysdiagnose as _synthetic_sysdiagnose
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
-
-def _synthetic_sysdiagnose(tmp_path: Path) -> Path:
-    """A minimal sysdiagnose tarball the real pipeline accepts (0 log entries)."""
-    arc = tmp_path / "sd.tar.gz"
-    files = {
-        "sysdiagnose_DEMO/system_logs.logarchive/timesync/0.timesync": b"",
-        "sysdiagnose_DEMO/system_logs.logarchive/Info.plist": b"",
-    }
-    with tarfile.open(arc, "w:gz") as tf:
-        for name, data in files.items():
-            info = tarfile.TarInfo(name)
-            info.size = len(data)
-            tf.addfile(info, io.BytesIO(data))
-    return arc
 
 
 def _cancel_on_phase(token: CancelToken, phase: str):
