@@ -47,6 +47,7 @@ def run_extract_session(
     notes: str | None = None,
     batch_size: int = BATCH_SIZE,
     work_dir: Path | None = None,
+    reset_work_dir: bool = False,
     # Deferred FTS is the app default: it yields the same final database with far
     # less write amplification on large archives. The standalone `extract` command
     # passes this explicitly (with a --no-fast-fts opt-out); `acquire` inherits it.
@@ -97,6 +98,7 @@ def run_extract_session(
             notes=notes,
             batch_size=batch_size,
             work_dir=work_dir,
+            reset_work_dir=reset_work_dir,
             fast_fts=fast_fts,
             fast_write=fast_write,
             fts=fts,
