@@ -62,6 +62,8 @@ from importlib import metadata as importlib_metadata
 from pathlib import Path, PurePath
 from typing import Any
 
+from app.paths import app_data_dir
+
 log = logging.getLogger(__name__)
 
 # Bumped when the report structure changes so a downstream reader can branch on it.
@@ -91,10 +93,12 @@ _MAX_STACK_DEPTH = 60
 
 # ── configuration ─────────────────────────────────────────────────────────────
 # App-layer tunables. Consumed by: this module (capture caps + output dir) and
-# launcher.cmds.redact_errors_cmd (lists CRASH_REPORT_DIR). The app-data dir mirrors the
-# convention already used by gui.settings_store / gui.recent_store.
+# launcher.cmds.redact_errors_cmd (lists CRASH_REPORT_DIR). The app-data dir is the one
+# shared with gui.settings_store / gui.recent_store (app.paths). WHY importing app.paths
+# keeps this handler stdlib-only in spirit: it is itself stdlib-only with no domain
+# imports, so it cannot fail the way a domain import can.
 
-_APP_DATA_DIR = Path.home() / ".config" / "faul"
+_APP_DATA_DIR = app_data_dir()
 
 
 @dataclass(frozen=True)

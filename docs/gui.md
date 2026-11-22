@@ -143,9 +143,9 @@ separately in `Worker.run`.
 
 ## Settings and recent cases
 
-Both stores live under `~/.config/faul/` and are display-only.
+Both stores live in the application data directory (macOS `~/Library/Application Support/faul`, Windows `%APPDATA%\faul`, Linux `~/.config/faul`) and are display-only.
 
-**`SettingsStore`** (`gui/settings_store.py`) → `~/.config/faul/settings.json`.
+**`SettingsStore`** (`gui/settings_store.py`) → `settings.json` in that directory.
 A small `QObject` that emits `changed(key, value)` so any screen can react live.
 Known keys and defaults:
 
@@ -175,7 +175,7 @@ stray file cannot inject state. The store never raises on I/O problems: a missin
 or corrupt file falls back to defaults, because a forensic tool must still open
 when its non-essential preferences file is unreadable.
 
-**`RecentStore`** (`gui/recent_store.py`) → `~/.config/faul/recents.json`.
+**`RecentStore`** (`gui/recent_store.py`) → `recents.json` in that directory.
 Per-category lists (most recent first, de-duplicated, capped by the
 `recentsLimit` preference) of paths the user actually acquired / extracted / exported. Nothing is
 fabricated — a forensic tool showing invented case rows would be misleading — and

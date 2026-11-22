@@ -38,7 +38,7 @@ There are two modes:
 | Flag | Default | Meaning |
 |---|---|---|
 | `ID_OR_PATH` | none (→ list mode) | A crash-report file to redact. Accepts a full path, a bare filename, or the file stem (`.json` is appended). |
-| `--dir DIR` | `~/.config/faul/crash_reports` | Crash-report directory. |
+| `--dir DIR` | `crash_reports/` in the application data directory | Crash-report directory. |
 
 Raw files are named `faul_crash_*.json`. Resolution tries, in order: the value as
 a path, `<crash-dir>/<value>`, then `<crash-dir>/<value>.json`.
@@ -54,7 +54,7 @@ faul.py redact-errors
 # Redact one for a bug filing (any of these forms work)
 faul.py redact-errors faul_crash_20260726_101112.json
 faul.py redact-errors faul_crash_20260726_101112
-faul.py redact-errors ~/.config/faul/crash_reports/faul_crash_20260726_101112.json
+faul.py redact-errors ~/Library/Application\ Support/faul/crash_reports/faul_crash_20260726_101112.json
 
 # A crash directory somewhere else
 faul.py redact-errors --dir /Volumes/EVID/crash_reports

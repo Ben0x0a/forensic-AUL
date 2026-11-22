@@ -18,12 +18,13 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
+
+from app.paths import app_data_dir
 
 _LOG = logging.getLogger(__name__)
 
 # Where history lives, beside settings.json. Consumed by: RecentStore.
-_RECENTS_PATH = Path.home() / ".config" / "faul" / "recents.json"
+_RECENTS_PATH = app_data_dir() / "recents.json"
 
 # Fallback cap when no limit is supplied — the mockup shows "last 3"; we retain
 # a few more for the dropdown. The `recentsLimit` preference overrides it.

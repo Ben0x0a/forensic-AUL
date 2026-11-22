@@ -104,7 +104,7 @@ Optional (`uv sync --extra gui`). Layout:
 | `gui/workers/` | `Worker` + `start_worker` — moves a blocking core call onto a `QThread`. |
 | `gui/widgets/` | Reusable primitives (`LogTablePanel`, `PathPicker`, `LogPanel`, `DevicePicker`, …). |
 | `gui/theme.py` | Design tokens interpolated into an application-wide Qt Style Sheet. |
-| `gui/settings_store.py`, `gui/recent_store.py` | Display preferences and real recently-used paths, persisted under `~/.config/faul/`. |
+| `gui/settings_store.py`, `gui/recent_store.py` | Display preferences and real recently-used paths, persisted in the application data directory (`app/paths.py`). |
 
 Two conventions are enforced in the code:
 
@@ -122,6 +122,7 @@ library never imports it.
 
 | Module | Responsibility |
 |---|---|
+| `app/paths.py` | The per-user application directory, by platform convention (macOS Application Support, Windows `%APPDATA%`, XDG on Linux), and the one-time move of the old `~/.config/faul`. Standard library only. |
 | `app/logging_config.py` | The one place logging is configured: console logging (`dictConfig`, UTC, detailed with `-v`), the forensic operational log file of a session, and attaching a frontend's own handler (the GUI log panel). The library never configures logging — it only adds a `NullHandler`. |
 | `app/extract_session.py` | The shared *session* framing around an extract: set up the forensic operational log, log the invocation banner, run the pipeline, and **seal** the log (hash → `case_metadata` → close handler) on every exit path — success, `SIGINT` or failure. Used by both `extract` and `acquire --extract`, so every route produces the same sealed audit log. |
 | `app/diagnostics.py` | Forensic crash capture. Installs `sys.excepthook` + `threading.excepthook`; `capture_exception` covers the catch-log-and-return paths. Walks the traceback and records the type and value of every variable in every frame, classified `safe` / `sensitive`. Imports the **standard library only** — domain types are recognised by *name*, never imported, so it still works when a domain import is what crashed. |

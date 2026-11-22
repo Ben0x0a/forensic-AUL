@@ -20,6 +20,7 @@ import logging
 import sys
 
 from app.logging_config import configure_console
+from app.paths import adopt_legacy_app_dir
 from forensic_aul import __version__
 
 log = logging.getLogger(__name__)
@@ -82,6 +83,7 @@ def main() -> None:
     # Console logging from the first line, so errors raised before a command
     # configures its own logging (e.g. an extract session) are still visible.
     configure_console()
+    adopt_legacy_app_dir()
 
     parser = _build_parser()
     args = parser.parse_args()

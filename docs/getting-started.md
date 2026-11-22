@@ -131,7 +131,7 @@ The format is inferred from the output suffix (`.csv`, `.json`, `.jsonl`) unless
 | **Analysis database** | Exactly the path given to `-o/--output`. Parent directories are created if missing. |
 | **Operational log** | `<case_number>-AUL-<imei>.log`, written **in the same directory as the output database**. Filesystem-unsafe characters in the case number / IMEI become underscores. |
 | **Export files** | The path given to `export -o`. |
-| **Crash reports** | `~/.config/faul/crash_reports/` — see [`docs/cli/redact-errors.md`](cli/redact-errors.md). |
+| **Crash reports** | `crash_reports/` in the application data directory (macOS `~/Library/Application Support/faul`, Windows `%APPDATA%\faul`, Linux `~/.config/faul`) — see [`docs/cli/redact-errors.md`](cli/redact-errors.md). |
 
 The operational log is opened in **append** mode (successive runs for the same
 case accumulate; no run is ever lost), always records at `INFO`, and is **sealed**

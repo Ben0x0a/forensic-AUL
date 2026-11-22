@@ -2,7 +2,7 @@
 
 Defines : SettingsStore — a tiny QObject that holds the user-facing display
           preferences (recent-DB list visibility, preferred timezone, reduce-motion)
-          and persists them to ``~/.config/faul/settings.json``. Emits ``changed``
+          and persists them to ``settings.json`` in app.paths.app_data_dir(). Emits ``changed``
           whenever a value is set, for any screen that wants to react live.
 Used by : gui.views.screens.* (read prefs), gui.app (construct the single shared
           store).
@@ -23,13 +23,14 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
 
+from app.paths import app_data_dir
 from forensic_aul import default_kb_dir
 
 _LOG = logging.getLogger(__name__)
 
 # Where preferences live. The mockup's About/Settings copy references this exact
 # path, so we honour it. Consumed by: SettingsStore.load/_save.
-_SETTINGS_PATH = Path.home() / ".config" / "faul" / "settings.json"
+_SETTINGS_PATH = app_data_dir() / "settings.json"
 
 # Workstation preferences. FAUL ships a single dark theme, so there is no
 # appearance/mode key. Every key here MUST have a consumer — a preference that
