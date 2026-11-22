@@ -82,7 +82,7 @@ extracts, annotates and diffs.
 | `--still SECONDS` | `60` | idle pause before the baseline; `0` skips the pause |
 | `--output-dir` / `-o DIR` | cwd | parent of the session directory; all archives, databases and diff outputs land inside it |
 | `--yes` / `-y` | off | skip the device confirmation prompt |
-| `--kb PATH` | `./knowledge_base` if it exists | annotate the action database |
+| `--kb PATH` | the shipped KB (`forensic_aul/knowledge_base/`) | annotate the action database |
 | `--no-csv` | off | SQLite output only |
 | `--batch-size N` | `100000` (`forensic_aul.config.BATCH_SIZE`) | extract batch size |
 
@@ -127,7 +127,7 @@ res = run_identify_workflow(
     "CASE-2024-001",
     output_dir=Path("identify-run"),
     still_seconds=60,
-    kb=load_kb(Path("knowledge_base")),
+    kb=load_kb(),                         # the shipped KB; or load_kb(path)
     confirm=lambda device: True,          # or prompt
     wait_still=lambda s: time.sleep(s),
     wait_for_action=lambda: input("perform the action, then Enter… "),

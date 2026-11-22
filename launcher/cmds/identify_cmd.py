@@ -24,7 +24,6 @@ from forensic_aul.config import BATCH_SIZE
 
 log = logging.getLogger(__name__)
 
-_DEFAULT_KB_DIR = "knowledge_base"
 
 
 # ── Argument parsers ──────────────────────────────────────────────────────────
@@ -99,9 +98,9 @@ def _add_identify(sub):  # type: ignore[type-arg,no-untyped-def]
         metavar="PATH",
         default=None,
         help=(
-            f"Knowledge-base root directory to annotate the action DB with "
-            f"(default: ./{_DEFAULT_KB_DIR} if it exists; otherwise runs "
-            "unannotated)."
+            "Knowledge-base root directory to annotate the action DB with "
+            "(default: the knowledge base shipped with fAUL; if it cannot be "
+            "loaded the run continues unannotated)."
         ),
     )
 
@@ -198,8 +197,8 @@ def _run_identify(args: argparse.Namespace) -> int:
         print(f"  {line}")
 
     # Knowledge base: an explicit --kb is a hard requirement (load failure is an
-    # error, exit 1); the implicit default directory is best-effort (missing or
-    # unloadable → warn and run unannotated, since most users have no KB set up).
+    # error, exit 1); the shipped default is best-effort (unloadable → warn and
+    # run unannotated — annotation enriches the diff, it never gates it).
     kb = None
     if args.kb is not None:
         try:
@@ -208,12 +207,10 @@ def _run_identify(args: argparse.Namespace) -> int:
             log.error(f"error: could not load knowledge base {args.kb}: {exc}")
             return 1
     else:
-        default_kb_dir = Path(_DEFAULT_KB_DIR)
-        if default_kb_dir.is_dir():
-            try:
-                kb = load_kb(default_kb_dir)
-            except KnowledgeBaseError as exc:
-                log.warning(f"could not load default knowledge base {default_kb_dir}: {exc}")
+        try:
+            kb = load_kb()
+        except KnowledgeBaseError as exc:
+            log.warning(f"could not load the shipped knowledge base: {exc}")
 
     try:
         res = run_identify_workflow(

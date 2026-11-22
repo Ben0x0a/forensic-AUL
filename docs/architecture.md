@@ -149,7 +149,7 @@ same shape: a main module (pure — data in, data out) plus a `report` module of
 |---|---|
 | `ops/acquisition/` | Collect a `.logarchive` from a USB-connected iOS device via the optional `pymobiledevice3` dependency (`device.py` = discovery/metadata, `acquire.py` = the operation, `report.py` = the acquisition sidecar). |
 | `ops/extraction/` | The acquisition → SQLite pipeline: `source.py`/`sources/` (input normalisation), `timesync_setup.py`, `oversize_pass.py` (pass 1), `tracev3_parse.py` (pass 2 inner loop), `entry_builder.py` (Firehose → `LogEntry`), `workers.py` (multiprocessing), `shutdown_log.py`, `discovery.py`, `options.py`, and `extract.py` (`run_extract`). |
-| `ops/knowledge_base/` | Load (`loader.py`), model (`models.py`) and lint (`lint.py`) the YAML signature library under `knowledge_base/`. |
+| `ops/knowledge_base/` | Load (`loader.py`), model (`models.py`) and lint (`lint.py`) the YAML signature library; `default_kb_dir()` locates the shipped one (`forensic_aul/knowledge_base/`, package data). |
 | `ops/annotation/` | Run a loaded knowledge base against `logs`, writing `log_annotations` and `extracted_values`. Every signature pre-filters on indexed columns before any regex runs. |
 | `ops/query/` | The stable read surface — `query_logs` (streamed), `LogStore` (held-open store for paging UIs), `count_logs`/`fetch_logs`, `fetch_context`, plus the shared `LogFilters` vocabulary and `LogRow` model. `reader.py` turns filters into SQL and is shared with the exporter. |
 | `ops/export/` | Filtered export to CSV / JSON / JSONL through a writer registry; knowledge-base aware (extracted values become columns or nested objects). |
@@ -245,7 +245,7 @@ include = ["forensic_aul*"]
 | `forensic_aul/` (incl. `testing/`) | Yes | Plus the PEP 561 `py.typed` marker. |
 | `faul.py`, `launcher/`, `gui/`, `app/` | No | Clone-and-run application layer. |
 | `tests/`, `scripts/`, `benchmark/` | No | Development only. |
-| `knowledge_base/` (YAML tree) | No | Repo data; `annotate`/`kb` accept `--kb PATH`. |
+| `forensic_aul/knowledge_base/` (YAML tree) | Yes (package data) | The shipped KB, read via `importlib.resources`; `annotate`/`kb`/`identify` accept `--kb PATH`. |
 
 Runtime dependencies are `lz4` and `PyYAML`. Optional extras: `gui` (PySide6),
 `acquire` (pymobiledevice3), `dev` (pytest). Supported Python is 3.11–3.14.

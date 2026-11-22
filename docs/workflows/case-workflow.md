@@ -141,7 +141,7 @@ Annotation applies YAML **signatures** — known log patterns with an action lab
 tags and optional extracted named values — to the extracted rows.
 
 ```bash
-python faul.py annotate case.db                        # default: ./knowledge_base
+python faul.py annotate case.db                        # default: the shipped KB
 python faul.py annotate case.db --kb /path/to/kb
 python faul.py annotate case.db --tag network          # restrict by tag
 python faul.py annotate case.db --signature some_id    # restrict by id

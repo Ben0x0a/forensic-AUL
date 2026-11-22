@@ -7,12 +7,13 @@ analysis database by [`annotate`](../cli/annotate.md) and linted by
 [`kb validate`](../cli/kb.md).
 
 Source: `forensic_aul/ops/knowledge_base/{models,loader,lint,writer}.py`,
-`forensic_aul/ops/annotation/matcher.py`, and the shipped `knowledge_base/`.
+`forensic_aul/ops/annotation/matcher.py`, and the shipped `forensic_aul/knowledge_base/` (package data,
+located by `forensic_aul.default_kb_dir()`).
 
 ## Directory layout
 
 ```
-knowledge_base/
+forensic_aul/knowledge_base/
 ├── VERSION              # required — a non-empty version string (e.g. 0.2.0)
 ├── labels.yaml          # optional — controlled vocabulary of extracted labels
 └── signatures/          # required — at least one .yaml / .yml file
@@ -199,7 +200,7 @@ either renaming the group in the signature or adding the label to `labels.yaml`
 
 ## Worked example
 
-`knowledge_base/signatures/wifi.yaml`:
+`forensic_aul/knowledge_base/signatures/wifi.yaml`:
 
 ```yaml
 signatures:

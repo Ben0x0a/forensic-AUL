@@ -46,15 +46,15 @@ from forensic_aul import load_kb, run_identify_workflow
 from forensic_aul.engine.utils.cancellation import CancelToken
 from forensic_aul.engine.utils.system import resolve_auto_jobs
 from gui.controllers import phrase_failure
-from gui.paths import DEFAULT_KB_DIR
+from forensic_aul import default_kb_dir
 from gui.recent_store import RecentStore
 
 log = logging.getLogger(__name__)
 
-# The shipped knowledge base (see gui/paths.py for why the path is resolved
-# there rather than relative to the working directory). Annotation is enrichment
-# only, so a missing/unloadable KB never blocks the run — see start().
-_KB_DIR = DEFAULT_KB_DIR
+# The shipped knowledge base, resolved from the package (never the working
+# directory — a GUI launched from the Dock has cwd "/"). Annotation is enrichment
+# only, so an unloadable KB never blocks the run — see start().
+_KB_DIR = default_kb_dir()
 
 
 class IdentifyController:

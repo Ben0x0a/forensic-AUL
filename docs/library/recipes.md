@@ -275,7 +275,7 @@ base means re-annotating — never re-extracting.
 ```python
 from forensic_aul import annotate_database, load_kb
 
-kb  = load_kb(Path("knowledge_base"))      # dir holding VERSION + signatures/
+kb  = load_kb()                            # the shipped KB; or load_kb(dir) with VERSION + signatures/
 ann = annotate_database(Path("case.db"), kb)
 
 print(ann.total_matches, ann.signatures_run, ann.signatures_matched)
@@ -367,7 +367,7 @@ res = run_identify_workflow(
     "CASE-2024-001",
     output_dir=Path("identify-run"),
     still_seconds=60,
-    kb=load_kb(Path("knowledge_base")),   # annotates the ACTION database only
+    kb=load_kb(),                         # annotates the ACTION database only
     confirm=confirm,
     wait_still=wait_still,
     wait_for_action=wait_for_action,

@@ -233,10 +233,10 @@ def test_export_button_writes_csv(qapp, tmp_path, monkeypatch):
 def _kb_copy(tmp_path):
     """A writable copy of the shipped knowledge base."""
     import shutil
-    from gui.paths import DEFAULT_KB_DIR
+    from forensic_aul import default_kb_dir
 
     dest = tmp_path / "kb"
-    shutil.copytree(DEFAULT_KB_DIR, dest)
+    shutil.copytree(default_kb_dir(), dest)
     return dest
 
 

@@ -30,7 +30,7 @@ The knowledge base itself is documented in
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--kb PATH` | `./knowledge_base` | Knowledge-base root directory. Must be given **before** the action: `faul.py kb --kb /opt/kb list`. |
+| `--kb PATH` | the shipped KB (`forensic_aul/knowledge_base/`) | Knowledge-base root directory. Must be given **before** the action: `faul.py kb --kb /opt/kb list`. |
 
 An action is **required** — `faul.py kb` with no action is an argparse error
 (exit `2`).
@@ -124,8 +124,8 @@ faul.py kb --kb /opt/faul-kb validate
 
 - **`--kb` goes before the action.** `faul.py kb list --kb PATH` is an argparse
   error; `faul.py kb --kb PATH list` is correct.
-- **The default `./knowledge_base` is relative to the current working
-  directory.** Running from outside the repo needs an explicit `--kb`.
+- **The default is the KB shipped with fAUL**, wherever you run from; pass
+  `--kb` to use your own.
 - **`kb validate` does not fail the build.** It exits `0` and prints its
   findings; parse the output if you want a CI gate.
 - **`list --tag` / `--process` take a single value each** — unlike

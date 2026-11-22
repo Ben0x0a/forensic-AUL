@@ -48,6 +48,10 @@ result = fa.run_extract(archive, f"{out}/case.db", case_number="C1",
 report["entry_count"] = result.entry_count
 report["db_exists"] = result.db_path.is_file()
 report["query_rows"] = len(list(fa.query_logs(result.db_path)))
+# The shipped knowledge base loads from the wheel with no argument.
+kb = fa.load_kb()
+report["kb_signatures"] = len(kb.signatures)
+report["kb_root_in_site"] = kb.root.startswith(site)
 # Plain-string paths, as most calling tools pass them.
 report["export_rows"] = fa.run_export(str(result.db_path), f"{out}/all.csv").rows
 try:
@@ -86,6 +90,8 @@ def test_wheel_ships_the_library_only(wheel):
     names = zipfile.ZipFile(wheel).namelist()
     assert "forensic_aul/py.typed" in names, "PEP 561 marker must ship"
     assert "forensic_aul/engine/parser/decoder_tables.py" in names
+    assert "forensic_aul/knowledge_base/VERSION" in names, "the shipped KB must be package data"
+    assert any(n.startswith("forensic_aul/knowledge_base/signatures/") for n in names)
     leaked = sorted({n.split("/")[0] for n in names} & {"app", "launcher", "gui", "tests", "scripts"})
     assert leaked == [], f"clone-and-run layers must not ship in the wheel: {leaked}"
 
@@ -110,4 +116,5 @@ def test_public_api_works_from_the_installed_wheel(wheel, tmp_path):
     assert report["missing_public_names"] == []
     assert (report["db_exists"], report["entry_count"], report["query_rows"]) == (True, 0, 0)
     assert report["export_rows"] == 0
+    assert report["kb_signatures"] > 0 and report["kb_root_in_site"] is True
     assert report["missing_source_error"] == ["SourceError", True]

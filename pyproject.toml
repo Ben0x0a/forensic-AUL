@@ -27,7 +27,13 @@ version = { attr = "forensic_aul._version.__version__" }
 
 # Ship the PEP 561 marker so downstream type-checkers use the library's hints.
 [tool.setuptools.package-data]
-forensic_aul = ["py.typed"]
+# The shipped knowledge base is package data (read via importlib.resources).
+forensic_aul = [
+    "py.typed",
+    "knowledge_base/VERSION",
+    "knowledge_base/*.yaml",
+    "knowledge_base/signatures/*.yaml",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-cov", "ruff>=0.14"]

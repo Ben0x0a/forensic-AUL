@@ -35,7 +35,7 @@ from forensic_aul import IdentifyResults
 from gui.recent_store import RecentStore
 from gui.settings_store import SettingsStore
 from gui.tokens import DARK_TOKENS
-from gui.views.dialog_signature import SignatureDialog, signature_kb_dir
+from gui.views.dialog_signature import SignatureDialog
 from gui.views.screen_base import OpenDbPanel, ScrollScreen
 from gui.widgets.components import (
     Panel,
@@ -333,7 +333,8 @@ class IdentifyResultsScreen(ScrollScreen):
                 if (r := self._model.row_dict(i)) is not None
             ]
         dialog = SignatureDialog(
-            row, sample_rows=sample, kb_dir=signature_kb_dir(self._settings), parent=self,
+            row, sample_rows=sample, kb_dir=self._settings.kb_dir() if self._settings is not None else None,
+            parent=self,
         )
         if dialog.exec() == QDialog.DialogCode.Accepted:
             path = dialog.written_path()

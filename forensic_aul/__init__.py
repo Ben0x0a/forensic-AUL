@@ -31,7 +31,7 @@ from forensic_aul.errors import (
 from forensic_aul.ops.extraction.extract import open_or_extract, run_extract
 
 # Annotation engine (load a knowledge base + annotate an extracted database)
-from forensic_aul.ops.knowledge_base.loader import KnowledgeBaseError, load_kb
+from forensic_aul.ops.knowledge_base.loader import KnowledgeBaseError, default_kb_dir, load_kb
 from forensic_aul.ops.annotation.matcher import annotate_connection, annotate_database
 
 # Action attribution (baseline vs action diff, plus the full interactive workflow)
@@ -127,6 +127,7 @@ __all__ = [
     "run_extract",
     "open_or_extract",
     "load_kb",
+    "default_kb_dir",
     "KnowledgeBaseError",
     "annotate_database",
     "annotate_connection",

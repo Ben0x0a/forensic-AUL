@@ -7,7 +7,7 @@ Used by : gui.views.screen_identify_results (a context-menu action on the diff
           table).
 Uses    : PySide6, forensic_aul.ops.knowledge_base (SignatureDraft, Match,
           render_signature, write_signature, load_kb), gui.widgets.components,
-          gui.paths.
+          forensic_aul.default_kb_dir.
 
 WHY a dialog rather than an inline panel: authoring a rule is a bounded, modal
 act with a commit point (a file is written), unlike the browsing the rest of the
@@ -46,7 +46,7 @@ from PySide6.QtWidgets import (
 from forensic_aul.ops.knowledge_base.loader import KnowledgeBaseError
 from forensic_aul.ops.knowledge_base.models import Match, SignatureDraft
 from forensic_aul.ops.knowledge_base.writer import render_signature, write_signature
-from gui.paths import DEFAULT_KB_DIR
+from forensic_aul import default_kb_dir
 from gui.widgets.components import (
     ComboBox,
     Divider,
@@ -94,7 +94,7 @@ class SignatureDialog(QDialog):
         super().__init__(parent)
         self._row = row
         self._sample_rows = sample_rows or []
-        self._kb_dir = kb_dir or DEFAULT_KB_DIR
+        self._kb_dir = kb_dir or default_kb_dir()
         self._written: Path | None = None
 
         self.setWindowTitle("New signature")
@@ -350,10 +350,4 @@ def _split(text: str, *, sep: str = ",") -> tuple[str, ...]:
     return tuple(part.strip() for part in text.split(sep) if part.strip())
 
 
-def signature_kb_dir(settings: Any) -> Path:
-    """The knowledge base to author into — the ``kbPath`` preference, else the shipped one."""
-    configured = settings.get_str("kbPath") if settings is not None else ""
-    return Path(configured) if configured else DEFAULT_KB_DIR
-
-
-__all__ = ["SignatureDialog", "signature_kb_dir"]
+__all__ = ["SignatureDialog"]

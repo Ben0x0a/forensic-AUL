@@ -38,7 +38,7 @@ by the uniqueness guard.
 | Flag | Default | Meaning |
 |---|---|---|
 | `DATABASE` | **required** | SQLite database produced by `extract`. |
-| `--kb PATH` | `./knowledge_base` | Knowledge-base root directory. |
+| `--kb PATH` | the shipped KB (`forensic_aul/knowledge_base/`) | Knowledge-base root directory. |
 | `--signature ID` | all signatures | Restrict to this signature id. **Repeatable.** |
 | `--tag TAG` | all signatures | Restrict to signatures carrying this tag. **Repeatable.** |
 
@@ -59,7 +59,7 @@ totals (signatures run, signatures that matched, total matches).
 ## Examples
 
 ```bash
-# Everything in ./knowledge_base
+# Everything in the shipped knowledge base
 faul.py annotate cases/case.db
 
 # A knowledge base kept elsewhere
@@ -89,8 +89,8 @@ faul.py kb validate && faul.py annotate cases/case.db
 
 ## Common pitfalls
 
-- **The KB path defaults to `./knowledge_base` relative to the current working
-  directory**, not to the repository root. Running from elsewhere needs `--kb`.
+- **The KB defaults to the one shipped with fAUL**, wherever you run from; pass
+  `--kb` for your own.
 - **`--signature` and `--tag` combine as OR.** To run exactly one signature, use
   `--signature` alone.
 - **Zero matches is a success, not an error.** Check the printed counts, not just

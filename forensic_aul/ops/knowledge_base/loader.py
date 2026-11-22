@@ -1,12 +1,14 @@
 """Load and validate the YAML knowledge base.
 
-Defines : ``load_kb`` (public entry point), ``KnowledgeBaseError``, and the
+Defines : ``load_kb`` (public entry point), ``default_kb_dir`` (the shipped
+          knowledge base — the one place it is located), ``KnowledgeBaseError``, and the
           hand-written per-field validation behind it (no pydantic/jsonschema).
 Used by : forensic_aul.ops.annotation.matcher, forensic_aul.ops.knowledge_base.
           {lint,writer}, the ``kb`` CLI commands (launcher/cmds/kb_cmd.py).
 Uses    : forensic_aul.ops.knowledge_base.models (Match/Signature/KnowledgeBase),
           forensic_aul.engine.database.schema (EVENT_TYPE_NAMES, for
-          match.event_type validation), yaml.safe_load.
+          match.event_type validation), yaml.safe_load, importlib.resources
+          (the KB ships as package data in forensic_aul/knowledge_base/).
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+from importlib.resources import files
 from pathlib import Path
 
 import yaml
@@ -45,13 +48,25 @@ class KnowledgeBaseError(ForensicAULError, ValueError):
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
-def load_kb(root: Path | str) -> KnowledgeBase:
+def default_kb_dir() -> Path:
+    """The knowledge base shipped with the package (``forensic_aul/knowledge_base``).
+
+    Every frontend's default KB comes from here — never from the current
+    directory. WHY a real ``Path`` and not ``importlib.resources.as_file``: the
+    GUI authors signatures into this directory in a clone-and-run checkout, so
+    it must be an actual directory (true for any non-zipped install).
+    """
+    return Path(str(files("forensic_aul").joinpath("knowledge_base")))
+
+
+def load_kb(root: Path | str | None = None) -> KnowledgeBase:
     """Load every YAML under *root*/signatures/ into a KnowledgeBase.
 
     *root* is the directory containing the ``VERSION`` file and a
-    ``signatures/`` subdirectory of YAML files.
+    ``signatures/`` subdirectory of YAML files; omitted, the shipped knowledge
+    base (:func:`default_kb_dir`) is loaded.
     """
-    root_path = Path(root).resolve()
+    root_path = Path(root if root is not None else default_kb_dir()).resolve()
     if not root_path.is_dir():
         raise KnowledgeBaseError(f"Knowledge base root is not a directory: {root_path}")
 

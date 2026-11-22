@@ -6,7 +6,8 @@ Defines : SettingsStore — a tiny QObject that holds the user-facing display
           whenever a value is set, for any screen that wants to react live.
 Used by : gui.views.screens.* (read prefs), gui.app (construct the single shared
           store).
-Uses    : PySide6 (QObject/Signal), json, pathlib. No business-logic imports.
+Uses    : PySide6 (QObject/Signal), json, pathlib; forensic_aul.default_kb_dir
+          (the shipped KB, for kb_dir()). No business logic.
 
 WHY a dedicated store (not scattered globals): the mockup keeps a single
 ``window.__faulSettings`` object persisted to localStorage; this is the native
@@ -21,6 +22,8 @@ import logging
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
+
+from forensic_aul import default_kb_dir
 
 _LOG = logging.getLogger(__name__)
 
@@ -101,6 +104,11 @@ class SettingsStore(QObject):
         """Read *key* as a string ("" when unset or of the wrong type)."""
         value = self._values.get(key, _DEFAULTS.get(key))
         return value if isinstance(value, str) else ""
+
+    def kb_dir(self) -> Path:
+        """The knowledge base to use: the ``kbPath`` preference, else the shipped one."""
+        configured = self.get_str("kbPath")
+        return Path(configured) if configured else default_kb_dir()
 
     def set(self, key: str, value: object) -> None:
         # Ignore no-op writes so we don't churn the file or fire spurious signals.

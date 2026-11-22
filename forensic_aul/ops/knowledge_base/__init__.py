@@ -1,6 +1,7 @@
 """Knowledge base — load, model and lint the YAML signature library.
 
-``loader`` parses the repo-root ``knowledge_base/`` YAML tree into the
+``loader`` parses the shipped ``forensic_aul/knowledge_base/`` YAML tree (or any
+other KB root) into the
 ``models`` dataclasses (``KnowledgeBase``, ``Signature``); ``lint`` validates a
 KB and suggests fixes. The ``annotate`` operation
 (``forensic_aul.ops.annotation``) consumes the loaded KB; the ``kb`` command

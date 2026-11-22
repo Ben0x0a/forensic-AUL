@@ -22,7 +22,6 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-_DEFAULT_KB_DIR = "knowledge_base"
 
 
 # ── Argument parser ───────────────────────────────────────────────────────────
@@ -37,8 +36,8 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
         "--kb",
         type=Path,
         metavar="PATH",
-        default=Path(_DEFAULT_KB_DIR),
-        help=f"Knowledge-base root directory (default: ./{_DEFAULT_KB_DIR}).",
+        default=None,
+        help="Knowledge-base root directory (default: the knowledge base shipped with fAUL).",
     )
 
     sp = p.add_subparsers(dest="kb_action", metavar="ACTION")

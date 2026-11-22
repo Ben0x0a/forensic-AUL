@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from forensic_aul import __version__
-from gui.paths import DEFAULT_KB_DIR
+from forensic_aul import default_kb_dir
 from gui.settings_store import SettingsStore
 from gui.views.screen_base import WIDTH_FORM, ScrollScreen
 from gui.icons import make_icon
@@ -116,7 +116,7 @@ class SettingsScreen(ScrollScreen):
         paths.body.addLayout(self._pref_row(
             "Knowledge base",
             f"Signatures used when annotating. Empty uses the one shipped with "
-            f"FAUL ({DEFAULT_KB_DIR}).",
+            f"FAUL ({default_kb_dir()}).",
             self._path_picker("kbPath"),
         ))
         paths.add(Divider())

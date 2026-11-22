@@ -71,7 +71,7 @@ no root). The diff itself is pure SQLite and cross-platform.
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--kb PATH` | `./knowledge_base` **if it exists**, else no annotation | Knowledge base used to annotate the action database. |
+| `--kb PATH` | the shipped KB (`forensic_aul/knowledge_base/`); if it cannot be loaded, the run continues unannotated | Knowledge base used to annotate the action database. |
 
 The two cases behave differently on failure:
 
