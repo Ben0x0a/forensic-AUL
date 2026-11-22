@@ -891,7 +891,7 @@ def fast_safe_job_counts(logical_cpus: int, spec: str) -> list[tuple[str, int]]:
                 raise ValueError(f"invalid --fast-jobs token: {raw_token!r}") from exc
             if jobs < 1:
                 raise ValueError(f"--fast-jobs values must be >= 1, got {jobs}")
-            candidates.append((f"custom", jobs))
+            candidates.append(("custom", jobs))
     seen: set[int] = set()
     unique: list[tuple[str, int]] = []
     for label, jobs in candidates:
