@@ -7,14 +7,16 @@ any real logarchive file.
 import struct
 import lz4.block as lz4_block
 
-from forensic_aul.engine.parser.chunkset import (
+from forensic_aul.engine.parser.format import (
+    CHUNK_PREAMBLE_SIZE,
     CHUNK_TAG_CHUNKSET,
     CHUNK_TAG_FIREHOSE,
     CHUNK_TAG_OVERSIZE,
     SIG_BV41_COMPRESSED,
     SIG_BV41_UNCOMPRESSED,
     SIG_BV4_FOOTER,
-    CHUNK_PREAMBLE_SIZE,
+)
+from forensic_aul.engine.parser.chunkset import (
     decompress_chunkset,
     iter_subchunks,
 )

@@ -25,7 +25,8 @@ from forensic_aul.engine.parser.firehose import (
     ACTIVITY_TYPE_ACTIVITY,
     ACTIVITY_TYPE_SIGNPOST,
 )
-from forensic_aul.engine.parser.uuidtext import DYNAMIC_STRING_OFFSET, lookup_format_string
+from forensic_aul.engine.parser.format import DYNAMIC_STRING_OFFSET
+from forensic_aul.engine.parser.uuidtext import lookup_format_string
 
 
 class FormatStringSource(Protocol):

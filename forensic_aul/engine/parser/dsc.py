@@ -20,10 +20,13 @@ from forensic_aul.config import FORMAT_STRING_OFFSET_CACHE_MAX
 from forensic_aul.engine.models import RangeDescriptor, SharedCacheStrings, UUIDDescriptor
 from forensic_aul.engine.parser.reader import reader_from_bytes
 
+from forensic_aul.engine.parser.format import (
+    DSC_SIGNATURE,
+    DYNAMIC_STRING_OFFSET,
+)
+
 log = logging.getLogger(__name__)
 
-DSC_SIGNATURE: int = 0x64736368  # "dsch" LE
-DYNAMIC_STRING_OFFSET: int = 0x80000000  # format string is literally "%s"
 
 # Sentinel distinguishing "offset cached as empty" from "offset not cached"
 # (a legitimate result can be "", which is falsy — see lookup_dsc_string).

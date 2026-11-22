@@ -10,15 +10,14 @@ import logging
 from forensic_aul.engine.models import HeaderChunk
 from forensic_aul.engine.parser.reader import BinaryReader
 
+from forensic_aul.engine.parser.format import (
+    HEADER_SUBCHUNK_TAG_0,
+    HEADER_SUBCHUNK_TAG_1,
+    HEADER_SUBCHUNK_TAG_2,
+    HEADER_SUBCHUNK_TAG_3,
+)
+
 log = logging.getLogger(__name__)
-
-CHUNK_TAG_HEADER: int = 0x1000
-
-# Sub-chunk tags within the header
-SUB_CHUNK_TAG_0: int = 0x6100  # mach continuous time
-SUB_CHUNK_TAG_1: int = 0x6101  # build version + hardware model
-SUB_CHUNK_TAG_2: int = 0x6102  # boot UUID + logd info
-SUB_CHUNK_TAG_3: int = 0x6103  # timezone path
 
 
 def _validate_sub_chunk_tag(actual: int, expected: int) -> None:
@@ -59,13 +58,13 @@ def parse_header_chunk(r: BinaryReader) -> HeaderChunk:
 
     # Sub-chunk 0x6100
     sub_chunk_tag = r.u32()
-    _validate_sub_chunk_tag(sub_chunk_tag, SUB_CHUNK_TAG_0)
+    _validate_sub_chunk_tag(sub_chunk_tag, HEADER_SUBCHUNK_TAG_0)
     sub_chunk_data_size = r.u32()
     sub_chunk_continuous_time = r.u64()
 
     # Sub-chunk 0x6101 — build version (16 bytes) + hardware model (32 bytes)
     sub_chunk_tag_2 = r.u32()
-    _validate_sub_chunk_tag(sub_chunk_tag_2, SUB_CHUNK_TAG_1)
+    _validate_sub_chunk_tag(sub_chunk_tag_2, HEADER_SUBCHUNK_TAG_1)
     sub_chunk_tag_data_size_2 = r.u32()
     unknown_2 = r.u32()
     unknown_3 = r.u32()
@@ -74,7 +73,7 @@ def parse_header_chunk(r: BinaryReader) -> HeaderChunk:
 
     # Sub-chunk 0x6102 — boot UUID (16 bytes BE) + logd info
     sub_chunk_tag_3 = r.u32()
-    _validate_sub_chunk_tag(sub_chunk_tag_3, SUB_CHUNK_TAG_2)
+    _validate_sub_chunk_tag(sub_chunk_tag_3, HEADER_SUBCHUNK_TAG_2)
     sub_chunk_tag_data_size_3 = r.u32()
     boot_uuid = r.uuid_be()
     logd_pid = r.u32()
@@ -82,7 +81,7 @@ def parse_header_chunk(r: BinaryReader) -> HeaderChunk:
 
     # Sub-chunk 0x6103 — timezone path (48 bytes)
     sub_chunk_tag_4 = r.u32()
-    _validate_sub_chunk_tag(sub_chunk_tag_4, SUB_CHUNK_TAG_3)
+    _validate_sub_chunk_tag(sub_chunk_tag_4, HEADER_SUBCHUNK_TAG_3)
     sub_chunk_tag_data_size_4 = r.u32()
     timezone_path = r.cstr_fixed(48)
 

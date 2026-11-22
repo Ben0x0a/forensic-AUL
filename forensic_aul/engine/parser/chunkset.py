@@ -21,27 +21,22 @@ except ImportError:
 from forensic_aul.config import MAX_CHUNKSET_DECOMPRESSED_SIZE
 from forensic_aul.engine.parser.reader import BinaryReader, reader_from_bytes
 
+from forensic_aul.engine.parser.format import (
+    CHUNK_PREAMBLE_SIZE,
+    CHUNK_TAG_FIREHOSE,
+    CHUNK_TAG_OVERSIZE,
+    CHUNK_TAG_STATEDUMP,
+    CHUNK_TAG_SIMPLEDUMP,
+    SIG_BV41_COMPRESSED,
+    SIG_BV41_UNCOMPRESSED,
+    SIG_BV4_FOOTER,
+)
+
 log = logging.getLogger(__name__)
 
 # LZ4 block compression cannot expand data by more than ~255x; a claimed
 # uncompressed size beyond (compressed_size * this) is implausible → corrupt/crafted.
 _LZ4_MAX_RATIO: int = 255
-
-# Outer chunk tag
-CHUNK_TAG_CHUNKSET: int = 0x600D
-
-# bv41 compression signatures (LE u32). The signatures are 4-byte ASCII tags.
-SIG_BV41_COMPRESSED: int = 825521762    # b"bv41" — LZ4-compressed payload follows
-SIG_BV41_UNCOMPRESSED: int = 758412898  # b"bv4-" — payload is stored uncompressed
-SIG_BV4_FOOTER: int = 0x24347662        # b"bv4$" — terminator after payload
-
-# Sub-chunk tags in the decompressed data
-CHUNK_TAG_FIREHOSE: int = 0x6001
-CHUNK_TAG_OVERSIZE: int = 0x6002
-CHUNK_TAG_STATEDUMP: int = 0x6003
-CHUNK_TAG_SIMPLEDUMP: int = 0x6004
-
-CHUNK_PREAMBLE_SIZE: int = 16  # tag(4) + sub_tag(4) + data_size(8)
 
 
 @dataclass

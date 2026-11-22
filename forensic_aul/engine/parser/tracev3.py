@@ -25,14 +25,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Generator
 
+from forensic_aul.engine.parser.format import (
+    CHUNK_PREAMBLE_SIZE,
+    CHUNK_ALIGNMENT,
+    CHUNK_TAG_HEADER,
+    CHUNK_TAG_CATALOG,
+    CHUNK_TAG_CHUNKSET,
+)
+
 log = logging.getLogger(__name__)
-
-CHUNK_PREAMBLE_SIZE: int = 16  # 4 + 4 + 8
-CHUNK_ALIGNMENT:    int = 8   # each chunk is padded to a multiple of 8 bytes
-
-CHUNK_TAG_HEADER: int = 0x1000
-CHUNK_TAG_CATALOG: int = 0x600B
-CHUNK_TAG_CHUNKSET: int = 0x600D
 
 
 @dataclass

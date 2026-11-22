@@ -11,11 +11,11 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from forensic_aul.engine.parser.tracev3 import (
+from forensic_aul.engine.parser.format import (
     CHUNK_TAG_CATALOG,
     CHUNK_TAG_CHUNKSET,
-    RawChunk,
 )
+from forensic_aul.engine.parser.tracev3 import RawChunk
 from forensic_aul.ops.extraction import oversize_pass, tracev3_parse
 
 

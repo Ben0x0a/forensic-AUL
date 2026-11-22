@@ -30,7 +30,7 @@ from forensic_aul.engine.parser.firehose import (
     ACTIVITY_TYPE_NON_ACTIVITY,
     ACTIVITY_TYPE_TRACE,
 )
-from forensic_aul.engine.parser.uuidtext import DYNAMIC_STRING_OFFSET
+from forensic_aul.engine.parser.format import DYNAMIC_STRING_OFFSET
 from forensic_aul.ops.extraction.entry_builder import firehose_to_log_entry
 from forensic_aul.ops.extraction.oversize_pass import OversizeCache
 

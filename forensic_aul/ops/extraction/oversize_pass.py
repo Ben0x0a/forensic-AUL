@@ -18,17 +18,17 @@ from pathlib import Path
 
 from forensic_aul.engine.models import CatalogChunk, Oversize
 from forensic_aul.engine.parser.catalog import parse_catalog_chunk
-from forensic_aul.engine.parser.chunkset import (
+from forensic_aul.engine.parser.format import (
+    CHUNK_TAG_CATALOG,
+    CHUNK_TAG_CHUNKSET,
     CHUNK_TAG_OVERSIZE,
+)
+from forensic_aul.engine.parser.chunkset import (
     decompress_chunkset,
     iter_subchunks,
 )
 from forensic_aul.engine.parser.string_cache import StringCacheProvider
-from forensic_aul.engine.parser.tracev3 import (
-    CHUNK_TAG_CATALOG,
-    CHUNK_TAG_CHUNKSET,
-    iter_chunks,
-)
+from forensic_aul.engine.parser.tracev3 import iter_chunks
 from forensic_aul.engine.utils.cancellation import NEVER_CANCELLED, CancelToken
 from forensic_aul.errors import OperationCancelled
 

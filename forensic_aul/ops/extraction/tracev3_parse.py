@@ -20,10 +20,15 @@ from pathlib import Path
 
 from forensic_aul.engine.models import CatalogChunk, LogEntry, TimesyncBoot
 from forensic_aul.engine.parser.catalog import parse_catalog_chunk
-from forensic_aul.engine.parser.chunkset import (
+from forensic_aul.engine.parser.format import (
+    CHUNK_TAG_CATALOG,
+    CHUNK_TAG_CHUNKSET,
     CHUNK_TAG_FIREHOSE,
+    CHUNK_TAG_HEADER,
     CHUNK_TAG_SIMPLEDUMP,
     CHUNK_TAG_STATEDUMP,
+)
+from forensic_aul.engine.parser.chunkset import (
     decompress_chunkset,
     iter_subchunks,
 )
@@ -35,12 +40,7 @@ from forensic_aul.engine.parser.header import parse_header_chunk
 from forensic_aul.engine.parser.reader import reader_from_bytes
 from forensic_aul.engine.parser.statedump import parse_simpledump, parse_statedump
 from forensic_aul.engine.parser.string_cache import StringCacheProvider
-from forensic_aul.engine.parser.tracev3 import (
-    CHUNK_TAG_CATALOG,
-    CHUNK_TAG_CHUNKSET,
-    CHUNK_TAG_HEADER,
-    iter_chunks,
-)
+from forensic_aul.engine.parser.tracev3 import iter_chunks
 from forensic_aul.ops.extraction.entry_builder import (
     firehose_to_log_entry,
     simpledump_to_log_entry,

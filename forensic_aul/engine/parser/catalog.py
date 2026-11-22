@@ -20,10 +20,11 @@ from forensic_aul.engine.models import (
 )
 from forensic_aul.engine.parser.reader import BinaryReader, reader_from_bytes
 
-log = logging.getLogger(__name__)
+from forensic_aul.engine.parser.format import (
+    CATALOG_COMPRESSION_LZ4,
+)
 
-CHUNK_TAG_CATALOG: int = 0x600B
-LZ4_COMPRESSION: int = 0x100  # 256
+log = logging.getLogger(__name__)
 
 
 def parse_catalog_chunk(data: bytes) -> CatalogChunk:
@@ -181,8 +182,8 @@ def _parse_catalog_subchunk(r: BinaryReader) -> CatalogSubchunk:
     uncompressed_size = r.u32()
     compression_algorithm = r.u32()
 
-    if compression_algorithm != LZ4_COMPRESSION:
-        log.warning(f"Catalog subchunk has unexpected compression algorithm 0x{compression_algorithm:x} (expected LZ4 0x{LZ4_COMPRESSION:x})")
+    if compression_algorithm != CATALOG_COMPRESSION_LZ4:
+        log.warning(f"Catalog subchunk has unexpected compression algorithm 0x{compression_algorithm:x} (expected LZ4 0x{CATALOG_COMPRESSION_LZ4:x})")
 
     number_index = r.u32()
     indexes: list[int] = [r.u16() for _ in range(number_index)]

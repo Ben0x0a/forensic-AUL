@@ -33,6 +33,7 @@ from forensic_aul.engine.models import (
     FirehoseTrace,
 )
 
+
 log = logging.getLogger(__name__)
 
 # ── Activity type codes ───────────────────────────────────────────────────────
@@ -95,7 +96,6 @@ BASE64_RAW_BYTES: int = 0xF2
 # must exclude it — see engine/parser/message.py::_reinterpret_double.
 UNPARSEABLE_NUMBER: int = -9999
 
-CHUNK_PREAMBLE_SIZE: int = 16
 NO_PRIVATE_DATA: int = 0x1000  # private_data_virtual_offset value = no private data
 
 

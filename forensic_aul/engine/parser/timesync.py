@@ -13,11 +13,13 @@ from pathlib import Path
 
 from forensic_aul.engine.models import TimesyncBoot, TimesyncEntry
 
+from forensic_aul.engine.parser.format import (
+    TIMESYNC_BOOT_SIGNATURE,
+    TIMESYNC_RECORD_SIGNATURE,
+)
+
 log = logging.getLogger(__name__)
 
-# File-level signatures
-SIG_BOOT: int = 0xBBB0        # u16 — start of a TimesyncBoot record
-SIG_RECORD: int = 0x207354    # u32 — start of a Timesync record
 
 BOOT_HEADER_SIZE: int = 48    # total size of the boot record header
 
@@ -51,7 +53,7 @@ def parse_timesync_file(path: Path) -> dict[str, TimesyncBoot]:
         # Boot signature is u16; timesync record signature is u32.
         sig_u32 = int.from_bytes(data[pos : pos + 4], "little")
 
-        if sig_u32 == SIG_RECORD:
+        if sig_u32 == TIMESYNC_RECORD_SIGNATURE:
             if current_boot is None:
                 log.warning(f"Timesync record at offset 0x{pos:x} has no preceding boot record in {path}")
                 pos += _TIMESYNC_RECORD_SIZE
@@ -115,8 +117,8 @@ def _parse_timesync_boot(
         return None, 0
 
     sig = int.from_bytes(data[pos : pos + 2], "little")
-    if sig != SIG_BOOT:
-        log.error(f"Invalid timesync boot signature 0x{sig:x} at offset 0x{pos:x} (expected 0x{SIG_BOOT:x})")
+    if sig != TIMESYNC_BOOT_SIGNATURE:
+        log.error(f"Invalid timesync boot signature 0x{sig:x} at offset 0x{pos:x} (expected 0x{TIMESYNC_BOOT_SIGNATURE:x})")
         return None, 0
 
     pos += 2
@@ -166,8 +168,8 @@ def _parse_timesync_record(
         return None, 0
 
     sig = int.from_bytes(data[pos : pos + 4], "little")
-    if sig != SIG_RECORD:
-        log.error(f"Invalid timesync record signature 0x{sig:x} at 0x{pos:x} (expected 0x{SIG_RECORD:x})")
+    if sig != TIMESYNC_RECORD_SIGNATURE:
+        log.error(f"Invalid timesync record signature 0x{sig:x} at 0x{pos:x} (expected 0x{TIMESYNC_RECORD_SIGNATURE:x})")
         return None, 0
 
     unknown_flags = int.from_bytes(data[pos + 4 : pos + 8], "little")

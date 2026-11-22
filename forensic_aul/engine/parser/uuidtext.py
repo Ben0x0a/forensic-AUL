@@ -16,11 +16,13 @@ from forensic_aul.config import FORMAT_STRING_OFFSET_CACHE_MAX
 from forensic_aul.engine.models import UUIDText, UUIDTextEntry
 from forensic_aul.engine.parser.reader import reader_from_bytes
 
+from forensic_aul.engine.parser.format import (
+    UUIDTEXT_SIGNATURE,
+    DYNAMIC_STRING_OFFSET,
+)
+
 log = logging.getLogger(__name__)
 
-UUIDTEXT_SIGNATURE: int = 0x66778899
-# The dynamic format string flag: format string is literally "%s"
-DYNAMIC_STRING_OFFSET: int = 0x80000000
 
 # Sentinel distinguishing "offset cached as empty/None" from "offset not cached".
 # WHY: a legitimate lookup result can be "" (offset not found); a plain
