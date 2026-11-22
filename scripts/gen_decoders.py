@@ -14,7 +14,9 @@ Used by : developers / CI (``.github/workflows/decoder-tables.yml``) to keep the
           generated tables in sync with the upstream source. Run with no
           arguments to (re)write the module; ``--check`` exits non-zero if the
           on-disk module is stale (for CI). ``--ref`` pins a branch/tag/commit
-          (default ``main``) for a reproducible generation.
+          (default: the pinned tag ``_DEFAULT_REF``) for a reproducible
+          generation. A result with fewer tables or entries than the module on
+          disk is refused unless ``--allow-shrink`` is given.
 Uses    : the upstream Mandiant macos-unifiedlogs source fetched over HTTPS
           (Apache-2.0). Nothing is vendored in this repo; attribution is embedded
           in the generated module header, in ``THIRD_PARTY_NOTICES.md``, and the
@@ -33,6 +35,7 @@ GitHub API rate limit (used automatically by CI).
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 import re
@@ -43,7 +46,11 @@ from pathlib import Path
 
 # ── Upstream source (Mandiant macos-unifiedlogs, Apache-2.0) ─────────────────────
 _UPSTREAM_REPO = "mandiant/macos-UnifiedLogs"
-_DEFAULT_REF = "main"
+# Pinned to the last release whose decoders are plain ``match "k" => "v"`` tables.
+# From 0.8.0 upstream rewrote them as typed enums with Display impls, which this
+# generator cannot read (it would emit EMPTY tables). Move the pin only together
+# with an extractor for the new layout.
+_DEFAULT_REF = "v0.7.0"
 _DECODERS_PATH = "src/decoders"  # directory holding the per-type decoder .rs files
 _DISPATCH_NAME = "decoder.rs"  # the file with the type→function dispatch table
 _CARGO_PATH = "Cargo.toml"  # read for the upstream crate version (header only)
@@ -242,6 +249,11 @@ def main() -> int:
         default=_DEFAULT_REF,
         help=f"Upstream branch/tag/commit to generate from (default: {_DEFAULT_REF}).",
     )
+    parser.add_argument(
+        "--allow-shrink",
+        action="store_true",
+        help="Accept a result with fewer tables/entries than the module on disk.",
+    )
     args = parser.parse_args()
 
     try:
@@ -267,9 +279,38 @@ def main() -> int:
         print(f"decoder_tables.py is up to date ({n_tables} tables, {n_entries} entries).")
         return 0
 
+    # WHY refuse a shrink: an upstream layout change makes the extractor find
+    # nothing, and writing that silently empties every decoder table (messages
+    # then lose their decoded names). Shrinking must be a deliberate choice.
+    on_disk_tables, on_disk_entries = _on_disk_counts()
+    if (n_tables == 0 or n_tables < on_disk_tables or n_entries < on_disk_entries) and not args.allow_shrink:
+        print(
+            f"error: upstream {args.ref} yields {n_tables} tables / {n_entries} entries, fewer than "
+            f"the {on_disk_tables} / {on_disk_entries} on disk — refusing to write. The upstream "
+            "layout probably changed; pass --allow-shrink only if the loss is intended.",
+            file=sys.stderr,
+        )
+        return 3
+
     _OUTPUT_FILE.write_text(rendered, encoding="utf-8")
     print(f"Wrote {_OUTPUT_FILE.relative_to(_REPO_ROOT)}: {n_tables} tables, {n_entries} entries.")
     return 0
+
+
+def _on_disk_counts() -> tuple[int, int]:
+    """(tables, entries) of the current generated module, or (0, 0) if absent.
+
+    Read with ``ast`` rather than imported, so the check works without the
+    package on ``sys.path`` and never executes the file.
+    """
+    if not _OUTPUT_FILE.exists():
+        return 0, 0
+    tree = ast.parse(_OUTPUT_FILE.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.AnnAssign) and getattr(node.target, "id", None) == "DECODER_TABLES":
+            tables = ast.literal_eval(node.value)
+            return len(tables), sum(len(t) for t in tables.values())
+    return 0, 0
 
 
 if __name__ == "__main__":

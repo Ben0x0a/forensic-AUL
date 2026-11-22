@@ -1,12 +1,15 @@
 # Keep the SHA-pinned GitHub Actions (and Python deps) up to date automatically.
 # Dependabot opens PRs that bump the pinned SHAs and refresh the version comments.
+# PRs target dev: main only receives deliberate, reviewed merges from dev.
 version: 2
 updates:
   - package-ecosystem: "github-actions"
     directory: "/"
+    target-branch: "dev"
     schedule:
       interval: "weekly"
   - package-ecosystem: "uv"
     directory: "/"
+    target-branch: "dev"
     schedule:
       interval: "weekly"
