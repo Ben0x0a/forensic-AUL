@@ -23,7 +23,8 @@ def format_ranking(ranking: RankingResult, top: list[tuple]) -> str:
     (rows from ``repeat.ranked_templates``)."""
     lines = [
         f"  Repeated {ranking.cycles}×: {ranking.templates} templates retained, "
-        f"{ranking.in_every_cycle} new in every repetition  →  {ranking.path}",
+        f"{ranking.in_every_cycle} new in every repetition",
+        f"    Ranking  →  {ranking.csv_path or ranking.path}",
     ]
     for rank, new_cycles, cycles, rows, process, message in top:
         text = (message or "").replace("\n", " ")

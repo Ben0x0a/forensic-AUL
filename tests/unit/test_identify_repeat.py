@@ -38,10 +38,18 @@ def test_templates_new_in_every_repetition_rank_first(tmp_path):
             ("app", "%{public}s", "generic two", "new_template"),
         ]),
     ]
-    result = rank_repeated(dbs, tmp_path / "repeat.db")
+    result = rank_repeated(dbs, tmp_path / "repeat.db", tmp_path / "repeat.csv")
     assert (result.cycles, result.templates, result.in_every_cycle) == (3, 4, 1)
 
     top = ranked_templates(result.path)
     assert top[0][1:5] == (3, 3, 3, "screenshotd")
     assert {row[4] for row in top} == {"screenshotd", "wifid", "app"}
     assert "kernel" not in format_ranking(result, top)
+
+    import csv
+
+    with result.csv_path.open(encoding="utf-8-sig", newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    assert [r["rank"] for r in rows] == ["1", "2", "3", "4"]
+    assert rows[0]["process"] == "screenshotd" and rows[0]["new_template_cycles"] == "3"
+    assert rows[0]["template"] == "saved screenshot %{public}s"

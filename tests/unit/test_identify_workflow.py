@@ -361,9 +361,9 @@ def test_repeat_runs_every_cycle_and_ranks_them(patched, monkeypatch):
 
     ranked: list = []
 
-    def fake_rank(dbs, out):
-        ranked.append((list(dbs), out))
-        return RankingResult(out, len(dbs), 5, 2)
+    def fake_rank(dbs, out, csv_out):
+        ranked.append((list(dbs), out, csv_out))
+        return RankingResult(out, len(dbs), 5, 2, csv_out)
 
     monkeypatch.setattr(wf, "rank_repeated", fake_rank)
     actions: list = []
@@ -375,7 +375,8 @@ def test_repeat_runs_every_cycle_and_ranks_them(patched, monkeypatch):
     assert [("-1-" in c, "-2-" in c, "-3-" in c) for c in collects[::2]] == [
         (True, False, False), (False, True, False), (False, False, True)]
     assert len(res.cycles) == 3 and res.ranking.in_every_cycle == 2
-    dbs, out = ranked[0]
+    dbs, out, csv_out = ranked[0]
+    assert csv_out == out.with_suffix(".csv"), "the ranking CSV is always written"
     assert [db.name.split("-identified")[0][-1] for db in dbs] == ["1", "2", "3"]
     assert out.name.endswith("-repeat.db")
 
@@ -402,7 +403,7 @@ def test_progress_ends_at_100_percent_only_at_the_end(patched, monkeypatch):
     100 % until the diff is done, even with a preparation and repetitions."""
     from forensic_aul import RankingResult
 
-    monkeypatch.setattr(wf, "rank_repeated", lambda dbs, out: RankingResult(out, len(dbs), 0, 0))
+    monkeypatch.setattr(wf, "rank_repeated", lambda dbs, out, csv_out: RankingResult(out, len(dbs), 0, 0))
     events: list = []
     run_identify_workflow(
         patched.out, opts=IdentifyOptions(repeat=2, still_seconds=5, settle_seconds=5),

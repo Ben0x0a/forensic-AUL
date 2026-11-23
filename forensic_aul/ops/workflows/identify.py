@@ -345,7 +345,10 @@ async def _run_identify_async(
     if len(cycles) > 1:
         ranking_db = session_dir / f"{prefix}-repeat.db"
         say(f"Ranking templates across {len(cycles)} repetitions → {ranking_db}")
-        ranking = rank_repeated([c.identified_db for c in cycles], ranking_db)
+        # Always with its CSV, whatever write_csv says: the CSV is how the
+        # ranking is read (no viewer for it), in any spreadsheet or script.
+        ranking = rank_repeated([c.identified_db for c in cycles], ranking_db,
+                                ranking_db.with_suffix(".csv"))
         write_run_info(ranking_db, {ACTION_DESCRIPTION_KEY: description})
     reporter.finish("complete")
 

@@ -59,10 +59,12 @@ The description is stored in the identified database (table `identify_run`).
 line that belongs to the action appears in every repetition; background noise
 that slipped past one baseline rarely does it N times. Each repetition gets its
 own files (`<prefix>-<n>-baseline.logarchive`, … `<prefix>-<n>-identified.db`),
-and `<prefix>-repeat.db` ranks the retained templates by how many repetitions
-had them as *new template*. `N/N` means present in every action window and
-absent from every baseline: read those first. The ranking's top lines are
-printed at the end.
+and the ranking of the retained templates — by how many repetitions had them as
+*new template* — is written to `<prefix>-repeat.csv` (and `<prefix>-repeat.db`).
+`N/N` means present in every action window and absent from every baseline: read
+those first. The CSV is the way to work with the ranking (a spreadsheet, a
+script); the GUI names it in its summary and has no viewer for it. The top lines
+are printed at the end.
 
 Acquisition is iOS via **pymobiledevice3** (needs the `acquire` extra; userspace,
 no root). The diff itself is pure SQLite and cross-platform.

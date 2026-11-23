@@ -29,6 +29,7 @@ not be limited by that.
 from __future__ import annotations
 
 import contextlib
+import csv
 import sqlite3
 from collections.abc import Sequence
 from pathlib import Path
@@ -40,8 +41,20 @@ from forensic_aul.outcomes import RankingResult
 RANKING_TABLE_NAME = "repeat_ranking"
 
 
-def rank_repeated(identified_dbs: Sequence[Path], out_db: Path) -> RankingResult:
-    """Rank the retained templates of *identified_dbs* into *out_db* (replaced)."""
+# The CSV columns, in order. Consumed by: rank_repeated.
+_CSV_COLUMNS = ("rank", "new_template_cycles", "cycles", "rows", "process", "template",
+                "example_message")
+
+
+def rank_repeated(
+    identified_dbs: Sequence[Path], out_db: Path, csv_out: Path | None = None,
+) -> RankingResult:
+    """Rank the retained templates of *identified_dbs* into *out_db* (replaced).
+
+    *csv_out*, when given, also receives the ranking as CSV (UTF-8 with BOM, so
+    Excel detects the encoding), in rank order — the form analysts sort and
+    filter in their own tools.
+    """
     if not identified_dbs:
         raise ValueError("rank_repeated needs at least one identified database")
     out_db.parent.mkdir(parents=True, exist_ok=True)
@@ -90,7 +103,18 @@ def rank_repeated(identified_dbs: Sequence[Path], out_db: Path) -> RankingResult
             (len(identified_dbs),),
         ).fetchone()
         conn.commit()
-    return RankingResult(out_db, len(identified_dbs), templates, in_every or 0)
+        if csv_out is not None:
+            _write_csv(conn, csv_out)
+    return RankingResult(out_db, len(identified_dbs), templates, in_every or 0, csv_out)
+
+
+def _write_csv(conn: sqlite3.Connection, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8-sig") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(_CSV_COLUMNS)
+        writer.writerows(conn.execute(
+            f"SELECT {', '.join(_CSV_COLUMNS)} FROM {RANKING_TABLE_NAME} ORDER BY rank"))
 
 
 def ranked_templates(ranking_db: Path, limit: int = 10) -> list[tuple]:

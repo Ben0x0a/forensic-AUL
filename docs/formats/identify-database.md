@@ -125,7 +125,7 @@ from a database made by `run_diff` alone or `identify --diff`). Source:
 
 `read_run_info(db)` returns the table as a dict (`{}` when absent).
 
-## `repeat_ranking` (`<prefix>-repeat.db`)
+## `repeat_ranking` (`<prefix>-repeat.db` and `<prefix>-repeat.csv`)
 
 Written by `run_identify_workflow` when `IdentifyOptions.repeat > 1`
 (`rank_repeated`, `forensic_aul/ops/identify/repeat.py`): the retained rows of
@@ -142,8 +142,13 @@ literal text once its `%` specifiers are removed).
 | `rows` | retained rows across all repetitions |
 | `example_message` | one composed message of the group |
 
-`ranked_templates(path, limit)` reads the top of the table. The file also holds
-an `identify_run` table with the action description.
+`ranked_templates(path, limit)` reads the top of the table. The database also
+holds an `identify_run` table with the action description.
+
+The same table is written as `<prefix>-repeat.csv` (UTF-8 with BOM, in rank
+order) with the columns `rank, new_template_cycles, cycles, rows, process,
+template, example_message`. It is always written for a repeated run, whatever
+`write_csv` says: it is how the ranking is meant to be read.
 
 ## Reading it: `IdentifyResults`
 

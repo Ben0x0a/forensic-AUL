@@ -367,7 +367,7 @@ class IdentifyScreen(OperationScreen):
         if ranking is not None:
             action += (f"<br>Repeated {ranking.cycles}×: {ranking.in_every_cycle} of "
                        f"{ranking.templates} templates new in every repetition "
-                       f"→ {html.escape(ranking.path.name)}")
+                       f"→ {html.escape((ranking.csv_path or ranking.path).name)}")
         panel = result_panel(
             True,
             f"Identify complete — {summary}{action}"

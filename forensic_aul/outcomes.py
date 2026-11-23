@@ -194,6 +194,7 @@ class RankingResult:
     cycles: int           # repetitions ranked
     templates: int        # distinct templates among the retained rows
     in_every_cycle: int   # templates that were new_template in every cycle
+    csv_path: Path | None = None   # the same ranking as CSV, when written
 
 
 @dataclass(frozen=True)
