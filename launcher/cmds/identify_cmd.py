@@ -85,6 +85,18 @@ def _add_identify(sub):  # type: ignore[type-arg,no-untyped-def]
         ),
     )
     acq.add_argument(
+        "--settle",
+        type=int,
+        default=None,
+        metavar="SECONDS",
+        help=(
+            "Seconds to keep the device untouched after the optional preparation "
+            "(unlock, open the app…), so its background work ends inside the "
+            f"baseline (default: {IdentifyOptions.settle_seconds}, or the [identify] "
+            "settings)."
+        ),
+    )
+    acq.add_argument(
         "--output-dir", "-o",
         type=Path,
         metavar="DIR",
@@ -200,7 +212,9 @@ def _run_identify(args: argparse.Namespace) -> int:
     def wait_still(seconds: int) -> None:
         end = time.monotonic() + seconds
         print(f"  Keep the device untouched for {seconds} s (Ctrl-C aborts).")
-        if args.action is None:
+        # Asked once, in the first pause (the settle pause reuses this callback).
+        if args.action is None and not description.get("asked"):
+            description["asked"] = True
             description["text"] = _ask("  Meanwhile, describe the action you will perform "
                                        "(Enter to skip): ")
         # A countdown on one line, rewritten in place (I3).
@@ -208,6 +222,15 @@ def _run_identify(args: argparse.Namespace) -> int:
             print(f"\r  Still: {left:4.0f} s left ", end="", flush=True)
             time.sleep(min(1.0, left))
         print("\r  Still: done.          ")
+
+    def prepare() -> bool:
+        print("")
+        print("  Anything to do before the action that is NOT of interest (unlock,")
+        print("  open the app, reach the right screen)? Its lines then go to the baseline.")
+        if _ask("  Prepare now? [y/N] ").lower() not in ("y", "yes"):
+            return False
+        _ask("  Do it on the device, then press Enter. ")
+        return True
 
     def describe_action() -> str:
         if args.action is not None:
@@ -259,12 +282,15 @@ def _run_identify(args: argparse.Namespace) -> int:
                 udid=args.udid,
                 # A flag left out means "the settings decide".
                 still_seconds=args.still if args.still is not None else args.settings.identify.still_seconds,
+                settle_seconds=(args.settle if args.settle is not None
+                                else args.settings.identify.settle_seconds),
                 write_csv=False if args.no_csv else args.settings.identify.write_csv,
                 extract=_identify_extract(args),
             ),
             kb=kb,
             confirm=confirm,
             wait_still=wait_still,
+            prepare=prepare,
             wait_for_action=wait_for_action,
             describe_action=describe_action,
             status=status,

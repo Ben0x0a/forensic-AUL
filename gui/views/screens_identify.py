@@ -62,13 +62,14 @@ class _State(Enum):
 
     SETUP = auto()
     STILL = auto()
+    PREPARE = auto()
     RUNNING = auto()
     WAITING = auto()
     DONE = auto()
 
 
-# The seven visible steps, in order. Consumed by _build_steps / _highlight_step.
-_STEPS = ["Setup", "Still", "Baseline", "Action", "Post-action", "Extract", "Results"]
+# The visible steps, in order. Consumed by _build_steps / _highlight_step.
+_STEPS = ["Setup", "Still", "Prepare", "Baseline", "Action", "Post-action", "Extract", "Results"]
 
 # Map a workflow ``ProgressEvent.phase`` name onto the step it belongs to, so the
 # step indicator can light up as the run advances. Kept in ONE place (the engine's
@@ -77,6 +78,7 @@ _STEPS = ["Setup", "Still", "Baseline", "Action", "Post-action", "Extract", "Res
 _PHASE_TO_STEP = {
     "connect": "Setup",
     "still": "Still",
+    "prepare": "Prepare",
     "baseline": "Baseline",
     "wait": "Action",
     "action": "Post-action",
@@ -125,6 +127,7 @@ class IdentifyScreen(OperationScreen):
         self._build_setup()
         self._build_describe()
         self._build_still()
+        self._build_prepare()
         self._build_running()
         self._build_waiting()
 
@@ -226,6 +229,28 @@ class IdentifyScreen(OperationScreen):
         self._still_panel.body.addLayout(row)
         self.content.addWidget(self._still_panel)
 
+    # ── Preparation section ───────────────────────────────────────────────────────
+
+    def _build_prepare(self) -> None:
+        self._prepare_panel = Panel(elev=True)
+        self._prepare_panel.add(h2("Anything to do first that is not of interest?"))
+        self._prepare_panel.add(help_label(
+            "Unlock, open the app, reach the right screen… Its log lines then go to "
+            "the baseline, not to the result. A short still pause follows."
+        ))
+        row = QHBoxLayout()
+        row.addStretch(1)
+        done = primary_button("Done preparing", "check")
+        done.clicked.connect(lambda: self._ctrl.prepared(True))
+        nothing = ghost_button("Nothing to prepare")
+        nothing.clicked.connect(lambda: self._ctrl.prepared(False))
+        abort = ghost_button("Abort")
+        abort.clicked.connect(self._ctrl.abort)
+        for btn in (done, nothing, abort):
+            row.addWidget(btn)
+        self._prepare_panel.body.addLayout(row)
+        self.content.addWidget(self._prepare_panel)
+
     # ── Running section (progress) ────────────────────────────────────────────────
 
     def _build_running(self) -> None:
@@ -291,7 +316,9 @@ class IdentifyScreen(OperationScreen):
         (*counts*: the diff database's ResultCounts, or None to use the diff's own)."""
         self._setup_panel.setVisible(state is _State.SETUP)
         self._still_panel.setVisible(state is _State.STILL)
-        self._running_panel.setVisible(state in (_State.RUNNING, _State.STILL, _State.WAITING))
+        self._prepare_panel.setVisible(state is _State.PREPARE)
+        self._running_panel.setVisible(
+            state in (_State.RUNNING, _State.STILL, _State.PREPARE, _State.WAITING))
         self._waiting_panel.setVisible(state is _State.WAITING)
         self._describe_panel.setVisible(state is not _State.DONE)
 
@@ -372,8 +399,10 @@ class IdentifyScreen(OperationScreen):
         # so switch to the WAITING panel as soon as we see it.
         if label == "wait":
             self.set_state(_State.WAITING)
-        elif self._waiting_panel.isVisible() and label not in ("wait",):
-            # A later phase (post-action acquisition) means the operator continued.
+        elif label == "prepare":
+            self.set_state(_State.PREPARE)
+        elif self._waiting_panel.isVisible() or self._prepare_panel.isVisible():
+            # A later phase means the operator answered the pause.
             self.set_state(_State.RUNNING)
         self._bar.setValue(int(fraction * 100))
         self._progress_label.setText(f"{fraction * 100:.1f}% · {label}")

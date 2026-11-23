@@ -9,7 +9,7 @@ Defines : ``run_identify_workflow`` (sync wrapper) and its async body — the fu
           optionally annotate the action DB against a knowledge base, and diff
           the two so only the lines attributable to the action remain. All
           user interaction is injected through callbacks (``confirm`` /
-          ``wait_still`` / ``wait_for_action`` / ``describe_action`` /
+          ``wait_still`` / ``prepare`` / ``wait_for_action`` / ``describe_action`` /
           ``status``) so the CLI, the
           GUI and tests each supply their own front-end — the workflow itself
           performs no I/O beyond logging. This is a research tool, not a
@@ -78,7 +78,7 @@ log = logging.getLogger(__name__)
 # the slowest step by far. "wait" and "annotate" get minimal but non-zero
 # weight since they can legitimately take a moment (operator pause / KB run).
 _IDENTIFY_PHASES = [
-    ("connect", 0.02), ("still", 0.04), ("baseline", 0.12),
+    ("connect", 0.02), ("still", 0.04), ("prepare", 0.02), ("baseline", 0.12),
     ("wait", 0.02), ("action", 0.12), ("extract-baseline", 0.26),
     ("extract-action", 0.26), ("annotate", 0.04), ("diff", 0.12),
 ]
@@ -95,6 +95,7 @@ def run_identify_workflow(
     kb: "KnowledgeBase | None" = None,
     confirm: Callable[[DeviceInfo], bool] | None = None,
     wait_still: Callable[[int], None] | None = None,
+    prepare: Callable[[], bool] | None = None,
     wait_for_action: Callable[[], None] | None = None,
     describe_action: Callable[[], str] | None = None,
     status: Callable[[str], None] | None = None,
@@ -103,8 +104,8 @@ def run_identify_workflow(
     """Run the full identify workflow and return the produced artefacts.
 
     Sequence: connect → confirm → set up chain-of-custody paths → capture
-    ``t0`` → optional still pause (*wait_still*) → acquire a baseline covering
-    *from t0* → wait for the operator to perform the action (*wait_for_action*)
+    ``t0`` → optional still pause (*wait_still*) → optional preparation
+    (*prepare*, then a settle pause) → acquire a baseline covering *from t0* → wait for the operator to perform the action (*wait_for_action*)
     → acquire the post-action logarchive → extract both to SQLite → optionally
     annotate the action DB against *kb* → diff the two (see
     ``ops/identify/diff.py``).
@@ -126,6 +127,12 @@ def run_identify_workflow(
       through a ``CancelToken``), or return early to skip the remaining wait (the
       callback owns the timing, not this function). Only invoked when *wait_still*
       is given AND *still_seconds* > 0.
+    - *prepare()* — the operator does what must happen but is not of interest
+      (unlock, open the app, reach the right screen) and returns True, or
+      returns False when there is nothing to prepare. Those lines then land in
+      the baseline instead of the result. After True, *wait_still* is asked
+      again for ``opts.settle_seconds`` so the work the preparation set off ends
+      before the baseline is collected. Raise ``OperationCancelled`` to abort.
     - *wait_for_action()* — blocks until the operator has performed the action;
       raise :class:`~forensic_aul.errors.OperationCancelled` to abort. ``None``
       proceeds immediately (useful only in tests — a real run needs the pause).
@@ -184,7 +191,7 @@ def run_identify_workflow(
         output_dir,
         case if case is not None else CaseInfo(),
         opts if opts is not None else IdentifyOptions(),
-        kb=kb, confirm=confirm, wait_still=wait_still,
+        kb=kb, confirm=confirm, wait_still=wait_still, prepare=prepare,
         wait_for_action=wait_for_action, describe_action=describe_action,
         status=status, progress=progress,
     ))
@@ -198,6 +205,7 @@ async def _run_identify_async(
     kb: "KnowledgeBase | None",
     confirm: Callable[[DeviceInfo], bool] | None,
     wait_still: Callable[[int], None] | None,
+    prepare: Callable[[], bool] | None,
     wait_for_action: Callable[[], None] | None,
     describe_action: Callable[[], str] | None,
     status: Callable[[str], None] | None,
@@ -273,6 +281,17 @@ async def _run_identify_async(
             # Raising aborts the whole run (same contract as wait_for_action);
             # returning early is a deliberate skip — the callback owns timing.
             await asyncio.to_thread(wait_still, still_seconds)
+
+        # ── Optional preparation, then a settle pause ───────────────────────
+        # Inside the baseline window (it started at t0): the preparation's lines
+        # become baseline keys, so the result keeps the action of interest only.
+        if prepare is not None:
+            reporter.phase("prepare")
+            prepared = await asyncio.to_thread(prepare)
+            if prepared and wait_still is not None and opts.settle_seconds > 0:
+                reporter.phase("still")
+                log.info(f"Settle pause: {opts.settle_seconds} s")
+                await asyncio.to_thread(wait_still, opts.settle_seconds)
 
         # ── Acquire #1 — baseline (never skipped: the diff needs its cutoff) ──
         reporter.phase("baseline")

@@ -83,7 +83,7 @@ _DEFAULTS = Settings(
 _SETTABLE: dict[str, tuple[str, ...]] = {
     "extract": ("batch_size", "jobs", "fts", "fast_fts", "fast_write", "keep_raw", "integrity"),
     "acquire": ("pack", "size_limit", "age_limit"),
-    "identify": ("still_seconds", "write_csv"),
+    "identify": ("still_seconds", "settle_seconds", "write_csv"),
     "identify.extract": ("batch_size", "jobs", "fts", "integrity"),
 }
 SETTABLE_KEYS: tuple[str, ...] = tuple(
@@ -95,6 +95,7 @@ _RULES: dict[str, tuple[typing.Callable[[Any], bool], str]] = {
     "batch_size": (lambda v: v >= 1, "at least 1"),
     "jobs": (lambda v: v >= 0, "0 (auto) or more"),
     "still_seconds": (lambda v: v >= 0, "0 or more"),
+    "settle_seconds": (lambda v: v >= 0, "0 or more"),
     "size_limit": (lambda v: v is None or v > 0, "a positive number of bytes"),
     "age_limit": (lambda v: v is None or v > 0, "a positive number of days"),
     "integrity": (lambda v: v in INTEGRITY_MODES, f"one of {', '.join(INTEGRITY_MODES)}"),

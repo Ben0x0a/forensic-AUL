@@ -138,6 +138,8 @@ def _install_fake_workflow(monkeypatch, screen, *, drives="still", result=None):
     """
     runner = _ThreadRunner()
     screen.run_task = runner.run_task  # type: ignore[method-assign]
+    seen_prepared: list[bool] = []
+    runner.seen_prepared = seen_prepared
 
     def _fake(*_args, **kwargs):
         progress = kwargs["progress"]
@@ -151,6 +153,9 @@ def _install_fake_workflow(monkeypatch, screen, *, drives="still", result=None):
         elif drives == "wait":
             progress(_Ev(0.4, "wait"))   # switches the view to WAITING
             kwargs["wait_for_action"]()
+        elif drives == "prepare":
+            progress(_Ev(0.1, "prepare"))  # switches the view to PREPARE
+            seen_prepared.append(kwargs["prepare"]())
         return result if result is not None else _fake_result()
 
     monkeypatch.setattr(identify_ctrl, "run_identify_workflow", _fake)
@@ -411,3 +416,15 @@ def test_description_reaches_the_workflow(qapp, monkeypatch):
     texts = [label.text() for label in screen.findChildren(QLabel)]
     assert any("Action: opened the camera" in t for t in texts)
     assert screen._describe_panel.isHidden(), "the field is gone once the run is done"
+
+
+def test_prepare_pause_shows_its_panel_and_returns_the_answer(qapp, monkeypatch):
+    screen = _make_screen()
+    runner = _install_fake_workflow(monkeypatch, screen, drives="prepare")
+    _select_device(screen)
+    screen._out.set_path("/tmp/out")
+    screen._ctrl.start()
+    _wait_for(lambda: screen._prepare_panel.isVisibleTo(screen), qapp=qapp)
+    screen._ctrl.prepared(True)            # "Done preparing"
+    runner.join_and_dispatch()
+    assert runner.seen_prepared == [True]

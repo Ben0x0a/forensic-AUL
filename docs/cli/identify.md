@@ -19,7 +19,7 @@ There is no separate `identify-diff` command; `--diff` replaces it.
 
 ```bash
 faul.py identify [--case-number CASE] [-e EXHIBIT] [--analyst NAME]
-                 [--notes TEXT] [--udid UDID] [--still SECONDS]
+                 [--notes TEXT] [--udid UDID] [--still SECONDS] [--settle SECONDS]
                  [--output-dir DIR] [--yes] [--action TEXT]
                  [--show-identifiers] [--kb PATH] [--no-csv] [--batch-size N]
 ```
@@ -38,11 +38,18 @@ baseline, having you perform the action, acquiring again, and diffing:
 3. Keep the device **untouched for `--still` seconds** so idle and connection
    noise lands in the *baseline* rather than in the result. Meanwhile you are
    asked to describe the action you will perform; a countdown follows.
-4. Acquire the **baseline** logarchive.
-5. Prompt: *"Perform the action on the device now. Press Enter when complete."*
-6. Acquire the **post-action** logarchive. You can then edit the description.
-7. Extract both to SQLite.
-8. **Diff** them, so only lines attributable to the action remain, and
+4. **Prepare** (optional): do what must happen before the action but is not of
+   interest — unlock, open the app, reach the right screen — then press Enter.
+   Those lines land in the baseline, so the result keeps the action itself. A
+   **settle** pause (`--settle`, default 10 s) follows, so the background work
+   the preparation set off ends inside the baseline. Answering *N* skips both.
+   Don't prepare any part of the action you study: it would be removed as noise.
+5. Acquire the **baseline** logarchive. Its window starts before the still
+   pause, so the pause and the preparation are both in it.
+6. Prompt: *"Perform the action on the device now. Press Enter when complete."*
+7. Acquire the **post-action** logarchive. You can then edit the description.
+8. Extract both to SQLite.
+9. **Diff** them, so only lines attributable to the action remain, and
    optionally annotate the action database with a knowledge base.
 
 The description is stored in the identified database (table `identify_run`).
@@ -73,6 +80,7 @@ no root). The diff itself is pure SQLite and cross-platform.
 |---|---|---|
 | `--still SECONDS` | `60` (or the `[identify]` settings) | Seconds to keep the device untouched before the baseline acquisition. `0` skips the pause. |
 | `-o, --output-dir DIR` | `.` (current directory) | Directory for the archives, databases and diff outputs. |
+| `--settle SECONDS` | `10` (or the `[identify]` settings) | Seconds to keep the device untouched after a preparation. Not used when nothing was prepared. |
 | `-y, --yes` | off | Skip the device confirmation prompt before the baseline acquire. |
 | `--action TEXT` | asked | Description of the action; skips both description prompts. |
 | `--show-identifiers` | off | Show the device identifiers in full in the summary. |

@@ -75,6 +75,8 @@ class IdentifyController:
         # worker thread). Fresh objects are created per run in start().
         self._skip_event = threading.Event()
         self._continue_event = threading.Event()
+        self._prepare_event = threading.Event()
+        self._prepared = False
         self._cancel = CancelToken()
         # Set when the knowledge base failed to load for the current run, so the
         # DONE state can tell the analyst the results are unannotated.
@@ -140,6 +142,8 @@ class IdentifyController:
         # leaks — a token cancelled last time would stop this one immediately.
         self._skip_event = threading.Event()
         self._continue_event = threading.Event()
+        self._prepare_event = threading.Event()
+        self._prepared = False
         self._cancel = CancelToken()
 
         try:
@@ -153,6 +157,7 @@ class IdentifyController:
         opts = IdentifyOptions(
             udid=self._view.selected_udid(),
             still_seconds=self._view.still_seconds(),
+            settle_seconds=settings.identify.settle_seconds,
             write_csv=False,
             # [identify.extract] settings; jobs default 0 = auto.
             extract=settings.identify.extract,
@@ -164,6 +169,7 @@ class IdentifyController:
             progress=lambda ev: self._view.emit_progress(ev.overall, ev.phase),
             status=log.info,
             wait_still=self.wait_still,
+            prepare=self.prepare,
             wait_for_action=self.wait_for_action,
             # Read on the worker thread: a str copy, never the widget.
             describe_action=lambda: self._description,
@@ -190,12 +196,24 @@ class IdentifyController:
                 break
         self._cancel.check()
 
+    def prepare(self) -> bool:
+        """Block until the operator has prepared, or said there is nothing to
+        prepare (worker thread); True when they prepared."""
+        self._prepare_event.wait()
+        self._cancel.check()
+        return self._prepared
+
     def wait_for_action(self) -> None:
         """Block until the operator signals the action is done (worker thread)."""
         self._continue_event.wait()
         self._cancel.check()
 
     # ── GUI-thread control buttons ───────────────────────────────────────────────
+
+    def prepared(self, did_prepare: bool) -> None:
+        """The operator answered the preparation pause (GUI thread)."""
+        self._prepared = did_prepare
+        self._prepare_event.set()
 
     def set_description(self, text: str) -> None:
         """Keep the description field's text (GUI thread) for describe_action."""
@@ -208,12 +226,13 @@ class IdentifyController:
         self._continue_event.set()
 
     def abort(self) -> None:
-        # Cancel first, then wake BOTH pauses: whichever the worker is currently
+        # Cancel first, then wake EVERY pause: whichever the worker is currently
         # blocked on unblocks, reaches its cancel.check(), and raises
         # OperationCancelled. Waking before cancelling would let the worker pass
         # the check and carry on.
         self._cancel.cancel()
         self._skip_event.set()
+        self._prepare_event.set()
         self._continue_event.set()
 
     # ── Completion / failure (GUI thread) ────────────────────────────────────────

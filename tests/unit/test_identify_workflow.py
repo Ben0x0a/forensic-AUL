@@ -321,3 +321,34 @@ def test_the_action_description_is_returned_and_stored(patched):
                                 describe_action=lambda: "  opened the camera  ")
     assert res.action_description == "opened the camera"
     assert read_run_info(res.diff.sqlite_path)["action_description"] == "opened the camera"
+
+
+# ── The preparation pause ─────────────────────────────────────────────────────
+
+def _sequence(patched, prepared: bool):
+    events: list = []
+
+    def wait_still(seconds):
+        events.append(f"still:{seconds}")
+
+    def prepare():
+        events.append("prepare")
+        return prepared
+
+    run_identify_workflow(
+        patched.out, opts=IdentifyOptions(still_seconds=30, settle_seconds=10),
+        confirm=lambda d: True, wait_still=wait_still, prepare=prepare,
+        wait_for_action=lambda: events.append("action"),
+    )
+    return events, [c for c in patched.calls if c.startswith("collect:")]
+
+
+def test_preparation_lands_in_the_baseline_after_a_settle_pause(patched):
+    events, collects = _sequence(patched, prepared=True)
+    assert events == ["still:30", "prepare", "still:10", "action"]
+    assert "baseline" in collects[0], "the baseline is collected after the preparation"
+
+
+def test_nothing_to_prepare_skips_the_settle_pause(patched):
+    events, _ = _sequence(patched, prepared=False)
+    assert events == ["still:30", "prepare", "action"]

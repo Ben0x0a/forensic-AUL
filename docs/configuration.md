@@ -39,6 +39,7 @@ age_limit = 7               # days
 
 [identify]
 still_seconds = 30
+settle_seconds = 10         # after the optional preparation
 write_csv = true
 
 [identify.extract]          # how identify's two captures are extracted

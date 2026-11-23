@@ -17,8 +17,8 @@ which knowledge-base signatures are written.
 ## The method
 
 ```
-   t0 ─── still pause ─── baseline capture ─── operator performs action ─── action capture
-   └──────────── baseline window ────────────┘                              │
+   t0 ─── still ─── prepare + settle ─── baseline capture ─── action ─── action capture
+   └────────────────── baseline window ──────────────────┘                   │
                                                                             ↓
                                    diff: keep post-cutoff lines not seen in the baseline
 ```
@@ -30,14 +30,18 @@ which knowledge-base signatures are written.
    positives.
 3. **Still pause** (default 60 s) — the device is left untouched so the baseline
    absorbs its idle chatter.
-4. **Baseline acquisition.** Never skipped, even with a zero-second pause: the
+4. **Preparation** (optional) — the operator does what must happen but is not
+   of interest (unlock, open the app, reach the screen), then a settle pause
+   (default 10 s) lets the work it set off end. Both are inside the baseline
+   window, so those lines become noise instead of results.
+5. **Baseline acquisition.** Never skipped, even with a zero-second pause: the
    diff needs its cutoff regardless.
-5. **The operator performs the action**, then signals completion.
-6. **Action acquisition.**
-7. **Extract both** archives to SQLite.
-8. **Annotate the action database** against a knowledge base (optional — the
+6. **The operator performs the action**, then signals completion.
+7. **Action acquisition.**
+8. **Extract both** archives to SQLite.
+9. **Annotate the action database** against a knowledge base (optional — the
    baseline is diffed away and never needs annotations).
-9. **Diff.**
+10. **Diff.**
 
 ### What the diff actually does
 
@@ -148,7 +152,7 @@ res = run_identify_workflow(
 `sqlite_path`, `csv_path`, `retained`, `excluded`).
 
 Callbacks: `confirm(device) -> bool` (returning `False` aborts),
-`wait_still(seconds)`, `wait_for_action()`, `status(line)`, and `progress` (a
+`wait_still(seconds)`, `prepare()` (returns whether the operator prepared), `wait_for_action()`, `status(line)`, and `progress` (a
 `ProgressSink` receiving weighted overall progress across the whole run — see
 [../library/progress-and-errors.md](../library/progress-and-errors.md)). Any of
 them may raise `AcquisitionAborted` to abort cleanly. All are invoked off the
