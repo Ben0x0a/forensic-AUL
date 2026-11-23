@@ -15,6 +15,7 @@ New here? Start with **[Getting started](getting-started.md)**, then follow the
 |---|---|
 | [Getting started](getting-started.md) | Install, first extraction, first export |
 | [CLI reference](cli/index.md) | Every command, flag and exit code |
+| [Settings](configuration.md) | Change the defaults once: `app_data/faul.toml`, `FAUL_*` variables |
 | [Architecture](architecture.md) | How the codebase is layered |
 
 ## Concepts

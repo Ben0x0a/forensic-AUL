@@ -59,6 +59,14 @@ is not installed. See [`docs/gui.md`](../gui.md).
 
 ---
 
+
+### Settings
+
+The defaults of `extract`, `acquire` and `identify` come from the settings — the
+library defaults, then `app_data/faul.toml`, then `FAUL_*` environment variables —
+and a flag you give overrides them. A bad settings file or variable stops every
+command with exit code `2`. See [Settings](../configuration.md).
+
 ## Recommended order of use
 
 ```

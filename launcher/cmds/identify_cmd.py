@@ -20,7 +20,10 @@ import logging
 import time
 from pathlib import Path
 
-from forensic_aul.config import BATCH_SIZE
+from dataclasses import replace
+
+from forensic_aul import ExtractOptions, IdentifyOptions
+from forensic_aul.ops.identify.options import IDENTIFY_EXTRACT
 
 log = logging.getLogger(__name__)
 
@@ -73,12 +76,13 @@ def _add_identify(sub):  # type: ignore[type-arg,no-untyped-def]
     acq.add_argument(
         "--still",
         type=int,
-        default=60,
+        default=None,
         metavar="SECONDS",
         help=(
             "Seconds to keep the device untouched before the baseline "
             "acquisition, so idle/connection noise lands in the baseline "
-            "(default: 60; 0 skips the pause)."
+            f"(default: {IdentifyOptions.still_seconds}, or the [identify] "
+            "settings; 0 skips the pause)."
         ),
     )
     acq.add_argument(
@@ -109,9 +113,10 @@ def _add_identify(sub):  # type: ignore[type-arg,no-untyped-def]
                      help="Skip writing the retained-lines CSV (SQLite output only).")
 
     perf = p.add_argument_group("performance")
-    perf.add_argument("--batch-size", type=int, default=BATCH_SIZE, metavar="N",
+    perf.add_argument("--batch-size", type=int, default=None, metavar="N",
                       help=f"Batch size for the extract pipeline "
-                           f"(default: {BATCH_SIZE}, same as `extract`).")
+                           f"(default: {IDENTIFY_EXTRACT.batch_size}, or the "
+                           "[identify.extract] settings).")
     return p
 
 
@@ -158,10 +163,8 @@ def run(args: argparse.Namespace) -> int:
 def _run_identify(args: argparse.Namespace) -> int:
     from forensic_aul.ops.acquisition.acquire import AcquisitionAborted, AcquisitionError
     from forensic_aul.ops.identify.report import format_diff_result
-    from dataclasses import replace
 
-    from forensic_aul import CaseInfo, IdentifyOptions
-    from forensic_aul.ops.identify.options import IDENTIFY_EXTRACT
+    from forensic_aul import CaseInfo
     from forensic_aul.ops.identify.workflow import run_identify_workflow
     from forensic_aul.ops.knowledge_base.loader import KnowledgeBaseError, load_kb
 
@@ -222,8 +225,11 @@ def _run_identify(args: argparse.Namespace) -> int:
             CaseInfo(case_number=args.case_number, exhibit_number=args.exhibit_number,
                      analyst_name=args.analyst, notes=args.notes),
             IdentifyOptions(
-                udid=args.udid, still_seconds=args.still, write_csv=not args.no_csv,
-                extract=replace(IDENTIFY_EXTRACT, batch_size=args.batch_size),
+                udid=args.udid,
+                # A flag left out means "the settings decide".
+                still_seconds=args.still if args.still is not None else args.settings.identify.still_seconds,
+                write_csv=False if args.no_csv else args.settings.identify.write_csv,
+                extract=_identify_extract(args),
             ),
             kb=kb,
             confirm=confirm,
@@ -255,10 +261,10 @@ def _run_identify(args: argparse.Namespace) -> int:
 
 def _run_identify_diff(args: argparse.Namespace) -> int:
     baseline, action = args.diff
-    baseline_db = _resolve_to_db(baseline, args.case_number, args.imei, args.batch_size)
+    baseline_db = _resolve_to_db(baseline, args.case_number, args.imei, _identify_extract(args))
     if baseline_db is None:
         return 1
-    action_db = _resolve_to_db(action, args.case_number, args.imei, args.batch_size)
+    action_db = _resolve_to_db(action, args.case_number, args.imei, _identify_extract(args))
     if action_db is None:
         return 1
 
@@ -289,11 +295,17 @@ def _run_identify_diff(args: argparse.Namespace) -> int:
     return 0
 
 
+def _identify_extract(args) -> ExtractOptions:  # type: ignore[no-untyped-def]
+    """The [identify.extract] settings, with --batch-size on top when given."""
+    opts = args.settings.identify.extract
+    return opts if args.batch_size is None else replace(opts, batch_size=args.batch_size)
+
+
 def _resolve_to_db(
     path: Path,
     case_number: str | None,
     imei: str | None,
-    batch_size: int,
+    opts: ExtractOptions,
 ) -> Path | None:
     """Return *path* if it's a SQLite DB, otherwise extract it first.
 
@@ -302,7 +314,7 @@ def _resolve_to_db(
     if path.is_file() and path.suffix.lower() == ".db":
         return path
     if path.is_dir() and path.suffix.lower() == ".logarchive":
-        from forensic_aul import CaseInfo, ExtractOptions
+        from forensic_aul import CaseInfo
         from forensic_aul.ops.extraction.extract import open_or_extract
 
         db_path = path.with_suffix(".db")
@@ -311,7 +323,7 @@ def _resolve_to_db(
                 path, db_path,
                 CaseInfo(case_number=case_number or "IDENTIFY", imei=imei or "UNKNOWN",
                          notes="identify --diff"),
-                ExtractOptions(batch_size=batch_size),
+                opts,
             )
         except Exception as exc:
             log.exception(f"error: extract failed — {exc}")

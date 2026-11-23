@@ -123,6 +123,7 @@ library never imports it.
 | Module | Responsibility |
 |---|---|
 | `app/paths.py` | `APP_ROOT` (the folder holding `faul.py`) and `app_data_dir()` — `app_data/` next to the app (git-ignored) for settings, recents and crash reports, so the operator can see, copy and delete what the tool writes. Standard library only. |
+| `app/settings.py` | The layered settings: option-dataclass defaults < `app_data/faul.toml` < `FAUL_*` environment; each command (and GUI screen) applies its own flags on top. An allowlist of settable keys; unknown or invalid entries are refused. See [Settings](configuration.md). |
 | `app/logging_config.py` | The one place the frontends configure logging: console logging (`dictConfig`, UTC, detailed with `-v`) and attaching a frontend's own handler (the GUI log panel). The library never configures logging — it only adds a `NullHandler`; its one exception is the opt-in audit log below. |
 | `app/extract_session.py` | The CLI's evidence extract: console verbosity, `run_extract` with `audit_log=True`, and the outcome → exit code (0 / 1 / 130) with a crash report on an unexpected failure. Used by both `extract` and `acquire --extract`. |
 | `app/diagnostics/` | Forensic crash and bug reports: the type and value of every variable in every frame, classified `safe` / `sensitive`, kept in full plaintext locally; `write_shared_copy` produces the redacted copy that may leave the machine. **Standard library only** — domain types are recognised by *name*, never imported, so it still works when a domain import is what crashed. |

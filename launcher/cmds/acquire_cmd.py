@@ -34,7 +34,9 @@ import logging
 from pathlib import Path
 from typing import Callable
 
-from forensic_aul.config import BATCH_SIZE
+from dataclasses import replace
+
+from forensic_aul import ExtractOptions
 
 log = logging.getLogger(__name__)
 
@@ -152,9 +154,9 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
     post_grp.add_argument(
         "--batch-size",
         type=int,
-        default=BATCH_SIZE,
+        default=None,
         metavar="N",
-        help=f"Batch size for --extract (default: {BATCH_SIZE}, same as `extract`).",
+        help="Batch size for --extract (default: the [extract] settings, same as `extract`).",
     )
 
 
@@ -176,7 +178,7 @@ def run(args) -> int:  # type: ignore[type-arg]
         log.error("error: -o/--output-dir is required for acquisition")
         return 1
 
-    from forensic_aul import AcquireOptions, CaseInfo
+    from forensic_aul import CaseInfo
     from forensic_aul.ops.acquisition.acquire import (
         AcquisitionAborted,
         AcquisitionError,
@@ -191,10 +193,13 @@ def run(args) -> int:  # type: ignore[type-arg]
             args.output_dir,
             CaseInfo(case_number=args.case_number, exhibit_number=args.exhibit_number,
                      analyst_name=args.analyst, notes=args.notes),
-            AcquireOptions(
+            replace(
+                args.settings.acquire,
                 udid=args.udid, start_time=args.start_time,
-                size_limit=args.size_limit, age_limit=args.age_limit,
-                pack=not args.raw,   # --raw → legacy loose .logarchive + sidecar
+                # A flag left out means "the settings decide".
+                size_limit=args.size_limit if args.size_limit is not None else args.settings.acquire.size_limit,
+                age_limit=args.age_limit if args.age_limit is not None else args.settings.acquire.age_limit,
+                pack=False if args.raw else args.settings.acquire.pack,  # --raw → loose layout
             ),
             confirm=_make_confirm(args.yes),
         )
@@ -223,6 +228,9 @@ def run(args) -> int:  # type: ignore[type-arg]
         db_path = args.db or result.logarchive_path.with_suffix(".db")
         print("")
         print(f"  Running extract → {db_path}")
+        opts = args.settings.extract
+        if args.batch_size is not None:
+            opts = replace(opts, batch_size=args.batch_size)
         rc = _run_extract(
             logarchive=result.logarchive_path,
             db_path=db_path,
@@ -231,7 +239,7 @@ def run(args) -> int:  # type: ignore[type-arg]
             exhibit_number=args.exhibit_number,
             analyst_name=args.analyst,
             notes=args.notes,
-            batch_size=args.batch_size,
+            opts=opts,
         )
         if rc != 0:
             return rc
@@ -309,18 +317,22 @@ def _run_extract(
     exhibit_number: str | None,
     analyst_name: str | None,
     notes: str | None,
-    batch_size: int,
+    opts: ExtractOptions,
 ) -> int:
     # Same sealed-log extraction session as the standalone `extract` command:
     # one shared helper so an acquired-then-extracted DB gets an identically
     # sealed, tamper-evident operational log.
-    from forensic_aul import CaseInfo, ExtractOptions
+    from forensic_aul import CaseInfo
     from app.extract_session import run_extract_session
+
+    # The same options as `extract` (the [extract] settings). The archive was just
+    # written by this command, so replacing its .db is expected.
+    opts = replace(opts, overwrite=True)
 
     return run_extract_session(
         logarchive=logarchive,
         db_path=db_path,
         case=CaseInfo(case_number=case_number, imei=imei, exhibit_number=exhibit_number,
                       analyst_name=analyst_name, notes=notes),
-        opts=ExtractOptions(batch_size=batch_size, overwrite=True),
+        opts=opts,
     )

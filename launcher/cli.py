@@ -96,6 +96,17 @@ def main() -> None:
     from app.diagnostics import install_excepthook
     install_excepthook({"entrypoint": "cli", "command": args.command})
 
+    # The layered settings (dataclass defaults < app_data/faul.toml < FAUL_*), loaded
+    # once; each command applies its own flags on top. A bad file stops every
+    # command: running with a setting the operator believes is applied, but is not,
+    # is worse than not running.
+    from app.settings import SettingsError, load_settings
+    try:
+        args.settings = load_settings()
+    except SettingsError as exc:
+        logging.getLogger(__name__).error(f"error: {exc}")
+        sys.exit(2)
+
     # Dispatch to the handler module's run(args). The subparser guarantees
     # args.command is one of the registered names.
     module = importlib.import_module(f"launcher.cmds.{_DISPATCH[args.command]}")

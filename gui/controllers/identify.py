@@ -10,7 +10,7 @@ Used by : gui.views.screens_identify (IdentifyScreen constructs its controller).
 Uses    : PySide6 only indirectly (through the view's run_task host),
           forensic_aul.run_identify_workflow / load_kb,
           forensic_aul.engine.utils.cancellation.CancelToken,
-          forensic_aul.engine.utils.system.resolve_auto_jobs, threading,
+          threading,
           gui.recent_store.
 
 WHY a controller (mirroring gui.controllers.pipeline): identify runs a real async
@@ -39,16 +39,14 @@ from __future__ import annotations
 
 import logging
 import threading
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from forensic_aul import CaseInfo, IdentifyOptions, load_kb, run_identify_workflow
-from forensic_aul.ops.identify.options import IDENTIFY_EXTRACT
 from forensic_aul.engine.utils.cancellation import CancelToken
-from forensic_aul.engine.utils.system import resolve_auto_jobs
 from gui.controllers import phrase_failure
 from forensic_aul import default_kb_dir
+from app.settings import SettingsError, load_settings
 from gui.recent_store import RecentStore
 
 log = logging.getLogger(__name__)
@@ -135,6 +133,11 @@ class IdentifyController:
         self._continue_event = threading.Event()
         self._cancel = CancelToken()
 
+        try:
+            settings = load_settings()
+        except SettingsError as exc:
+            self._view.show_result(False, str(exc))
+            return
         self._view.set_state(self._view.RUNNING)
         output_dir = Path(self._view.output_path())
         case = CaseInfo(case_number=self._view.session_label() or None)
@@ -142,7 +145,8 @@ class IdentifyController:
             udid=self._view.selected_udid(),
             still_seconds=self._view.still_seconds(),
             write_csv=False,
-            extract=replace(IDENTIFY_EXTRACT, jobs=resolve_auto_jobs()),
+            # [identify.extract] settings; jobs default 0 = auto.
+            extract=settings.identify.extract,
         )
         kwargs = dict(
             kb=kb,

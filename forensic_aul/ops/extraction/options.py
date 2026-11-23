@@ -51,7 +51,10 @@ class ExtractOptions:
     fast_write: bool = False    # synchronous=OFF (speed over power-loss safety)
     fts: bool = True            # build the FTS5 full-text index at all
     keep_raw: bool = False      # persist logs.raw_data JSON
-    jobs: int = 1               # total process budget (1 = serial, in-process)
+    # Total process budget: 1 = serial, in-process; N = N-1 parser workers + the
+    # writer; 0 = auto (memory-aware, one per physical core — see run_extract).
+    # Anything but 1 uses spawn-based multiprocessing: the caller must be import-safe.
+    jobs: int = 1
     overwrite: bool = False     # replace an existing output database
     integrity: str = "full"     # source hashing mode (source.INTEGRITY_MODES)
     # Where archives / loose dirs are materialised: None = an auto-cleaned temp

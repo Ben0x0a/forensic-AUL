@@ -74,6 +74,7 @@ from forensic_aul.errors import (
     OutputExistsError,
 )
 from forensic_aul.ops.extraction.discovery import find_tracev3_files
+from forensic_aul.engine.utils.system import resolve_auto_jobs
 from forensic_aul.ops.extraction.audit import AuditLog
 from forensic_aul.ops.extraction.options import CaseInfo, ExtractOptions, RunContext
 from forensic_aul.ops.extraction.oversize_pass import OversizeCache, collect_oversize
@@ -234,11 +235,12 @@ def run_extract(
 
     ``opts.jobs`` is the total process budget for parsing: ``1`` (default) parses
     in-process; ``N`` uses ``N-1`` worker processes plus the writer (this main
-    process), so total processes ≈ one per CPU core. The result is identical
+    process), so total processes ≈ one per CPU core; ``0`` picks N automatically
+    (physical cores, capped at the throughput knee, narrowed on low memory). The result is identical
     regardless of *jobs* (ordering is assigned post-load; see database/ordering.py).
 
     .. warning::
-        ``jobs > 1`` uses **spawn-based multiprocessing**: the calling entry
+        ``jobs > 1`` (and ``jobs = 0``, auto) uses **spawn-based multiprocessing**: the calling entry
         point must be import-safe (guarded by ``if __name__ == "__main__":`` or
         equivalent — always true for a plugin/module that only runs code inside
         functions). An entry script that starts the extract at import time would
@@ -309,6 +311,11 @@ def run_extract(
     db_path = Path(db_path)
     case = case if case is not None else CaseInfo()
     opts = opts if opts is not None else ExtractOptions()
+    # jobs 0 = auto: one parser per physical core, capped at the throughput knee and
+    # narrowed when memory is tight (engine/utils/system.py). Resolved once, here,
+    # so every frontend gets the same answer and the audit banner records it.
+    if opts.jobs <= 0:
+        opts = replace(opts, jobs=resolve_auto_jobs())
     # For a caller-supplied PreparedSource the integrity mode was decided at
     # preparation time; derive it from the prepared state so the finaliser's
     # re-hash decision matches reality (there is no baseline to re-check when

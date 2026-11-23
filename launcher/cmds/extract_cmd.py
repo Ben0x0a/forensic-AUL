@@ -17,9 +17,10 @@ import argparse
 import contextlib
 import logging
 import signal
+from dataclasses import replace
 from pathlib import Path
 
-from forensic_aul.config import BATCH_SIZE
+from forensic_aul import ExtractOptions
 from forensic_aul.engine.utils.cancellation import CancelToken
 
 log = logging.getLogger(__name__)
@@ -181,9 +182,10 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
     src.add_argument(
         "--integrity",
         choices=("full", "fingerprint", "off"),
-        default="full",
+        default=None,
         help=(
-            "Source hashing mode (default: full). 'full' takes the complete "
+            f"Source hashing mode (default: {ExtractOptions.integrity}, or the "
+            "settings). 'full' takes the complete "
             "chain-of-custody attestation (per-file SHA-256 + end-of-run "
             "re-verification); 'fingerprint' keeps only a cheap archive "
             "fingerprint; 'off' skips all hashing. Non-full modes are for "
@@ -204,10 +206,11 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
     perf.add_argument(
         "--batch-size",
         type=int,
-        default=BATCH_SIZE,
+        default=None,
         metavar="N",
         help=(
-            f"Number of log entries per DB commit batch (default: {BATCH_SIZE}). "
+            f"Number of log entries per DB commit batch (default: "
+            f"{ExtractOptions.batch_size}, or the settings). "
             "Higher → fewer commit syncs, more RAM; lower it on small machines."
         ),
     )
@@ -218,7 +221,7 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
         metavar="N",
         help=(
             "Total process budget for parsing (N-1 parser workers + 1 writer). "
-            "Default: auto — capped at the physical core count (max 8, where parse "
+            "Default: the settings, else auto (0) — capped at the physical core count (max 8, where parse "
             "throughput plateaus) and reduced further on low-memory hosts. Use 1 "
             "to disable multiprocessing. Each worker holds its own ~150-250 MB "
             "string cache. The result is identical regardless of N."
@@ -227,7 +230,7 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
     perf.add_argument(
         "--fast-fts",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=None,
         help=(
             "Build the full-text-search index once at the end instead of "
             "maintaining it per row. Default: on — it produces the same final "
@@ -240,7 +243,8 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
     )
     perf.add_argument(
         "--fast-write",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help=(
             "Relax write durability (PRAGMA synchronous=OFF) for speed. The "
             "default (synchronous=NORMAL + WAL) never corrupts the database; "
@@ -251,7 +255,7 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
     perf.add_argument(
         "--fts",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=None,
         help=(
             "Build the FTS5 full-text-search index over the message column. "
             "Default: on. The inverted index is the single largest addition to "
@@ -261,7 +265,8 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
     )
     perf.add_argument(
         "--keep-raw",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help=(
             "Store the per-entry raw_data JSON (the decoded FirehoseItemInfo list) "
             "for byte-level traceability. Default: off — it is often the fattest "
@@ -326,17 +331,28 @@ def run(args: argparse.Namespace) -> int:
         detect_source_type,
     )
     from forensic_aul.engine.utils.progress import tty_bar_sink
-    from forensic_aul.engine.utils.system import resolve_auto_jobs
-    from forensic_aul import CaseInfo, ExtractOptions
+    from forensic_aul import CaseInfo
     from app.extract_session import run_extract_session
 
     output: Path = args.output
 
-    # Resolve the parallelism budget. An explicit --jobs is honoured verbatim;
-    # otherwise auto-derive from physical cores and free RAM (see
-    # engine/utils/system.py — capped at the throughput knee, narrowed when memory
-    # is tight so a small host does not over-subscribe workers and swap).
-    jobs: int = args.jobs if args.jobs and args.jobs > 0 else resolve_auto_jobs()
+    # Options: the settings (dataclass defaults < faul.toml < FAUL_*), then every
+    # flag that was given (a flag left out is None). --fast is a shorthand for
+    # --fast-fts --fast-write; an explicit flag beats the shorthand.
+    flags = {
+        "batch_size": args.batch_size,
+        "jobs": args.jobs,
+        "fts": args.fts,
+        "fast_fts": args.fast_fts if args.fast_fts is not None else (True if args.fast else None),
+        "fast_write": args.fast_write if args.fast_write is not None else (True if args.fast else None),
+        "keep_raw": args.keep_raw,
+        "integrity": args.integrity,
+    }
+    opts = replace(
+        args.settings.extract,
+        **{k: v for k, v in flags.items() if v is not None},
+        work_dir=args.work_dir, reset_work_dir=args.reset_work_dir, overwrite=args.overwrite,
+    )
 
     # ── Resolve the source mode + pre-flight validation ──────────────────────
     # (full file logging not yet set up; bootstrap console logging from main()
@@ -399,24 +415,7 @@ def run(args: argparse.Namespace) -> int:
             logarchive=source,
             db_path=output,
             case=case,
-            opts=ExtractOptions(
-                batch_size=args.batch_size,
-                work_dir=args.work_dir,
-                reset_work_dir=args.reset_work_dir,
-                # --fast is a CLI-only shortcut for both fast-fts and fast-write.
-                # WHY fast_fts is NOT or'd with --fast: deferred FTS is already the
-                # default, so the only way args.fast_fts is False here is an explicit
-                # --no-fast-fts — and or'ing would silently discard that opt-out for
-                # anyone who wrote `--no-fast-fts --fast`. An explicit flag wins over
-                # a shorthand.
-                fast_fts=args.fast_fts,
-                fast_write=args.fast_write or args.fast,
-                fts=args.fts,
-                keep_raw=args.keep_raw,
-                jobs=jobs,
-                overwrite=args.overwrite,
-                integrity=args.integrity,
-            ),
+            opts=opts,
             verbose=args.verbose,
             # Live bar on an interactive terminal; no-op when piped/redirected
             # (the per-phase INFO log lines remain the recorded trail).

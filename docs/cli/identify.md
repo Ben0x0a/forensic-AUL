@@ -63,7 +63,7 @@ no root). The diff itself is pure SQLite and cross-platform.
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--still SECONDS` | `60` | Seconds to keep the device untouched before the baseline acquisition. `0` skips the pause. |
+| `--still SECONDS` | `60` (or the `[identify]` settings) | Seconds to keep the device untouched before the baseline acquisition. `0` skips the pause. |
 | `-o, --output-dir DIR` | `.` (current directory) | Directory for the archives, databases and diff outputs. |
 | `-y, --yes` | off | Skip the device confirmation prompt before the baseline acquire. |
 
@@ -89,7 +89,7 @@ The two cases behave differently on failure:
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--batch-size N` | `100000` (`forensic_aul.config.BATCH_SIZE`) | Batch size for the extract pipeline used on both captures. |
+| `--batch-size N` | the `[identify.extract]` settings (`1000`) | Batch size for the extract pipeline used on both captures. |
 
 ### Outputs
 
@@ -186,7 +186,7 @@ this command does **not** auto-detect other source types.
 | `--output-prefix PREFIX` | `<action-stem>-identified`, alongside `ACTION` | Path prefix for the outputs; `.csv` and `.db` are appended. |
 | `--case-number CASE` | `IDENTIFY` | Case number recorded if a `.logarchive` has to be extracted. |
 | `--imei IMEI` | `UNKNOWN` | IMEI recorded if a `.logarchive` has to be extracted. |
-| `--batch-size N` | `100000` (`forensic_aul.config.BATCH_SIZE`) | Batch size for any extraction it has to perform. |
+| `--batch-size N` | the `[identify.extract]` settings (`1000`) | Batch size for any extraction it has to perform. |
 
 `--output-prefix` and `--imei` are only meaningful together with `--diff`.
 
@@ -233,8 +233,9 @@ faul.py identify --diff before.logarchive after.logarchive \
   rather than the exit status if you script it.
 - **`--case-number` is optional here** (unlike [`acquire`](acquire.md)), and
   defaults to a timestamped label — which then names all the output files.
-- **`--batch-size` defaults to `100000`** in both modes — the same
-  `forensic_aul.config.BATCH_SIZE` the standalone `extract` uses.
+- **Both captures are extracted with the `[identify.extract]`
+  [settings](../configuration.md)** (defaults: batch 1000, no full-text index,
+  no hashing, automatic jobs) in both modes.
 - **Diff-only mode reuses a sibling `.db`.** After changing anything about
   extraction, delete the stale sibling or the old database is silently reused.
 - **Diff-only mode only accepts `.db` and `.logarchive`** — extract other source

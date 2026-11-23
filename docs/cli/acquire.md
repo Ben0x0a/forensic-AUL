@@ -81,7 +81,7 @@ root required. The device must be unlocked and trusted by the host.
 |---|---|---|
 | `--extract` | off | Immediately run an extract session on the acquired logarchive. |
 | `--db DB_PATH` | `<logarchive>.db`, next to the archive | Output database for `--extract`. |
-| `--batch-size N` | `100000` (`forensic_aul.config.BATCH_SIZE`) | Batch size for the `--extract` step — the same default as `extract`. |
+| `--batch-size N` | the `[extract]` settings (`100000`) | Batch size for the `--extract` step — the same default as `extract`. |
 
 ---
 
@@ -165,8 +165,8 @@ extract session's code (`1`, or `130` on Ctrl-C) instead of its own.
   in its name, and `extract` may need an explicit `--imei`.
 - **`--raw` splits evidence from its sidecar.** Prefer the default `.faul` unless
   a downstream tool genuinely requires a loose logarchive.
-- **`--extract`'s `--batch-size` matches `extract`'s** — both default to
-  `100000` (`forensic_aul.config.BATCH_SIZE`).
+- **`--extract` uses `extract`'s options** — the `[extract]`
+  [settings](../configuration.md), including automatic `--jobs`.
 - **`--extract` overwrites** any existing database at `--db`.
 - Acquisition is a **live capture**: the device keeps logging while you collect,
   so two back-to-back acquisitions will differ by an appended tail. That is

@@ -34,14 +34,11 @@ _KNOWN_FRONTEND_ENGINE = {
     ("app/extract_session.py", "forensic_aul.engine.utils.cancellation"),
     ("app/extract_session.py", "forensic_aul.engine.utils.progress"),
     ("gui/controllers/identify.py", "forensic_aul.engine.utils.cancellation"),
-    ("gui/controllers/identify.py", "forensic_aul.engine.utils.system"),
     ("gui/controllers/pipeline.py", "forensic_aul.engine.utils.cancellation"),
-    ("gui/controllers/pipeline.py", "forensic_aul.engine.utils.system"),
     ("gui/views/screen_exploit.py", "forensic_aul.engine.utils.time"),
     ("gui/views/screens_pipeline.py", "forensic_aul.engine.utils.system"),
     ("launcher/cmds/extract_cmd.py", "forensic_aul.engine.utils.cancellation"),
     ("launcher/cmds/extract_cmd.py", "forensic_aul.engine.utils.progress"),
-    ("launcher/cmds/extract_cmd.py", "forensic_aul.engine.utils.system"),
 }
 # Rule 4 — cycles between bricks, each as the set of bricks in one cycle.
 _KNOWN_CYCLES: set[frozenset[str]] = set()  # none left — keep it that way

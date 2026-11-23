@@ -27,19 +27,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from forensic_aul.engine.utils.cancellation import CancelToken
-from forensic_aul.engine.utils.system import resolve_auto_jobs
 from forensic_aul.ops.acquisition.acquire import acquire
 from forensic_aul.ops.acquisition.options import AcquireOptions
 from forensic_aul.ops.acquisition.device import list_connected_devices
 from forensic_aul.ops.acquisition.report import load_sidecar_for
 from forensic_aul.ops.extraction.extract import run_extract
-from forensic_aul.ops.extraction.options import CaseInfo, ExtractOptions
+from forensic_aul.ops.extraction.options import CaseInfo
 from forensic_aul.outcomes import ExtractStatus
 from gui.controllers import phrase_failure
+from app.settings import SettingsError, load_settings
 from gui.recent_store import RecentStore
 from gui.tokens import DARK_TOKENS
 
@@ -257,16 +258,21 @@ class ExtractController:
             self._view.show_result(False, f"{_FIELD_LABELS[missing[0]]} is required.")
             return
 
-        # Auto (data 0) defers to the memory-aware resolver; any other entry is an
-        # explicit core count chosen from the curated dropdown.
-        jobs = self._view.jobs_value() or resolve_auto_jobs()
+        try:
+            settings = load_settings()
+        except SettingsError as exc:
+            self._view.show_result(False, str(exc))
+            return
         self._cancel = CancelToken()   # fresh token per run
         source = Path(self._view.source_path())
         db_path = Path(self._view.output_path())
-        # An evidence extract: the audit log is written and sealed, as on the CLI.
-        # fast_fts is not offered in the GUI — see ExtractScreen's Options panel.
-        opts = ExtractOptions(
-            jobs=jobs, fast_fts=True,
+        # The settings ([extract] in faul.toml / FAUL_*) fill what the screen does
+        # not offer (batch size, FTS, hashing mode…); what it offers wins. Jobs:
+        # "Auto" (0) defers to the settings, whose default 0 is auto (run_extract
+        # resolves it). An evidence extract: the audit log is written and sealed.
+        opts = replace(
+            settings.extract,
+            jobs=self._view.jobs_value() or settings.extract.jobs,
             fast_write=self._view.fast_write(), overwrite=self._view.overwrite(),
             audit_log=True,
         )

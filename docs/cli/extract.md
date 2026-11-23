@@ -147,7 +147,7 @@ exit code `1`. An explicit flag always overrides the sidecar value.
 | `--uuidtext DIR` | `None` | Loose-dirs source: the uncompressed `private/var/db/uuidtext/` folder (the 2-char dirs + `dsc/`). |
 | `--work-dir DIR` | `None` (auto-cleaned temp dir) | For archive / loose-dirs sources: materialise the logarchive here and keep it. A work root that already holds files is refused — see [A kept work root is never reused](#a-kept-work-root-is-never-reused). |
 | `--reset-work-dir` | off | Delete the work root inside `--work-dir` before extracting. Without it, a root left by a previous run is refused rather than reused. |
-| `--integrity {full,fingerprint,off}` | `full` | Source hashing mode. `full` = complete chain-of-custody attestation (per-file SHA-256 + end-of-run re-verification). `fingerprint` = only a cheap head+size+tail archive fingerprint. `off` = no hashing at all. **Non-`full` modes are triage-only: the database then records no evidence hashes**, and `verify-hash` has nothing to check. |
+| `--integrity {full,fingerprint,off}` | `full` (or the settings) | Source hashing mode. `full` = complete chain-of-custody attestation (per-file SHA-256 + end-of-run re-verification). `fingerprint` = only a cheap head+size+tail archive fingerprint. `off` = no hashing at all. **Non-`full` modes are triage-only: the database then records no evidence hashes**, and `verify-hash` has nothing to check. |
 | `--overwrite` | off | Replace `OUTPUT` if it already exists. Without it, extracting into an existing database is refused (it would merge two acquisitions). |
 
 ### Performance
@@ -155,11 +155,11 @@ exit code `1`. An explicit flag always overrides the sidecar value.
 | Flag | Default | Meaning |
 |---|---|---|
 | `--batch-size N` | `100000` (`forensic_aul.config.BATCH_SIZE`) | Log entries per DB commit batch. Higher → fewer commit syncs, more RAM. |
-| `-j, --jobs N` | auto | Total process budget for parsing: `N-1` parser workers + 1 writer. Auto = the smaller of `min(physical cores, 8)` and a memory ceiling of `(RAM − 4 GiB) / 0.30 GiB`, never below 1. `--jobs 1` disables multiprocessing. Each worker holds its own ~150–250 MB string cache. **The result is byte-identical regardless of `N`.** |
+| `-j, --jobs N` | auto (or the settings) | Total process budget for parsing: `N-1` parser workers + 1 writer. Auto = the smaller of `min(physical cores, 8)` and a memory ceiling of `(RAM − 4 GiB) / 0.30 GiB`, never below 1. `--jobs 1` disables multiprocessing. Each worker holds its own ~150–250 MB string cache. **The result is byte-identical regardless of `N`.** |
 | `--fast-fts` / `--no-fast-fts` | **on** | Build the FTS index once at the end instead of maintaining it per row. Same final database, far less write I/O on large acquisitions. Trade-off: an interrupted run leaves full-text search empty until rebuilt, and the final rebuild has a higher memory peak. `--no-fast-fts` keeps a partial run searchable. |
 | `--fts` / `--no-fts` | **on** | Build the FTS5 index over `logs.message` at all. The inverted index is the single largest addition to the database; `--no-fts` skips it entirely (message search then falls back to a `LIKE` scan) for a markedly smaller, faster extract. |
-| `--fast-write` | off | `PRAGMA synchronous=OFF`. The default (`NORMAL` + WAL) never corrupts the database; `--fast-write` is faster but **can** corrupt it on an OS crash or power loss. Disposable, re-runnable extractions only. |
-| `--keep-raw` | off | Store the per-entry `raw_data` JSON (the decoded `FirehoseItemInfo` list) for byte-level traceability. Off by default: it is often the fattest column and costs CPU on every entry. All resolved fields are kept regardless. |
+| `--fast-write` / `--no-fast-write` | off | `PRAGMA synchronous=OFF`. The default (`NORMAL` + WAL) never corrupts the database; `--fast-write` is faster but **can** corrupt it on an OS crash or power loss. Disposable, re-runnable extractions only. |
+| `--keep-raw` / `--no-keep-raw` | off | Store the per-entry `raw_data` JSON (the decoded `FirehoseItemInfo` list) for byte-level traceability. Off by default: it is often the fattest column and costs CPU on every entry. All resolved fields are kept regardless. |
 | `--fast` | off | Shortcut for `--fast-fts` **and** `--fast-write` together. Implies both caveats. |
 
 Note that `--fast-fts` is already the default, so `--fast` effectively only adds
