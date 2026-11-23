@@ -123,6 +123,12 @@ class TestQueryBasics:
         assert row.subsystem == "com.apple.locationd" and row.category == "loc"
         assert row.timestamp_unix_ns == _BASE_NS + 1_000_000_000
         assert row.timestamp_iso.startswith("2024-01-15T12:00:02")
+
+    def test_repr_names_the_row(self, db):
+        row = next(iter(query_logs(db, LogFilter(process="locationd"))))
+        text = repr(row)
+        assert text.startswith("LogRow(log_id=") and "'locationd'" in text
+        assert "'Location updated'" in text and "2024-01-15T12:00:02" in text
         assert row.format_string is None  # dynamic message
         assert row.signature_ids == [] and row.values_dict() == {}
 

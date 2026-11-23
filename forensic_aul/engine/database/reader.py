@@ -461,6 +461,15 @@ class LogRow:
         self._values_by_label: dict[str, list[str]] = {}
         self.absorb(row[_COL_SIG_ID], row[_COL_LABEL], row[_COL_VALUE])
 
+    def __repr__(self) -> str:
+        # Enough to recognise the row in a REPL or a log line; the message is
+        # cut so one long line does not flood the output.
+        message = self.message or ""
+        if len(message) > 60:
+            message = message[:57] + "..."
+        return (f"LogRow(log_id={self.log_id}, timestamp={self.timestamp_iso!r}, "
+                f"process={self.process!r}, message={message!r})")
+
     @property
     def timestamp_iso(self) -> str:
         """ISO 8601 (ns-precise) timestamp, formatted from the stored unix_ns.

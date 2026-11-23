@@ -19,8 +19,17 @@ dependencies = [
 
 # Only the core library ships as the installable distribution. The application
 # layer (launcher/, gui/, faul.py) is clone-&-run and is intentionally excluded.
+# forensic_aul.validation (the log-show parity harness behind `faul.py
+# validate-tool`) is QA tooling: it drives `log` and a connected device, and its
+# only caller is that clone-&-run command, so it stays out of the wheel too.
 [tool.setuptools.packages.find]
 include = ["forensic_aul*"]
+exclude = ["forensic_aul.validation*"]
+
+# Package data is exactly the list below. WHY off: the implicit inclusion reads
+# the generated egg-info manifest, which re-adds the excluded package's files.
+[tool.setuptools]
+include-package-data = false
 
 [tool.setuptools.dynamic]
 version = { attr = "forensic_aul._version.__version__" }

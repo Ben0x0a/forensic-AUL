@@ -213,10 +213,11 @@ Nothing here knows about CLI commands, prompting, or human presentation.
 
 #### `forensic_aul/validation/`
 
-A shipped **runtime feature**, not the test suite: device log capture, an Apple
-`log show` reference exporter, and comparators (`comparator.py`,
+QA tooling, **not shipped in the wheel** and not the test suite: device log
+capture, an Apple `log show` reference exporter, and comparators (`comparator.py`,
 `merge_compare.py`, `archive_compare.py`, `ndjson_*`, `pipeline.py`,
-`platform.py`). It backs the `validate-tool` command. The project's own pytest suite
+`platform.py`). It backs the clone-and-run `validate-tool` command, its only
+caller, so it ships with that command rather than with the library. The project's own pytest suite
 lives in `tests/` at the repository root and is **not** shipped.
 
 ---
@@ -258,16 +259,22 @@ than pickled across, so the design works under both `spawn` and `fork`.
 
 ## What ships in the wheel
 
-`pyproject.toml` restricts the distribution to `forensic_aul*`:
+`pyproject.toml` restricts the distribution to `forensic_aul*`, without the
+validation harness, and lists the package data explicitly:
 
 ```toml
 [tool.setuptools.packages.find]
 include = ["forensic_aul*"]
+exclude = ["forensic_aul.validation*"]
+
+[tool.setuptools]
+include-package-data = false
 ```
 
 | Component | Shipped in the wheel | Notes |
 |---|---|---|
-| `forensic_aul/` (incl. `testing/`) | Yes | Plus the PEP 561 `py.typed` marker. |
+| `forensic_aul/` | Yes | Plus the PEP 561 `py.typed` marker. |
+| `forensic_aul/validation/` | No | QA harness behind `validate-tool` (clone-and-run). |
 | `faul.py`, `launcher/`, `gui/`, `app/` | No | Clone-and-run application layer. |
 | `tests/`, `scripts/`, `benchmark/` | No | Development only. |
 | `forensic_aul/knowledge_base/` (YAML tree) | Yes (package data) | The shipped KB, read via `importlib.resources`; `annotate`/`kb`/`identify` accept `--kb PATH`. |
