@@ -248,10 +248,24 @@ Conventions inside the library:
   apparently import-unsafe entry point producing an empty database).
 - **DEBUG** — internals, including anything a progress sink threw.
 
-The CLI (`launcher/`) additionally configures a case-scoped forensic log file
-alongside the output database, whose hash is sealed into the case metadata — that
-is application-layer behaviour, not something the library does to you. If you embed
-the library, you own the audit trail.
+### The audit log (opt-in)
+
+`run_extract(..., ExtractOptions(audit_log=True))` makes the run an **evidence
+extract** — the same one the CLI and the GUI perform:
+
+- `CaseInfo.case_number` and `CaseInfo.imei` are required; a missing one raises
+  `CaseInfoError` (its `missing` attribute names the fields) before anything is
+  written. `CaseInfo.missing_for_evidence()` gives the same answer up front.
+- The run writes `<case>-AUL-<imei>.log` beside the database (append mode, UTC,
+  every `forensic_aul` record at INFO and above) and **seals** it on every exit
+  path: its SHA-256 goes into `case_metadata` — of the `.partial` when the run was
+  cancelled or failed. `ExtractResult.log_path` / `log_sha256` report it.
+- The handler sits on the `forensic_aul` logger, not the root logger, so your own
+  application's records never land in the evidence file. While the log is open the
+  `forensic_aul` logger is lowered to INFO if it was above (its INFO records then
+  also reach your handlers); the previous level is restored when it is sealed.
+
+Off by default: without it no case identifiers are needed and no file is written.
 
 ---
 

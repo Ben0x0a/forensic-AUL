@@ -20,6 +20,7 @@ from forensic_aul._version import __version__
 # ForensicAULError (operation-specific errors like AcquisitionError and
 # KnowledgeBaseError included), so `except ForensicAULError` catches them all.
 from forensic_aul.errors import (
+    CaseInfoError,
     ForensicAULError,
     IncompleteDatabaseError,
     InvalidDatabaseError,
@@ -125,6 +126,7 @@ __all__ = [
     "IncompleteDatabaseError",
     "OperationCancelled",
     "OutputExistsError",
+    "CaseInfoError",
     "CancelToken",
     "NEVER_CANCELLED",
     "run_extract",

@@ -234,7 +234,10 @@ inspection flag: a cancelled run is a discarded run. Re-run the extract.
 
 The operational log is opened in **append** mode, always written at `INFO`, and
 **sealed** on every exit path (success, failure, Ctrl-C): its SHA-256 is stored
-in `case_metadata` so [`verify-hash`](verify-hash.md) can prove it was not altered.
+in `case_metadata` (of the `.partial` when the run did not finish) so
+[`verify-hash`](verify-hash.md) can prove it was not altered. It holds this tool's
+records only. The library writes it (`ExtractOptions(audit_log=True)`), so the GUI's
+Extract screen produces the same sealed log.
 Filesystem-unsafe characters (`\ / : * ? " < > |`) in the case number or IMEI
 become underscores.
 

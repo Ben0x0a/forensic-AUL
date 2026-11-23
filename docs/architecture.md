@@ -123,8 +123,8 @@ library never imports it.
 | Module | Responsibility |
 |---|---|
 | `app/paths.py` | `APP_ROOT` (the folder holding `faul.py`) and `app_data_dir()` — `app_data/` next to the app (git-ignored) for settings, recents and crash reports, so the operator can see, copy and delete what the tool writes. Standard library only. |
-| `app/logging_config.py` | The one place logging is configured: console logging (`dictConfig`, UTC, detailed with `-v`), the forensic operational log file of a session, and attaching a frontend's own handler (the GUI log panel). The library never configures logging — it only adds a `NullHandler`. |
-| `app/extract_session.py` | The shared *session* framing around an extract: set up the forensic operational log, log the invocation banner, run the pipeline, and **seal** the log (hash → `case_metadata` → close handler) on every exit path — success, `SIGINT` or failure. Used by both `extract` and `acquire --extract`, so every route produces the same sealed audit log. |
+| `app/logging_config.py` | The one place the frontends configure logging: console logging (`dictConfig`, UTC, detailed with `-v`) and attaching a frontend's own handler (the GUI log panel). The library never configures logging — it only adds a `NullHandler`; its one exception is the opt-in audit log below. |
+| `app/extract_session.py` | The CLI's evidence extract: console verbosity, `run_extract` with `audit_log=True`, and the outcome → exit code (0 / 1 / 130) with a crash report on an unexpected failure. Used by both `extract` and `acquire --extract`. |
 | `app/diagnostics/` | Forensic crash and bug reports: the type and value of every variable in every frame, classified `safe` / `sensitive`, kept in full plaintext locally; `write_shared_copy` produces the redacted copy that may leave the machine. **Standard library only** — domain types are recognised by *name*, never imported, so it still works when a domain import is what crashed. |
 
 `app/diagnostics/` is a package of bricks, each layer importing only the layers above it:
@@ -160,7 +160,7 @@ same shape: a main module (pure — data in, data out) plus a `report` module of
 | Package | Responsibility |
 |---|---|
 | `ops/acquisition/` | Collect a `.logarchive` from a USB-connected iOS device via the optional `pymobiledevice3` dependency (`device.py` = discovery/metadata, `acquire.py` = the operation, `report.py` = the acquisition sidecar). |
-| `ops/extraction/` | The acquisition → SQLite pipeline: `source.py`/`sources/` (input normalisation), `timesync_setup.py`, `oversize_pass.py` (pass 1), `tracev3_parse.py` (pass 2 inner loop), `entry_builder.py` (Firehose → `LogEntry`), `workers.py` (multiprocessing), `shutdown_log.py`, `discovery.py`, `options.py`, and `extract.py` (`run_extract`). |
+| `ops/extraction/` | The acquisition → SQLite pipeline: `source.py`/`sources/` (input normalisation), `timesync_setup.py`, `oversize_pass.py` (pass 1), `tracev3_parse.py` (pass 2 inner loop), `entry_builder.py` (Firehose → `LogEntry`), `workers.py` (multiprocessing), `shutdown_log.py`, `discovery.py`, `options.py` (`ExtractOptions`, `CaseInfo` and the evidence rule), `audit.py` (the opt-in forensic operational log and its seal, on every exit path), and `extract.py` (`run_extract`). |
 | `ops/knowledge_base/` | Load (`loader.py`), model (`models.py`) and lint (`lint.py`) the YAML signature library; `default_kb_dir()` locates the shipped one (`forensic_aul/knowledge_base/`, package data). |
 | `ops/annotation/` | Run a loaded knowledge base against `logs`, writing `log_annotations` and `extracted_values`. Every signature pre-filters on indexed columns before any regex runs. |
 | `ops/query/` | The stable read surface — `query_logs` (streamed), `LogStore` (held-open store for paging UIs), `count_logs`/`fetch_logs`, `fetch_context`, plus the shared `LogFilters` vocabulary and `LogRow` model. `reader.py` turns filters into SQL and is shared with the exporter. |

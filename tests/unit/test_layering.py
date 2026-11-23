@@ -31,7 +31,6 @@ _ENGINE_MAY_IMPORT = ("forensic_aul.engine", "forensic_aul.config", "forensic_au
 # ── Known violations (the ratchet) ─────────────────────────────────────────────
 # Rule 3 — frontend → engine edges, as (importing file, imported module).
 _KNOWN_FRONTEND_ENGINE = {
-    ("app/extract_session.py", "forensic_aul.engine.integrity"),
     ("app/extract_session.py", "forensic_aul.engine.utils.cancellation"),
     ("app/extract_session.py", "forensic_aul.engine.utils.progress"),
     ("gui/controllers/identify.py", "forensic_aul.engine.utils.cancellation"),

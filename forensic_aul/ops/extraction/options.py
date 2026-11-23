@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     # machinery pulled in by consumers that only need the option dataclasses).
     from forensic_aul.engine.database.writer import BatchWriter
     from forensic_aul.engine.utils.progress import ProgressReporter
+    from forensic_aul.ops.extraction.audit import AuditLog
     from forensic_aul.ops.extraction.source import PreparedSource
 
 
@@ -58,6 +59,17 @@ class ExtractOptions:
     # reset_work_dir (it would parse the previous run's evidence into this case).
     work_dir: Path | None = None
     reset_work_dir: bool = False
+    # Write and seal the forensic operational log (<case>-AUL-<imei>.log beside the
+    # database; see ops/extraction/audit.py). On for evidence extracts (CLI, GUI);
+    # off by default, so a library caller and identify's scratch extracts need no
+    # case identifiers. When on, CaseInfo.missing_for_evidence() must be empty.
+    audit_log: bool = False
+
+
+# The CaseInfo fields an evidence extract cannot run without: they name the audit
+# log and identify the exhibit. Only PRESENCE is checked — never the IMEI's format:
+# a Wi-Fi-only iPad has no IMEI, and the examiner must still be able to record one.
+EVIDENCE_REQUIRED_FIELDS: tuple[str, ...] = ("case_number", "imei")
 
 
 @dataclass(frozen=True)
@@ -69,6 +81,16 @@ class CaseInfo:
     exhibit_number: str | None = None
     analyst_name: str | None = None
     notes: str | None = None
+
+    def missing_for_evidence(self) -> tuple[str, ...]:
+        """The required field names that are empty — ``()`` when complete.
+
+        The one definition of the rule; the CLI and the GUI only phrase the result.
+        """
+        return tuple(
+            name for name in EVIDENCE_REQUIRED_FIELDS
+            if not (getattr(self, name) or "").strip()
+        )
 
 
 @dataclass
@@ -108,3 +130,6 @@ class RunContext:
     # extract_phases rowid of the phase currently in progress; None between
     # phases. A row left open is the record of where an interrupted run stopped.
     phase_id: int | None = None
+    # The open audit log when ExtractOptions.audit_log is on; bound to the
+    # case_metadata row as soon as it exists, so every exit path can seal it.
+    audit: "AuditLog | None" = None

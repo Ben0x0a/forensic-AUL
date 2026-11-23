@@ -2,9 +2,9 @@
 
 Defines : the ``extract`` command's argument parser (``add_subcommand``) and its
           handler (``run``) — source-type pre-flight validation, then delegation
-          to ``app.extract_session.run_extract_session`` which owns the logging
-          setup, the pipeline call, and sealing the operational log. The same
-          helper backs ``acquire --extract`` so both produce a sealed log.
+          to ``app.extract_session.run_extract_session`` (an audited extract:
+          the library writes and seals the operational log). The same helper
+          backs ``acquire --extract`` so both produce a sealed log.
 Used by : launcher/cli.py (registers the parser, dispatches to ``run``).
 Uses    : app.extract_session, forensic_aul.ops.extraction.source,
           forensic_aul.engine.utils.progress,
@@ -323,7 +323,6 @@ def run(args: argparse.Namespace) -> int:
     from forensic_aul.ops.extraction.source import (
         LOOSE_DIAGNOSTICS_KEY,
         LOOSE_UUIDTEXT_KEY,
-        SourceType,
         detect_source_type,
     )
     from forensic_aul.engine.utils.progress import tty_bar_sink
@@ -346,7 +345,6 @@ def run(args: argparse.Namespace) -> int:
     #   - a single positional INPUT (.logarchive dir / sysdiagnose / FFS), or
     #   - the two loose folders via --diagnostics + --uuidtext.
     source: Path | dict[str, Path]
-    source_label: str
     loose = args.diagnostics is not None or args.uuidtext is not None
 
     if loose:
@@ -361,7 +359,6 @@ def run(args: argparse.Namespace) -> int:
                 log.error(f"error: {label} is not a directory: {d}")
                 return 1
         source = {LOOSE_DIAGNOSTICS_KEY: args.diagnostics, LOOSE_UUIDTEXT_KEY: args.uuidtext}
-        source_label = SourceType.LOOSE_DIRS.value
     else:
         if args.logarchive is None:
             log.error("error: provide INPUT, or both --diagnostics and --uuidtext.")
@@ -371,20 +368,24 @@ def run(args: argparse.Namespace) -> int:
         # with a clear message rather than failing deep in the pipeline.
         try:
             source = args.logarchive
-            source_label = detect_source_type(args.logarchive).value
+            detect_source_type(args.logarchive)
         except ValueError as exc:
             log.error(f"error: {exc}")
             return 1
 
     # ── Resolve case fields (explicit flags override a .faul's embedded sidecar) ─
     case_number, imei, exhibit, analyst, notes = _resolve_case_fields(args, source)
-    for label, value in (("--case-number", case_number), ("--imei", imei)):
-        if not value:
-            log.error(
-                f"error: {label} is required (or provide a .faul source whose "
-                "sidecar carries it)."
-            )
-            return 1
+    case = CaseInfo(case_number=case_number, imei=imei, exhibit_number=exhibit,
+                    analyst_name=analyst, notes=notes)
+    # The rule lives in the core (CaseInfo.missing_for_evidence); the CLI only
+    # names the flags.
+    for name in case.missing_for_evidence():
+        log.error(
+            f"error: --{name.replace('_', '-')} is required (or provide a .faul "
+            "source whose sidecar carries it)."
+        )
+    if case.missing_for_evidence():
+        return 1
 
     if output.exists() and not output.is_file():
         log.error(f"error: {output} exists and is not a regular file")
@@ -397,8 +398,7 @@ def run(args: argparse.Namespace) -> int:
         return run_extract_session(
             logarchive=source,
             db_path=output,
-            case=CaseInfo(case_number=case_number, imei=imei, exhibit_number=exhibit,
-                          analyst_name=analyst, notes=notes),
+            case=case,
             opts=ExtractOptions(
                 batch_size=args.batch_size,
                 work_dir=args.work_dir,
@@ -421,6 +421,5 @@ def run(args: argparse.Namespace) -> int:
             # Live bar on an interactive terminal; no-op when piped/redirected
             # (the per-phase INFO log lines remain the recorded trail).
             progress=tty_bar_sink(),
-            source_label=source_label,
             cancel=cancel,
         )

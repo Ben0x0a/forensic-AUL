@@ -6,7 +6,8 @@ Defines : ``ForensicAULError`` — the base class every library-specific error
           an analysis database), ``IncompleteDatabaseError`` (one produced by a
           run that never finished), ``OutputExistsError`` (an output would be
           overwritten) and ``OperationCancelled`` (the operator stopped a long
-          operation). Operation-specific errors defined elsewhere
+          operation) and ``CaseInfoError`` (case identifiers missing for an
+          evidence extract). Operation-specific errors defined elsewhere
           (``AcquisitionError``, ``KnowledgeBaseError``) also derive from the
           base, so a consumer can catch everything the library raises with one
           ``except ForensicAULError``.
@@ -88,6 +89,19 @@ class OutputExistsError(ForensicAULError, FileExistsError):
     two acquisitions into one file. Subclasses ``FileExistsError``, which is what
     it is, so a plain ``except FileExistsError`` still catches it.
     """
+
+
+class CaseInfoError(ForensicAULError, ValueError):
+    """Case identifiers required for an evidence extract are missing.
+
+    Raised by ``run_extract`` with ``ExtractOptions(audit_log=True)`` before any
+    work starts. ``missing`` lists the absent ``CaseInfo`` field names, so a
+    frontend can name them in its own words (a CLI flag, a form label).
+    """
+
+    def __init__(self, missing: tuple[str, ...]) -> None:
+        super().__init__(f"required for an evidence extract: {', '.join(missing)}")
+        self.missing = missing
 
 
 class OperationCancelled(ForensicAULError):

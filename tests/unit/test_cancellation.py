@@ -483,40 +483,25 @@ class TestCliSigint:
             )
         assert signal.getsignal(signal.SIGINT) is original, "handler must be restored"
 
-    def test_session_reports_130_and_names_the_partial(self, tmp_path, capsys):
-        """A cancelled session exits 130 and tells the analyst where the file is.
-
-        Asserted against stderr rather than caplog: ``run_extract_session`` calls
-        ``app.logging_config.configure_console``, which replaces the root logger's handlers — including
-        the one caplog installs.
-        """
+    def test_session_maps_a_cancellation_to_exit_130(self, tmp_path):
+        """The CLI session turns OperationCancelled into exit code 130. (What the
+        cancelled run leaves and logs is the library's job — see test_audit.py.)"""
         import app.extract_session as session
 
-        db = tmp_path / "case.sqlite"
-        partial = tmp_path / "case.sqlite.partial"
-        partial.write_text("partial", encoding="utf-8")
-
         def _cancelling_run_extract(*_args, **_kwargs):
-            exc = OperationCancelled("stopped")
-            exc.partial_db_path = partial
-            raise exc
+            raise OperationCancelled("stopped")
 
         original = session.run_extract
         session.run_extract = _cancelling_run_extract
         try:
             code = session.run_extract_session(
-                logarchive=tmp_path / "src", db_path=db,
+                logarchive=tmp_path / "src", db_path=tmp_path / "case.sqlite",
                 case=CaseInfo(case_number="C1", imei="X"), opts=ExtractOptions(),
             )
         finally:
             session.run_extract = original
 
         assert code == 130
-        assert str(partial) in capsys.readouterr().err
-        assert not db.exists(), (
-            "sealing must never conjure a file at the final name — sqlite3.connect "
-            "creates one, which would fake a completed extract"
-        )
 
 
 # ── Opening an incomplete database (D6) ───────────────────────────────────────

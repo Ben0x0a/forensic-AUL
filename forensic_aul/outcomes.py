@@ -57,6 +57,10 @@ class ExtractResult:
     source_files_verified: int = 0
     source_files_changed: int = 0
     source_files_unverifiable: int = 0
+    # The sealed audit log (ExtractOptions(audit_log=True) only): its path and the
+    # SHA-256 also stored in case_metadata. None when no audit log was written.
+    log_path: Path | None = None
+    log_sha256: str | None = None
 
 
 @dataclass(frozen=True)

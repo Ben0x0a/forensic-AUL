@@ -108,15 +108,15 @@ def hash_logarchive(
 
 
 def seal_log_file(
-    db_path: Path,
+    db_path: Path | None,
     log_path: Path,
     metadata_id: int | None,
 ) -> str:
     """Hash the operational log file and store the digest in case_metadata.
 
     Produces the tamper-evident seal on the audit log at the end of a session:
-    computes the log file's SHA-256 and, when *metadata_id* is given, writes it
-    (with the log path) into ``case_metadata``. Returns the hex digest so the
+    computes the log file's SHA-256 and, when *metadata_id* (and *db_path*) is
+    given, writes it (with the log path) into ``case_metadata``. Returns the hex digest so the
     caller can report it even on a failed/interrupted run (metadata_id None).
 
     Raises:
@@ -124,7 +124,7 @@ def seal_log_file(
         sqlite3.Error: the digest could not be written to the database.
     """
     digest = compute_sha256(log_path)
-    if metadata_id is not None:
+    if metadata_id is not None and db_path is not None:
         with sqlite3.connect(str(db_path)) as conn:
             conn.execute(
                 "UPDATE case_metadata SET log_file_path = ?, log_file_sha256 = ? WHERE id = ?",

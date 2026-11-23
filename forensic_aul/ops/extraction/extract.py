@@ -67,8 +67,14 @@ from forensic_aul.engine.parser.string_cache import StringCacheProvider
 from forensic_aul.engine.utils.cancellation import NEVER_CANCELLED, CancelToken
 from forensic_aul.engine.utils.progress import ProgressReporter, ProgressSink
 from forensic_aul.engine.utils.time import iso8601_from_unix_ns
-from forensic_aul.errors import OperationCancelled, OutputExistsError
+from forensic_aul.errors import (
+    CaseInfoError,
+    ForensicAULError,
+    OperationCancelled,
+    OutputExistsError,
+)
 from forensic_aul.ops.extraction.discovery import find_tracev3_files
+from forensic_aul.ops.extraction.audit import AuditLog
 from forensic_aul.ops.extraction.options import CaseInfo, ExtractOptions, RunContext
 from forensic_aul.ops.extraction.oversize_pass import OversizeCache, collect_oversize
 from forensic_aul.ops.extraction.source import PreparedSource, prepare_source
@@ -276,7 +282,17 @@ def run_extract(
         the run facts (entry/error counts, device model, iOS build/version, boot
         UUID, time range, source type and SHA-256).
 
+    ``opts.audit_log`` makes it an **evidence extract**: the case number and IMEI
+    are then required, and the run writes the forensic operational log
+    ``<case>-AUL-<imei>.log`` beside *db_path* (append mode, UTC, every
+    ``forensic_aul`` record at INFO and above) and **seals** it on every exit path —
+    success, cancellation, failure — by storing its SHA-256 in ``case_metadata``
+    (of the ``.partial`` when the run did not finish). ``ExtractResult.log_path`` /
+    ``log_sha256`` report it. See ``ops/extraction/audit.py``.
+
     Raises:
+        CaseInfoError: ``opts.audit_log`` is on and a required case field is
+            empty (nothing has been written).
         OutputExistsError: *db_path* (or its ``.partial``) exists and
             ``opts.overwrite`` is False.
         OperationCancelled: *cancel* was cancelled during the run.
@@ -291,6 +307,58 @@ def run_extract(
     # preparation did not hash).
     if isinstance(logarchive, PreparedSource):
         opts = replace(opts, integrity="full" if logarchive.file_hashes else "off")
+
+    if not opts.audit_log:
+        return _extract(logarchive, db_path, case, opts, progress, cancel, audit=None)
+
+    # An evidence extract: the case identifiers are required (they name the audit
+    # log and identify the exhibit) — checked before anything is written.
+    missing = case.missing_for_evidence()
+    if missing:
+        raise CaseInfoError(missing)
+    audit = AuditLog.open(case, db_path)
+    audit.banner(logarchive, db_path, case, opts)
+    # Seal on EVERY exit path: an interrupted or failed run is still an audit
+    # artefact, and its log is the only record of what happened.
+    try:
+        result = _extract(logarchive, db_path, case, opts, progress, cancel, audit=audit)
+    except OperationCancelled as exc:
+        log.warning("Extraction cancelled by the operator.")
+        log.warning(f"Partial database kept at : {exc.partial_db_path or db_path}")
+        log.warning("It is marked incomplete (case_metadata.extract_status='cancelled') "
+                    "and every reader refuses it. Re-run the extract.")
+        audit.seal()
+        raise
+    except KeyboardInterrupt:
+        log.warning("Extract interrupted (SIGINT).")
+        audit.seal()
+        raise
+    except ForensicAULError as exc:
+        # A refusal (existing output, unusable source): expected, no traceback.
+        log.error(f"Extract refused: {exc}")
+        audit.seal()
+        raise
+    except BaseException:
+        log.exception("Extract failed")
+        audit.seal()
+        raise
+    log.info("=" * 72)
+    log.info("Extract session completed successfully.")
+    log.info("=" * 72)
+    return replace(result, log_path=audit.path, log_sha256=audit.seal())
+
+
+def _extract(
+    logarchive: Path | str | Mapping[str, Path] | PreparedSource,
+    db_path: Path,
+    case: CaseInfo,
+    opts: ExtractOptions,
+    progress: ProgressSink | None,
+    cancel: CancelToken,
+    *,
+    audit: AuditLog | None,
+) -> ExtractResult:
+    """The pipeline behind :func:`run_extract` (which owns the audit framing)."""
 
     # Fail fast (before the expensive source hashing) and never silently append
     # a second acquisition into an existing database. The actual removal is
@@ -377,6 +445,7 @@ def run_extract(
         t0=_t0,
         cancel=cancel,
         prepare_started_at=_prepare_started_at,
+        audit=audit,
     )
     # Arm the only interrupt that reaches inside a running SQL statement. Done
     # once, here, so it covers every statement the pipeline issues on this
@@ -410,6 +479,8 @@ def run_extract(
     # is checkpointed and the file on disk is self-contained). From this instant
     # the presence of db_path is the proof that the extract finished.
     _promote_partial(work_path, db_path)
+    if audit is not None:
+        audit.bind(db_path, result.metadata_id)
     return result
 
 
@@ -627,6 +698,8 @@ def _run_parse(ctx: RunContext) -> _ParseStats:
     # Publish the id at once: from here on the cancel path can flag this exact
     # row, and it must not depend on _run_parse returning normally to learn it.
     ctx.metadata_id = stats.metadata_id
+    if ctx.audit is not None:
+        ctx.audit.bind(ctx.db_path, ctx.metadata_id)
     log.info(f"Case metadata inserted  : id={stats.metadata_id}  case={ctx.case.case_number}  imei={ctx.case.imei}")
     if ctx.case.exhibit_number:
         log.info(f"  Exhibit  : {ctx.case.exhibit_number}")

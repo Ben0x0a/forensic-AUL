@@ -42,6 +42,9 @@ from gui.recent_store import RecentStore
 
 log = logging.getLogger(__name__)
 
+# CaseInfo field → the label the Extract form shows (for "… is required.").
+_FIELD_LABELS = {"case_number": "Case number", "imei": "IMEI"}
+
 
 class AcquireController:
     """Logic for the Acquire view: device scan + collection, results, hand-off.
@@ -235,11 +238,18 @@ class ExtractController:
         if not self._view.output_path():
             self._view.show_result(False, "Choose an output database path.")
             return
-        if not self._view.case_text():
-            self._view.show_result(False, "Case number is required.")
-            return
-        if not self._view.imei_text():
-            self._view.show_result(False, "IMEI is required.")
+        case = CaseInfo(
+            case_number=self._view.case_text(),
+            imei=self._view.imei_text(),
+            exhibit_number=self._view.exhibit_text() or None,
+            analyst_name=self._view.analyst_text() or None,
+            notes=self._view.notes_text() or None,
+        )
+        # The rule lives in the core (CaseInfo.missing_for_evidence); the screen
+        # only names the fields.
+        missing = case.missing_for_evidence()
+        if missing:
+            self._view.show_result(False, f"{_FIELD_LABELS[missing[0]]} is required.")
             return
 
         # Auto (data 0) defers to the memory-aware resolver; any other entry is an
@@ -248,17 +258,12 @@ class ExtractController:
         self._cancel = CancelToken()   # fresh token per run
         source = Path(self._view.source_path())
         db_path = Path(self._view.output_path())
-        case = CaseInfo(
-            case_number=self._view.case_text(),
-            imei=self._view.imei_text(),
-            exhibit_number=self._view.exhibit_text() or None,
-            analyst_name=self._view.analyst_text() or None,
-            notes=self._view.notes_text() or None,
-        )
+        # An evidence extract: the audit log is written and sealed, as on the CLI.
         # fast_fts is not offered in the GUI — see ExtractScreen's Options panel.
         opts = ExtractOptions(
             jobs=jobs, fast_fts=True,
             fast_write=self._view.fast_write(), overwrite=self._view.overwrite(),
+            audit_log=True,
         )
         progress = lambda ev: self._view.emit_progress(ev.overall, ev.phase)  # noqa: E731
         cancel = self._cancel

@@ -393,7 +393,7 @@ def test_extract_notes_reach_run_extract(qapp, tmp_path, monkeypatch):
     captured: dict = {}
 
     def fake_run_extract(source, db_path, case, opts, **kwargs):
-        captured.update(notes=case.notes)
+        captured.update(notes=case.notes, audit_log=opts.audit_log)
         raise RuntimeError("stop before any real extraction runs")
 
     import gui.controllers.pipeline as pipeline_module
@@ -408,6 +408,8 @@ def test_extract_notes_reach_run_extract(qapp, tmp_path, monkeypatch):
     except RuntimeError:
         pass
     assert captured.get("notes") == "collected in the lab"
+    # A GUI extract is an evidence extract: it writes and seals the audit log too.
+    assert captured.get("audit_log") is True
 
 
 # ── Extract: recents must never populate the output field ───────────────────────
