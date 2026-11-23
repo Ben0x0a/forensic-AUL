@@ -13,7 +13,7 @@ import sqlite3
 
 import pytest
 
-from forensic_aul import annotate_connection, annotate_database
+from forensic_aul import OutputExistsError, annotate_connection, annotate_database
 from forensic_aul.ops.knowledge_base.loader import load_kb
 from forensic_aul.engine.database.schema import apply_pragmas, init_schema
 
@@ -108,7 +108,7 @@ def test_run_extract_refuses_existing_db(tmp_path):
     db = tmp_path / "exists.db"
     db.write_text("not empty", encoding="utf-8")
     # Source path need not exist: the guard is checked before source preparation.
-    with pytest.raises(FileExistsError):
+    with pytest.raises(OutputExistsError):
         run_extract(tmp_path / "no_such_source", db)
 
 

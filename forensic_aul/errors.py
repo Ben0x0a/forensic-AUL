@@ -4,8 +4,9 @@ Defines : ``ForensicAULError`` — the base class every library-specific error
           derives from — and the shared concrete errors ``SourceError`` (input
           detection / preparation), ``InvalidDatabaseError`` (a path that is not
           an analysis database), ``IncompleteDatabaseError`` (one produced by a
-          run that never finished) and ``OperationCancelled`` (the operator
-          stopped a long operation). Operation-specific errors defined elsewhere
+          run that never finished), ``OutputExistsError`` (an output would be
+          overwritten) and ``OperationCancelled`` (the operator stopped a long
+          operation). Operation-specific errors defined elsewhere
           (``AcquisitionError``, ``KnowledgeBaseError``) also derive from the
           base, so a consumer can catch everything the library raises with one
           ``except ForensicAULError``.
@@ -76,6 +77,16 @@ class IncompleteDatabaseError(InvalidDatabaseError):
     Subclasses ``InvalidDatabaseError`` so existing "cannot use this database"
     handlers keep working unchanged, while a caller that wants to offer the
     escape can catch this narrower type.
+    """
+
+
+class OutputExistsError(ForensicAULError, FileExistsError):
+    """An output already exists and the call was not allowed to replace it.
+
+    Raised by ``run_extract`` when the output database (or the ``.partial`` of an
+    interrupted run) exists and ``overwrite`` is off — writing into it would merge
+    two acquisitions into one file. Subclasses ``FileExistsError``, which is what
+    it is, so a plain ``except FileExistsError`` still catches it.
     """
 
 

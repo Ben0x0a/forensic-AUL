@@ -32,7 +32,7 @@ res = run_extract(
     case_number="CASE-2024-001",
     imei="35…",
     analyst_name="A. Analyst",
-    overwrite=True,        # else FileExistsError when case.db already exists
+    overwrite=True,        # else OutputExistsError when case.db already exists
     fts=False,             # skip the full-text index: big cost, only useful for
                            # interactive keyword search (see "keyword search" below)
 )

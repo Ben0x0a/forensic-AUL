@@ -67,7 +67,7 @@ from forensic_aul.engine.parser.string_cache import StringCacheProvider
 from forensic_aul.engine.utils.cancellation import NEVER_CANCELLED, CancelToken
 from forensic_aul.engine.utils.progress import ProgressReporter, ProgressSink
 from forensic_aul.engine.utils.time import iso8601_from_unix_ns
-from forensic_aul.errors import OperationCancelled
+from forensic_aul.errors import OperationCancelled, OutputExistsError
 from forensic_aul.ops.extraction.discovery import find_tracev3_files
 from forensic_aul.ops.extraction.options import CaseInfo, ExtractOptions, RunContext
 from forensic_aul.ops.extraction.oversize_pass import OversizeCache, collect_oversize
@@ -288,7 +288,7 @@ def run_extract(
         UUID, time range, source type and SHA-256).
 
     Raises:
-        FileExistsError: *db_path* (or its ``.partial``) exists and *overwrite*
+        OutputExistsError: *db_path* (or its ``.partial``) exists and *overwrite*
             is False.
         OperationCancelled: *cancel* was cancelled during the run.
     """
@@ -329,7 +329,7 @@ def run_extract(
     work_path = partial_path_for(db_path)
     for existing in (db_path, work_path):
         if existing.exists() and not opts.overwrite:
-            raise FileExistsError(
+            raise OutputExistsError(
                 f"{existing} already exists; pass overwrite=True to replace it "
                 "(extracting into an existing database would merge two acquisitions)"
             )

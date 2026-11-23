@@ -35,7 +35,7 @@ def test_phrase_failure_empty_traceback():
 
 def test_phrase_failure_rewrites_file_exists_error_overwrite_advice():
     tb = _tb(
-        "FileExistsError: /case.sqlite already exists; pass overwrite=True to "
+        "OutputExistsError: /case.sqlite already exists; pass overwrite=True to "
         "replace it (extracting into an existing database would merge two acquisitions)"
     )
     phrased = phrase_failure(tb)

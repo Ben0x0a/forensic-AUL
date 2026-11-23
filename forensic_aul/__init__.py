@@ -24,6 +24,7 @@ from forensic_aul.errors import (
     IncompleteDatabaseError,
     InvalidDatabaseError,
     OperationCancelled,
+    OutputExistsError,
     SourceError,
 )
 
@@ -122,6 +123,7 @@ __all__ = [
     "InvalidDatabaseError",
     "IncompleteDatabaseError",
     "OperationCancelled",
+    "OutputExistsError",
     "CancelToken",
     "NEVER_CANCELLED",
     "run_extract",

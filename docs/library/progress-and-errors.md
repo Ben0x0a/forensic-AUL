@@ -180,7 +180,7 @@ Builtin exceptions keep their conventional meaning and are **not** part of
 | Builtin | Meaning here |
 |---|---|
 | `FileNotFoundError` | a path that must exist does not |
-| `FileExistsError` | `run_extract` without `overwrite=True` on an existing `db_path` |
+| `OutputExistsError` (also a `FileExistsError`) | `run_extract` without `overwrite=True` on an existing `db_path` |
 | `ImportError` | the optional `pymobiledevice3` is not installed |
 | `ValueError` | a malformed filter value; an annotation filter on a never-annotated database; `message_match` without a full-text index; `run_diff` on an empty baseline |
 

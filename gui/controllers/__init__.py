@@ -40,7 +40,7 @@ _ERROR_PHRASING: dict[str, Callable[[str], str]] = {
     # checkbox instead. .replace() is a no-op (message shown verbatim, still
     # honest) if the upstream wording ever drifts — see phrase_failure's
     # docstring on never hiding the detail.
-    "FileExistsError": lambda msg: msg.replace(
+    "OutputExistsError": lambda msg: msg.replace(
         "pass overwrite=True to replace it",
         'tick "Overwrite the output database if it exists" to replace it',
     ),

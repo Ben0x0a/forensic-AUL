@@ -36,6 +36,7 @@ from forensic_aul.errors import (
     IncompleteDatabaseError,
     InvalidDatabaseError,
     OperationCancelled,
+    OutputExistsError,
 )
 from tests.synthetic import synthetic_sysdiagnose as _synthetic_sysdiagnose
 
@@ -187,7 +188,7 @@ def test_overwrite_guard_covers_the_partial_name(tmp_path):
     db = tmp_path / "case.sqlite"
     (tmp_path / "case.sqlite.partial").write_text("previous run", encoding="utf-8")
 
-    with pytest.raises(FileExistsError, match=r"\.partial"):
+    with pytest.raises(OutputExistsError, match=r"\.partial"):
         run_extract(arc, db, case_number="C1", integrity="off")
 
 
