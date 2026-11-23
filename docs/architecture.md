@@ -122,7 +122,7 @@ library never imports it.
 
 | Module | Responsibility |
 |---|---|
-| `app/paths.py` | The per-user application directory, by platform convention (macOS Application Support, Windows `%APPDATA%`, XDG on Linux), and the one-time move of the old `~/.config/faul`. Standard library only. |
+| `app/paths.py` | `APP_ROOT` (the folder holding `faul.py`) and `app_data_dir()` — `app_data/` next to the app (git-ignored) for settings, recents and crash reports, so the operator can see, copy and delete what the tool writes. Standard library only. |
 | `app/logging_config.py` | The one place logging is configured: console logging (`dictConfig`, UTC, detailed with `-v`), the forensic operational log file of a session, and attaching a frontend's own handler (the GUI log panel). The library never configures logging — it only adds a `NullHandler`. |
 | `app/extract_session.py` | The shared *session* framing around an extract: set up the forensic operational log, log the invocation banner, run the pipeline, and **seal** the log (hash → `case_metadata` → close handler) on every exit path — success, `SIGINT` or failure. Used by both `extract` and `acquire --extract`, so every route produces the same sealed audit log. |
 | `app/diagnostics.py` | Forensic crash capture. Installs `sys.excepthook` + `threading.excepthook`; `capture_exception` covers the catch-log-and-return paths. Walks the traceback and records the type and value of every variable in every frame, classified `safe` / `sensitive`. Imports the **standard library only** — domain types are recognised by *name*, never imported, so it still works when a domain import is what crashed. |

@@ -143,7 +143,7 @@ separately in `Worker.run`.
 
 ## Settings and recent cases
 
-Both stores live in the application data directory (macOS `~/Library/Application Support/faul`, Windows `%APPDATA%\faul`, Linux `~/.config/faul`) and are display-only.
+Both stores live in `app_data/` next to `faul.py` (git-ignored) and are display-only.
 
 **`SettingsStore`** (`gui/settings_store.py`) → `settings.json` in that directory.
 A small `QObject` that emits `changed(key, value)` so any screen can react live.

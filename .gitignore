@@ -26,6 +26,9 @@ env/
 # --- Claude Code (machine-specific / personal) ---
 .claude/
 
+# --- The app's own files next to it: settings, recents, crash reports (app/paths.py) ---
+app_data/
+
 # --- Internal working notes (not shipped) ---
 tasks/
 docs/internal/

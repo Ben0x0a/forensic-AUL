@@ -38,7 +38,7 @@ There are two modes:
 | Flag | Default | Meaning |
 |---|---|---|
 | `ID_OR_PATH` | none (→ list mode) | A crash-report file to redact. Accepts a full path, a bare filename, or the file stem (`.json` is appended). |
-| `--dir DIR` | `crash_reports/` in the application data directory | Crash-report directory. |
+| `--dir DIR` | `app_data/crash_reports/` next to `faul.py` | Crash-report directory. |
 
 Raw files are named `faul_crash_*.json`. Resolution tries, in order: the value as
 a path, `<crash-dir>/<value>`, then `<crash-dir>/<value>.json`.

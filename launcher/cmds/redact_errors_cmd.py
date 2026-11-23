@@ -40,7 +40,7 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
     )
     p.add_argument(
         "--dir", type=Path, default=None, metavar="DIR",
-        help="Report directory (default: crash_reports/ in the application data directory).",
+        help="Report directory (default: app_data/crash_reports/ next to faul.py).",
     )
 
 
