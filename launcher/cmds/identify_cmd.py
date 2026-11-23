@@ -275,7 +275,6 @@ def _run_identify(args: argparse.Namespace) -> int:
         print("Aborted.")
         return 0
     except (ImportError, ValueError, AcquisitionError) as exc:
-        # DeviceLockedError lands here too: its message says what to do.
         log.error(f"error: {exc}")
         return 1
     except Exception as exc:

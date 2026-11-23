@@ -325,14 +325,17 @@ def _lock_states(monkeypatch, states):
 
 
 class TestLockAndDescription:
-    def test_a_locked_device_is_refused_before_any_capture(self, patched, monkeypatch):
-        from forensic_aul import DeviceLockedError
-
-        _lock_states(monkeypatch, [True])
-        with pytest.raises(DeviceLockedError, match="Auto-Lock"):
-            run_identify_workflow(patched.out, confirm=lambda d: True, wait_for_action=lambda: None)
-        assert not [c for c in patched.calls if c.startswith("collect:")]
-        assert "close" in patched.calls, "the connection is closed on refusal"
+    def test_a_locked_device_at_the_start_is_advice_not_a_refusal(self, patched, monkeypatch):
+        """The unlock may be the action studied: the run goes on, the operator is
+        told, and nothing is stored (the state at the end of the baseline is what
+        affects the diff)."""
+        _lock_states(monkeypatch, [True, False, False])
+        said: list[str] = []
+        res = run_identify_workflow(patched.out, confirm=lambda d: True,
+                                    wait_for_action=lambda: None, status=said.append)
+        assert len([c for c in patched.calls if c.startswith("collect:")]) == 2
+        assert any("locked" in line and "Auto-Lock" in line for line in said)
+        assert res.warnings == ()
 
     def test_a_lock_during_the_run_is_reported_and_stored(self, patched, monkeypatch):
         from forensic_aul.ops.identify.run_info import decode_warnings, read_run_info
@@ -340,7 +343,7 @@ class TestLockAndDescription:
         _lock_states(monkeypatch, [False, True, False])   # start, after baseline, after action
         res = run_identify_workflow(patched.out, confirm=lambda d: True, wait_for_action=lambda: None,
                                     describe_action=lambda: "  opened the camera  ")
-        assert len(res.warnings) == 1 and "during the baseline" in res.warnings[0]
+        assert len(res.warnings) == 1 and "baseline capture ended" in res.warnings[0]
         assert res.action_description == "opened the camera"
         info = read_run_info(res.diff.sqlite_path)
         assert info["action_description"] == "opened the camera"

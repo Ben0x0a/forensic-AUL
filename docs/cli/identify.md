@@ -32,9 +32,10 @@ baseline, having you perform the action, acquiring again, and diffing:
 1. Connect to the device and show its summary for confirmation, **masked** by
    default (name, phone number, IMSI, ICCID and MACs hidden; UDID, IMEI and
    serial cut to their last 4 characters — `--show-identifiers` shows them).
-2. **Refuse a locked device** (`error: the device is locked …`, exit 1). An
-   unlock during the run would land in the action capture; set
-   *Settings › Display & Brightness › Auto-Lock › Never* for the session.
+2. If the device is **locked**, say so. Unless the unlock is the action you
+   study, unlock it now: during the still pause the unlock still lands in the
+   *baseline*. Set *Settings › Display & Brightness › Auto-Lock › Never* for
+   the session so it does not lock again.
 3. Keep the device **untouched for `--still` seconds** so idle and connection
    noise lands in the *baseline* rather than in the result. Meanwhile you are
    asked to describe the action you will perform; a countdown follows.
@@ -46,8 +47,8 @@ baseline, having you perform the action, acquiring again, and diffing:
    optionally annotate the action database with a knowledge base.
 
 The lock state is read again after each capture. A device found locked there is
-reported as a `Warning:` line, because its lock/unlock lines may be among the
-retained rows. The description and the warnings are stored in the identified
+reported as a `Warning:` line, because the unlock that follows (or the lock
+itself) may be among the retained rows. The description and the warnings are stored in the identified
 database (table `identify_run`).
 
 Acquisition is iOS via **pymobiledevice3** (needs the `acquire` extra; userspace,
@@ -243,7 +244,7 @@ faul.py identify --diff before.logarchive after.logarchive \
   land in the post-action capture and look like they belong to the action. The
   60 s default exists for a reason.
 - **The lock check reads lockdown's `PasswordProtected`**, the current lock
-  state as pymobiledevice3 documents it. It is sampled (start, after each
+  state (as pymobiledevice3 documents it, and checked on an iOS 27 device). It is sampled (start, after each
   capture), so a lock and unlock between two samples is not seen; Auto-Lock =
   Never avoids the case.
 - **`identify` returns `0` when the operator aborts.** Check for the output files

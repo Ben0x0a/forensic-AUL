@@ -80,7 +80,6 @@ from forensic_aul.ops.verify.verify import VerifyResult, verify_database
 from forensic_aul.ops.acquisition.acquire import (
     AcquisitionAborted,
     AcquisitionError,
-    DeviceLockedError,
     acquire,
 )
 from forensic_aul.ops.acquisition.options import AcquireOptions
@@ -223,6 +222,5 @@ __all__ = [
     "AcquireResult",
     "AcquisitionError",
     "AcquisitionAborted",
-    "DeviceLockedError",
     "DeviceInfo",
 ]

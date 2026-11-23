@@ -32,8 +32,8 @@ the acquisition, extraction, annotation and diff bricks. A workflow may import
 bricks; a brick never imports another brick's operations (review finding S4),
 so each stays usable and testable on its own.
 
-Errors are raised, never turned into exit codes: ``DeviceLockedError`` when the
-device is locked at the start, ``AcquisitionAborted`` when the operator declines, ``OperationCancelled`` when they stop a run already under way,
+Errors are raised, never turned into exit codes: ``AcquisitionAborted`` when the
+operator declines, ``OperationCancelled`` when they stop a run already under way,
 ``AcquisitionError`` / ``ValueError`` for failures — the front-end maps them to
 exit status and user messages. Declining and cancelling are separate types on
 purpose: the first means the run never legitimately started, the second that the
@@ -53,7 +53,6 @@ from forensic_aul.engine.utils.progress import ProgressReporter, ProgressSink
 from forensic_aul.ops.acquisition.acquire import (
     AcquisitionAborted,
     AcquisitionError,
-    DeviceLockedError,
     collect_logarchive,
     sanitise_filename_token,
 )
@@ -89,10 +88,11 @@ _IDENTIFY_PHASES = [
     ("extract-action", 0.26), ("annotate", 0.04), ("diff", 0.12),
 ]
 
-# Why the device must stay unlocked, said once wherever it is refused or warned.
-# Consumed by: _run_identify_async.
+# How to keep a lock/unlock out of the result, said wherever the lock state is
+# reported. Consumed by: _run_identify_async.
 _UNLOCK_ADVICE = (
-    "keep the device unlocked for the whole run "
+    "unless the unlock is the action you study, unlock the device before the "
+    "baseline capture ends and keep it unlocked "
     "(Settings › Display & Brightness › Auto-Lock › Never)"
 )
 
@@ -184,14 +184,14 @@ def run_identify_workflow(
         paths (two archives, two databases) and the nested
         :class:`~forensic_aul.outcomes.DiffResult`.
 
-    The device must be unlocked when the run starts (``DeviceLockedError``
-    otherwise): an unlock during the action capture would land in the diff. The
-    lock state is sampled again after each capture; a locked device there is
-    reported in ``IdentifyResult.warnings`` (and the identified database), since
-    its lock/unlock lines may be among the retained rows.
+    The lock state is read at the start and after each capture. Locked at the
+    start is only advice (*status*): an unlock during the still pause lands in
+    the baseline, and an unlock may be the very action studied. Locked when a
+    capture ends is reported in ``IdentifyResult.warnings`` (and the identified
+    database): the unlock that follows, or the lock itself, may then be among
+    the retained rows.
 
     Raises:
-        DeviceLockedError: the device was locked when the run started.
         ValueError: ``case.case_number`` yields no usable filename characters
             after sanitising.
         ExtractFailedError: a capture's extract decoded nothing (status FAILED).
@@ -243,11 +243,13 @@ async def _run_identify_async(
         if confirm is not None and not await asyncio.to_thread(confirm, device):
             raise AcquisitionAborted("identify declined by confirm callback")
 
-        # ── Preflight: unlocked (I1) ──────────────────────────────────────────
-        # Refused rather than waited for: unlocking during the run is exactly the
-        # noise this prevents, and the operator decides when to start again.
+        # ── Lock state at the start (I1) ──────────────────────────────────────
+        # Advice, not a refusal: the unlock may be the action being studied, and
+        # an unlock during the still pause still lands in the baseline (its
+        # window starts at t0, below). What matters for the diff is the state
+        # when the baseline ends, checked after that capture.
         if await device_locked(lockdown):
-            raise DeviceLockedError(f"the device is locked: unlock it and {_UNLOCK_ADVICE}")
+            say(f"The device is locked: {_UNLOCK_ADVICE}.")
 
         # ── Chain-of-custody output paths ─────────────────────────────────────
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -307,8 +309,8 @@ async def _run_identify_async(
         await _collect(lockdown, baseline_archive, t0, reporter)
         if await device_locked(lockdown):
             warnings.append(
-                "the device locked during the baseline: unlocking it for the action "
-                f"puts the unlock in the action capture — {_UNLOCK_ADVICE}")
+                "the device was locked when the baseline capture ended: unlocking it "
+                "for the action puts the unlock lines in the result")
 
         # Cutoff for the second acquisition: now (post-baseline). Anything after
         # this point is what the analyst is hunting for.
