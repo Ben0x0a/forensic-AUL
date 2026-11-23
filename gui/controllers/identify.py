@@ -44,6 +44,7 @@ from pathlib import Path
 from typing import Any
 
 from forensic_aul import (
+    CancelToken,
     CaseInfo,
     ForensicAULError,
     IdentifyOptions,
@@ -52,7 +53,6 @@ from forensic_aul import (
     load_kb,
     run_identify_workflow,
 )
-from forensic_aul import CancelToken
 from gui.controllers import phrase_failure
 from app.settings import SettingsError, load_settings
 from gui.recent_store import RecentStore

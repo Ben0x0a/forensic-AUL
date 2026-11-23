@@ -22,8 +22,7 @@ from pathlib import Path
 
 from dataclasses import replace
 
-from forensic_aul import ExtractOptions, IdentifyOptions
-from forensic_aul import IDENTIFY_EXTRACT
+from forensic_aul import ExtractOptions, IDENTIFY_EXTRACT, IdentifyOptions
 
 log = logging.getLogger(__name__)
 

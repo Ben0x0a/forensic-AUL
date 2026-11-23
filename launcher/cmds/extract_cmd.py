@@ -20,8 +20,7 @@ import signal
 from dataclasses import replace
 from pathlib import Path
 
-from forensic_aul import ExtractOptions
-from forensic_aul import CancelToken
+from forensic_aul import CancelToken, ExtractOptions
 
 log = logging.getLogger(__name__)
 

@@ -30,14 +30,16 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from forensic_aul import CancelToken
-from forensic_aul import acquire
-from forensic_aul import AcquireOptions
-from forensic_aul import list_connected_devices
-from forensic_aul import load_sidecar_for
-from forensic_aul import run_extract
-from forensic_aul import CaseInfo
-from forensic_aul import ExtractStatus
+from forensic_aul import (
+    acquire,
+    AcquireOptions,
+    CancelToken,
+    CaseInfo,
+    ExtractStatus,
+    list_connected_devices,
+    load_sidecar_for,
+    run_extract,
+)
 from gui.controllers import phrase_failure
 from app.settings import SettingsError, load_settings
 from gui.navigation import ExtractFrom

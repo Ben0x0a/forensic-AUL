@@ -28,8 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from forensic_aul import __version__
-from forensic_aul import default_kb_dir
+from forensic_aul import __version__, default_kb_dir
 from gui.settings_store import SettingsStore
 from gui.views.screen_base import WIDTH_FORM, ScrollScreen
 from gui.icons import make_icon
