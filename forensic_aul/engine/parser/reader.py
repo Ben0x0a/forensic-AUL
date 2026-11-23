@@ -10,6 +10,8 @@ import struct
 from io import BufferedReader, BytesIO
 from typing import Union
 
+from forensic_aul.errors import TruncatedRecord
+
 
 class BinaryReader:
     """Stateful reader over a binary stream with typed read helpers.
@@ -53,10 +55,11 @@ class BinaryReader:
     # ── Raw bytes ─────────────────────────────────────────────────────────────
 
     def read(self, n: int) -> bytes:
-        """Read exactly n bytes; raises EOFError if the stream ends early."""
+        """Read exactly n bytes; raises TruncatedRecord (an EOFError) if the
+        stream ends early."""
         data = self._stream.read(n)
         if len(data) != n:
-            raise EOFError(
+            raise TruncatedRecord(
                 f"Expected {n} bytes at offset 0x{self._offset:x}, "
                 f"got {len(data)}"
             )

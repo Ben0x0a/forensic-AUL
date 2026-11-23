@@ -48,7 +48,7 @@ from forensic_aul.ops.extraction.entry_builder import (
     statedump_to_log_entry,
 )
 from forensic_aul.engine.utils.cancellation import NEVER_CANCELLED, CancelToken
-from forensic_aul.errors import OperationCancelled
+from forensic_aul.errors import PARSE_ERRORS, OperationCancelled
 from forensic_aul.ops.extraction.oversize_pass import OversizeCache
 
 log = logging.getLogger(__name__)
@@ -150,7 +150,7 @@ def process_tracev3(
                         rel, boot_uuid, ios_model, ios_build_version,
                         hdr.mach_time_numerator, hdr.mach_time_denominator,
                     )
-                except Exception as exc:
+                except PARSE_ERRORS as exc:
                     n_parse_errors += 1
                     log.warning(f"{rel}  header parse error: {exc}")
 
@@ -164,7 +164,7 @@ def process_tracev3(
                         len(catalog.catalog_uuids),
                         catalog.number_sub_chunks,
                     )
-                except Exception as exc:
+                except PARSE_ERRORS as exc:
                     n_parse_errors += 1
                     log.warning(f"{rel}  catalog parse error: {exc}")
                     # WHY reset: the chunksets that follow belong to THIS catalog.
@@ -215,7 +215,7 @@ def process_tracev3(
                                 )
                                 if sd is not None else None
                             )
-                        except Exception as exc:
+                        except PARSE_ERRORS as exc:
                             n_parse_errors += 1
                             log.debug("%s  statedump parse error: %s", rel, exc)
                             continue
@@ -239,7 +239,7 @@ def process_tracev3(
                                 )
                                 if sdp is not None else None
                             )
-                        except Exception as exc:
+                        except PARSE_ERRORS as exc:
                             n_parse_errors += 1
                             log.debug("%s  simpledump parse error: %s", rel, exc)
                             continue
@@ -260,7 +260,7 @@ def process_tracev3(
                     n_firehose_blocks += 1
                     try:
                         preamble = parse_firehose_preamble(sub.data)
-                    except Exception as exc:
+                    except PARSE_ERRORS as exc:
                         n_parse_errors += 1
                         log.debug(
                             "%s  chunkset #%d  firehose block #%d  preamble error: %s",
@@ -309,7 +309,7 @@ def process_tracev3(
                                 firehose_inner_offset=sub.source_offset,
                                 keep_raw=keep_raw,
                             )
-                        except Exception as exc:
+                        except PARSE_ERRORS as exc:
                             n_parse_errors += 1
                             log.debug(
                                 "%s  entry assembly error (type=0x%02x): %s",
@@ -326,13 +326,13 @@ def process_tracev3(
                 )
 
     except OperationCancelled:
-        # WHY ahead of the broad handler: the catch-all below turns any failure
+        # WHY explicit (OperationCancelled is not a PARSE_ERROR): the handler below turns a failure
         # into a counted parse error and returns normally, so a cancellation
         # swallowed there would look like a successfully parsed file and the
         # pipeline would carry straight on to the next one.
         log.info(f"{rel}  parse cancelled after {n_entries_written} entries")
         raise
-    except Exception as exc:
+    except PARSE_ERRORS as exc:
         n_parse_errors += 1
         log.error(f"{rel}  fatal error after {n_entries_written} entries: {exc}")
 

@@ -7,8 +7,11 @@ Defines : ``ForensicAULError`` — the base class every library-specific error
           run that never finished), ``OutputExistsError`` (an output would be
           overwritten) and ``OperationCancelled`` (the operator stopped a long
           operation), ``CaseInfoError`` (case identifiers missing for an
-          evidence extract) and ``ExtractFailedError`` (an extract decoded
-          nothing, for callers that cannot go on without data). Operation-specific errors defined elsewhere
+          evidence extract), ``ExtractFailedError`` (an extract decoded
+          nothing, for callers that cannot go on without data), the parser's
+          ``FormatError`` family (``UnsupportedFormat``, ``CorruptRecord``,
+          ``TruncatedRecord``) and ``PARSE_ERRORS`` (what bad input bytes can
+          raise — the only thing a parse loop may catch and count). Operation-specific errors defined elsewhere
           (``AcquisitionError``, ``KnowledgeBaseError``) also derive from the
           base, so a consumer can catch everything the library raises with one
           ``except ForensicAULError``.
@@ -28,6 +31,7 @@ caught by an ``except ValueError`` written for bad input (see its docstring).
 
 from __future__ import annotations
 
+import struct
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -119,6 +123,38 @@ class ExtractFailedError(ForensicAULError):
     def __init__(self, label: str, result: "ExtractResult") -> None:
         super().__init__(f"{label} extract decoded nothing — {'; '.join(result.status_reasons)}")
         self.result = result
+
+
+class FormatError(ForensicAULError, ValueError):
+    """Bytes that do not form the on-disk structure the parser expected."""
+
+
+class UnsupportedFormat(FormatError):
+    """A recognised structure in a variant this parser does not handle — an
+    unknown compression algorithm, a new magic. The data may be fine; this
+    version cannot read it (the signal that a newer OS changed the format)."""
+
+
+class CorruptRecord(FormatError):
+    """A record that is inconsistent with itself: a size or offset pointing
+    outside its container, a count that cannot fit."""
+
+
+class TruncatedRecord(CorruptRecord, EOFError):
+    """The bytes ended before the record did. Raised by the binary reader; also an
+    ``EOFError``, which is what it historically was."""
+
+
+# What malformed INPUT can raise while it is parsed: the typed errors above, plus
+# the shapes bad bytes take in Python code not (yet) raising them — a short read,
+# a bad unpack, an index or key the data points at but that does not exist, an
+# undecodable string. A parse loop catches exactly this tuple, counts a parse
+# error and goes on. Anything else (AttributeError, TypeError, NameError, an
+# assertion) is a bug in this tool and must reach the crash reporter instead of
+# being counted as damage in the evidence (review finding S8).
+PARSE_ERRORS: tuple[type[BaseException], ...] = (
+    FormatError, EOFError, ValueError, IndexError, KeyError, OverflowError, struct.error,
+)
 
 
 class OperationCancelled(ForensicAULError):

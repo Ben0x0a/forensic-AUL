@@ -30,7 +30,7 @@ from forensic_aul.engine.parser.chunkset import (
 from forensic_aul.engine.parser.string_cache import StringCacheProvider
 from forensic_aul.engine.parser.tracev3 import iter_chunks
 from forensic_aul.engine.utils.cancellation import NEVER_CANCELLED, CancelToken
-from forensic_aul.errors import OperationCancelled
+from forensic_aul.errors import PARSE_ERRORS, OperationCancelled
 
 log = logging.getLogger(__name__)
 
@@ -67,7 +67,7 @@ def collect_oversize(
                 if raw.tag == CHUNK_TAG_CATALOG:
                     try:
                         catalog = parse_catalog_chunk(raw.data)
-                    except Exception as exc:
+                    except PARSE_ERRORS as exc:
                         log.warning(f"oversize pass: bad catalog in {path.name}: {exc}")
                         # Same rule as the main pass: never let the following
                         # chunksets borrow the previous catalog.
@@ -89,14 +89,14 @@ def collect_oversize(
                                 ov.data_ref_index,
                             )
                             cache[key] = ov
-                        except Exception as exc:
+                        except PARSE_ERRORS as exc:
                             log.debug("oversize parse error: %s", exc)
         except OperationCancelled:
-            # WHY re-raised ahead of the broad handler: a cancellation is not a
+            # WHY re-raised explicitly, ahead of the parse handler: a cancellation is not a
             # malformed-file problem to log and carry on from — swallowing it
             # here would silently continue scanning every remaining file.
             raise
-        except Exception as exc:
+        except PARSE_ERRORS as exc:
             log.warning(f"oversize pass: error in {path.name}: {exc}")
     log.info(f"oversize pass: found {len(cache)} oversize entries")
     return cache

@@ -11,6 +11,9 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
+from forensic_aul.errors import CorruptRecord
 from forensic_aul.engine.parser.format import (
     CHUNK_TAG_CATALOG,
     CHUNK_TAG_CHUNKSET,
@@ -89,3 +92,31 @@ def test_oversize_pass_does_not_reuse_the_previous_catalog(tmp_path, monkeypatch
     oversize_pass.collect_oversize([Path(tmp_path / "f.tracev3")], strings=None)
 
     assert decompressed == [0x10]
+
+
+# ── what a parse loop may swallow ──────────────────────────────────────────────
+
+def _run_with_catalog_raising(tmp_path, monkeypatch, exc: BaseException):
+    monkeypatch.setattr(tracev3_parse, "iter_chunks", lambda _p: iter([_chunk(CHUNK_TAG_CATALOG, 0)]))
+
+    def boom(_data):
+        raise exc
+
+    monkeypatch.setattr(tracev3_parse, "parse_catalog_chunk", boom)
+    return tracev3_parse.process_tracev3(
+        tmp_path / "x.tracev3", tmp_path, strings=None, oversize_cache={}, timesync_data={},
+        boot_uuid_to_timesync_file_id={}, tracev3_file_id=1, anchor_id_map={},
+        emit=lambda _entry: None, keep_raw=False,
+    )
+
+
+def test_bad_bytes_are_counted_as_parse_errors(tmp_path, monkeypatch):
+    stats = _run_with_catalog_raising(tmp_path, monkeypatch, CorruptRecord("offset out of bounds"))
+    assert stats.errors == 1
+
+
+def test_a_bug_is_not_disguised_as_damage_in_the_evidence(tmp_path, monkeypatch):
+    """S8: an AttributeError is this tool's bug — it must propagate (to the crash
+    reporter), not be counted as a parse error in the evidence."""
+    with pytest.raises(AttributeError):
+        _run_with_catalog_raising(tmp_path, monkeypatch, AttributeError("no such field"))
