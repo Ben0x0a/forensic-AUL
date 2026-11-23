@@ -54,16 +54,10 @@ from typing import Callable
 from forensic_aul.engine.models import LogEntry, TimesyncBoot
 from forensic_aul.engine.parser.string_cache import StringCacheProvider
 from forensic_aul.engine.utils.cancellation import NEVER_CANCELLED, CancelToken
+from forensic_aul.engine.utils.parallel import mirror_cancel
 from forensic_aul.errors import OperationCancelled
 from forensic_aul.ops.extraction.oversize_pass import OversizeCache
 from forensic_aul.ops.extraction.tracev3_parse import FileParseStats, process_tracev3
-
-# How often the mirror thread copies the parent token into the workers'
-# multiprocessing.Event. Small enough that it adds nothing measurable to the
-# observed cancel latency (which is dominated by one chunkset), large enough
-# that the thread is invisible in a profile.
-_CANCEL_MIRROR_INTERVAL_S = 0.1
-
 
 # ── Bounded-window scheduler (runs in the main / writer process) ──────────────
 
@@ -108,7 +102,7 @@ def parallel_parse(
     cancel_event = ctx.Event()
     mirror_stop = threading.Event()
     mirror = threading.Thread(
-        target=_mirror_cancel,
+        target=mirror_cancel,
         args=(cancel, cancel_event, mirror_stop),
         name="faul-cancel-mirror",
         daemon=True,
@@ -149,23 +143,6 @@ def parallel_parse(
                 raise
     finally:
         mirror_stop.set()
-
-
-def _mirror_cancel(
-    cancel: CancelToken, cancel_event, stop: threading.Event
-) -> None:
-    """Copy *cancel* into the workers' event until cancelled or *stop* is set.
-
-    Runs on a daemon thread in the parent. WHY a thread rather than a check in
-    the result loop: that loop blocks in ``wait(...)`` until a worker finishes a
-    whole file, which on a large tracev3 is tens of seconds — the workers would
-    only learn of the cancellation after the very thing the operator is waiting
-    to stop had finished.
-    """
-    while not stop.is_set():
-        if cancel.wait(_CANCEL_MIRROR_INTERVAL_S):
-            cancel_event.set()
-            return
 
 
 # ── Worker-process parsing (multiprocessing) ──────────────────────────────────

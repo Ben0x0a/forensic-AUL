@@ -93,7 +93,7 @@ def test_chunkset_after_a_failed_catalog_is_not_decoded_with_the_previous_one(tm
 def test_oversize_pass_does_not_reuse_the_previous_catalog(tmp_path, monkeypatch):
     decompressed = _patch_stream(monkeypatch, oversize_pass)
 
-    oversize_pass.collect_oversize([Path(tmp_path / "f.tracev3")], strings=None)
+    oversize_pass.collect_oversize([Path(tmp_path / "f.tracev3")])
 
     assert decompressed == [0x10]
 

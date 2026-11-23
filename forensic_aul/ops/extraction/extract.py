@@ -757,8 +757,9 @@ def _run_parse(ctx: RunContext) -> _ParseStats:
     # keeps the on-disk state consistent and the WAL small).
     conn.commit()
 
+    # Same process budget as the main parse (no writer in this pass).
     oversize_cache: OversizeCache = collect_oversize(
-        tracev3_files, strings, cancel=ctx.cancel
+        tracev3_files, jobs=opts.jobs, cancel=ctx.cancel
     )
     log.info(f"Oversize cache  : {len(oversize_cache)} entry(ies) collected")
 
