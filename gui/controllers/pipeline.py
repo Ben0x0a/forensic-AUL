@@ -2,21 +2,20 @@
 
 Defines : AcquireController, ExtractController — the application logic behind the
           two pipeline screens: validate the view's inputs, invoke the core ops
-          (``forensic_aul.ops.*``) off the GUI thread via the view's ``run_task``
+          (from ``forensic_aul``) off the GUI thread via the view's ``run_task``
           host, and route results / errors back to the view. The views
           (gui.views.screens_pipeline) hold only widgets and pure display methods
           and import no core ops.
 Used by : gui.views.screens_pipeline (each pipeline view constructs its controller).
-Uses    : PySide6 (asyncio bridge only), forensic_aul.ops.acquisition / .extraction,
-          forensic_aul.engine.utils.system, gui.recent_store, gui.controllers
+Uses    : forensic_aul (acquire, run_extract, CaseInfo, …), app.settings,
+          gui.recent_store, gui.navigation (ExtractFrom), gui.controllers
           (phrase_failure), and — by attribute — its view (a gui.views.screens_pipeline
           screen).
 
-WHY controllers only for the pipeline: Acquire and Extract run real asynchronous
-core ops with validation, progress, the Acquire→Extract hand-off and acquisition-sidecar logic worth
-isolating from the widgets. The lighter data/preferences screens keep the thin
-view-only convention documented in gui.views.screen_base — adding controllers
-there would be indirection without payoff.
+WHY a controller: every screen that calls the library has one (see docs/gui.md,
+"Views and controllers"); here it holds validation, progress, the
+Acquire→Extract hand-off (an ExtractFrom payload) and the acquisition-sidecar
+logic, away from the widgets.
 
 These controllers are plain objects, not QObjects: the off-thread callbacks they
 pass to ``view.run_task`` are re-emitted from the view (an OperationScreen, a

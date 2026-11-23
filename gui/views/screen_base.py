@@ -13,11 +13,11 @@ Uses    : PySide6, gui.workers (Worker/start_worker), gui.widgets.components,
           gui.widgets.path_picker, gui.recent_store, gui.navigation (the Screen
           protocol ScrollScreen implements).
 
-WHY this base hosts the worker plumbing: it is shared by both the controller-backed
-pipeline views and the thin data/preferences views. The heavy pipeline screens
-(Acquire, Extract) delegate their logic to gui.controllers.pipeline, which drives
-the view through ``run_task`` here; the lighter screens call ops inline. Either way
-the off-thread mechanics live in one place (see the run_task QueuedConnection note).
+WHY this base hosts the worker plumbing: every screen that calls the library
+delegates to a controller (gui.controllers.*), and the controllers run slow
+operations through ``run_task`` here, so the off-thread mechanics live in one
+place (see the run_task QueuedConnection note). docs/gui.md describes the
+view/controller split.
 """
 
 from __future__ import annotations

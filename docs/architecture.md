@@ -109,7 +109,8 @@ Optional (`uv sync --extra gui`). Layout:
 | `gui/app.py` | Builds the main window; routes application logging into the log panel. |
 | `gui/views/shell.py` | `MainWindow`: frameless window, sidebar, stacked screens, docked log panel. |
 | `gui/views/screens_*.py`, `screen_*.py` | Views only — widget construction, input getters, display methods. |
-| `gui/controllers/` | Application logic for the heavy screens (Acquire, Extract, Identify): validation, off-thread core-op invocation, result routing. |
+| `gui/controllers/` | Application logic for every screen that calls the library: validation, the library calls (off-thread when slow), result routing. |
+| `gui/navigation.py` | Typed navigation payloads (`OpenDatabase`, `ExtractFrom`, `ExportFrom`, `ShowIdentifyResults`) and the `Screen` protocol the shell binds. |
 | `gui/workers/` | `Worker` + `start_worker` — moves a blocking core call onto a `QThread`. |
 | `gui/widgets/` | Reusable primitives (`LogTablePanel`, `PathPicker`, `LogPanel`, `DevicePicker`, …). |
 | `gui/theme.py` | Design tokens interpolated into an application-wide Qt Style Sheet. |
@@ -117,9 +118,10 @@ Optional (`uv sync --extra gui`). Layout:
 
 Two conventions are enforced in the code:
 
-- **Views import no `forensic_aul.ops`.** The pipeline views delegate to a
-  controller; light data screens (Exploit, Identify results) call read-only ops
-  inline because their reads are index-assisted and fast.
+- **Views call no library operation.** Every view delegates to a controller;
+  `gui/views/` and `gui/widgets/` may import only a short list of `forensic_aul`
+  data types (checked by `tests/unit/test_layering.py`). See
+  [gui.md](gui.md#views-and-controllers).
 - **Widgets are never touched from a worker thread.** Worker→GUI traffic goes
   through queued Qt signals; GUI→worker control uses `threading.Event` only.
 

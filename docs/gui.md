@@ -39,20 +39,22 @@ main thread still needs an OS kill.)
 
 ## The shell
 
-A frameless, macOS-styled window (`gui/views/shell.py`), sized 1180×800 by default
-with a 980×640 minimum:
+A window with the operating system's own titlebar (`gui/views/shell.py`), sized
+1180×800 by default with a 980×640 minimum. A custom macOS-style titlebar was
+removed: it looked foreign on Windows and Linux and re-implemented the move,
+resize and snap the OS already provides.
 
-- **Titlebar** — draggable, with functional traffic-light controls; double-click
-  toggles maximise. Shows a breadcrumb: `FAUL · forensic-aul — <screen>`.
+- **Titlebar** — native; its title carries a breadcrumb:
+  `FAUL · forensic-aul — <screen>`.
 - **Left sidebar** (fixed 220 px) — three sections: `PIPELINE`, `REFERENCE`,
   `SYSTEM` (the Preferences submenu). Disabled entries are greyed with a tooltip
   naming the version that will bring them.
 - **Screen stack** — one screen at a time, in a `QStackedWidget`.
-- **Log panel** — a docked, resizable panel at the bottom, attached to the root
-  logger (`gui/widgets/log_panel.py`), so the library's own INFO/WARNING/ERROR
-  lines are visible live while an operation runs.
-- **Resize** — a corner `QSizeGrip` preserves native resizing despite the frameless
-  window.
+- **Log panel** — a docked, resizable panel at the bottom
+  (`gui/widgets/log_panel.py`). It is a plain logging handler attached through
+  `app/logging_config.py`, so the library's own INFO/WARNING/ERROR lines are
+  visible live while an operation runs; its DEBUG button asks the same module to
+  lower the root level (the widget does not configure logging itself).
 
 There is a single dark theme (`gui/theme.py` builds the stylesheet); there is no
 light/dark switch.
@@ -66,20 +68,82 @@ light/dark switch.
 | 1 · Acquire | `AcquireScreen` | `gui/views/screens_pipeline.py` | Scans for connected devices and collects a `.faul` from one, via `forensic_aul.ops.acquisition.acquire`. Records the run in the recents store and can hand its output straight to Extract ("Continue"). |
 | 2 · Extract | `ExtractScreen` | `gui/views/screens_pipeline.py` | Parses an archive into SQLite via `run_extract`, with an inline progress bar and terminal actions. Carries a compact case-metadata panel (case number / IMEI), and auto-fills those fields from a `.faul`'s acquisition sidecar when present. A jobs dropdown is built from the host's physical core count. |
 | 3 · Exploit | `ExploitScreen` | `gui/views/screen_exploit.py` | A two-tab viewer over an analysis database: **Overview** (facts from `summarise`) and **Analysis** (a paged log table over a held-open `LogStore`, with time and annotation filters, an FTS-backed keyword search, a soft row cap, and a "view context" action). |
-| 4 · Export | `ExportScreen` | `gui/views/screens_data.py` | Filtered export to CSV / JSON / JSONL via `run_export` + `LogFilter`. |
+| 4 · Export | `ExportScreen` | `gui/views/screens_data.py` | Filtered export to CSV / JSON / JSONL via `run_export` + `LogFilter`, off the GUI thread. Opened from Exploit, it arrives with that database and its Analysis filters (see [Navigation](#navigation-between-screens)). |
 | · Verify hash | `VerifyHashScreen` | `gui/views/screens_data.py` | Recomputes a file's digest (SHA-256 / SHA-1 / MD5) and compares it with an expected value, keeping a session table of results. |
 | · Identify | `IdentifyHub` | `gui/views/screen_identify_hub.py` | A tabbed hub with two children: **Run** (`IdentifyScreen`, `screens_identify.py`) — the interactive baseline → action → diff wizard; and **Results** (`IdentifyResultsScreen`, `screen_identify_results.py`) — browse, filter, hide and CSV-export a diff database through `IdentifyResults`. |
-| System · Settings | `SettingsScreen` | `gui/views/screens_prefs.py` | Workstation display preferences (recent-database list, timezone rendering, reduce-motion) plus an About panel with the version and platform. |
+| System · Settings | `SettingsScreen` | `gui/views/screens_prefs.py` | Workstation preferences (recents, timestamp rendering, context size, row cap, knowledge base, default Extract jobs — see [Settings](#settings-and-recent-cases)) plus an About panel with the version and platform. |
 
-Two conventions run through the views:
+### Views and controllers
 
-- **Views hold widgets only.** Acquire, Extract and the Identify wizard delegate to
-  a controller (`gui/controllers/pipeline.py`, `gui/controllers/identify.py`) and
-  import no `forensic_aul.ops` themselves.
-- **Light data screens skip the controller.** Export, Verify hash, Exploit and
-  Identify Results run their reads inline on the GUI thread — the reads are
-  index-assisted counts/pages measured in milliseconds — and surface errors in a
-  result panel rather than raising.
+Every screen that calls the library is split in two:
+
+- **The view** (`gui/views/`) builds widgets, forwards the analyst's input and
+  renders what it is told to. It calls no library operation.
+- **The controller** (`gui/controllers/`) validates the input, calls the
+  `forensic_aul` operation (through the view's `run_task` when it is slow), and
+  tells the view what to show. Controllers are plain Python objects, testable
+  without driving widgets.
+
+| View | Controller |
+|---|---|
+| `AcquireScreen`, `ExtractScreen` | `pipeline.AcquireController`, `pipeline.ExtractController` |
+| `ExploitScreen` | `exploit.ExploitController` (+ the table's row sources) |
+| `ExportScreen`, `VerifyHashScreen` | `data.ExportController`, `data.VerifyHashController` |
+| `IdentifyScreen` | `identify.IdentifyController` |
+| `IdentifyResultsScreen` | `identify_results.IdentifyResultsController` |
+| `SignatureDialog` | `signature.SignatureController` |
+
+The rule is enforced by `tests/unit/test_layering.py`: modules under
+`gui/views/` and `gui/widgets/` may import from `forensic_aul` only a short list
+of data types and constants (`LogFilter`, `Match`, `SignatureDraft`,
+`__version__`, `default_kb_dir`, `physical_cpu_count`). `SettingsScreen` has no
+controller: it edits the settings store and calls no library operation.
+
+WHY: a view that calls the library mixes three jobs (layout, decisions, I/O),
+cannot be tested without a window, and is where errors used to be phrased
+inconsistently. Failures now reach the controller as exception objects and are
+phrased once, by type, in `gui/controllers/__init__.py` (`phrase_failure`).
+
+Exploit's and Identify Results' table reads stay on the GUI thread (they are
+index-assisted counts and pages measured in milliseconds); annotation, export,
+hashing, extraction, acquisition and identify run on a worker.
+
+### Navigation between screens
+
+Screens never reach into each other. A screen is given the shell's `navigate`
+callback (`bind_navigator`) and calls it with a **destination**: a bare screen
+id to switch screens, or a typed payload (`gui/navigation.py`) that names its
+own target screen and is delivered to that screen's `receive`:
+
+| Payload | Target | Sent by |
+|---|---|---|
+| `ExtractFrom(source, case)` | Extract | Acquire's "Continue" — the archive and the case metadata already typed |
+| `OpenDatabase(db)` | Exploit | Extract's "Open in Exploit" |
+| `ExportFrom(db, filters)` | Export | Exploit's "Export…" (its Analysis filters) and Extract's "Export" |
+| `ShowIdentifyResults(db)` | Identify (Results tab) | the Identify wizard's "View results" |
+
+```mermaid
+sequenceDiagram
+    participant X as ExploitScreen
+    participant S as Shell (MainWindow.navigate)
+    participant E as ExportScreen
+    X->>S: navigate(ExportFrom(db, filters))
+    S->>S: target_of(payload) = "export"; switch screen
+    S->>E: receive(payload)
+    E->>E: controller fills the form; lists filters the form cannot show
+```
+
+On Export, filters the form has an input for (process, subsystem, level,
+message LIKE, last) fill those inputs; the others (time bounds, keyword search,
+category, annotation filters) are listed under the form with a **Clear** button.
+They are applied to the export only while listed — never invisibly.
+
+WHY typed payloads rather than a dictionary or a shared "current database"
+object: a misspelled dictionary key used to be ignored without a word, and a
+shared object would change Export behind the analyst's back whenever another
+screen opened a database. A payload is checked when it is built, goes only
+where it names, and a screen that receives one it does not take raises
+`TypeError` instead of dropping it.
 
 ### Greyed out / planned
 
@@ -107,12 +171,12 @@ would freeze the window, so blocking core calls go to a worker thread.
 `gui/workers/base.py` provides the whole mechanism:
 
 - **`Worker(fn, *args, **kwargs)`** — a `QObject` that runs one callable off-thread
-  and emits `finished(object)` with its return value, or `failed(str)` with a
-  formatted traceback. It never lets an exception escape into the thread; failures
-  are logged and additionally captured as a crash report (`app.diagnostics`).
-  Purpose-built workers may subclass `QObject` directly as long as they expose the
-  same two signals.
-- **`start_worker(owner, worker, on_finished, on_failed=None)`** — moves the worker
+  and emits `finished(object)` with its return value, `failed(object)` with the
+  exception itself (so the controller can phrase it by type), or
+  `cancelled(object)` when the operation raised `OperationCancelled`. It never
+  lets an exception escape into the thread; unexpected failures are logged and
+  additionally captured as a crash report (`app.diagnostics`).
+- **`start_worker(owner, worker, on_finished, on_failed=None, on_cancelled=None)`** — moves the worker
   onto a fresh `QThread`, wires `started → run`, connects the callbacks, tears
   everything down on either outcome, and returns the thread. The thread is parented
   to `owner` so Qt keeps it alive; the worker stays un-parented (Qt forbids a
@@ -208,8 +272,6 @@ Honest limits as the code stands:
   rather than being instant, and the window stays responsive while it drains.
   A cancelled extract leaves `<name>.sqlite.partial`, never a file at the output
   path. The Identify wizard's pauses remain its own interactive control points.
-- The window is frameless by design and styled for macOS; it runs on other
-  platforms but that is where it looks intended.
 
 For anything scripted, repeatable, or headless, prefer the CLI or the library —
 they are the stable surfaces.
