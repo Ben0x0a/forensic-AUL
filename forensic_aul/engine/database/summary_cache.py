@@ -6,10 +6,10 @@ Defines : the ``summary_cache`` table plus ``store_summary`` /
 Used by : forensic_aul.ops.extraction.extract (writes the cache as the final
           extract phase), forensic_aul.ops.annotation.matcher (refreshes it after
           annotations change), gui.views.screen_exploit (reads it).
-Uses    : forensic_aul.ops.summary.summary (the Summary dataclasses it
+Uses    : forensic_aul.engine.database.summary (the Summary dataclasses it
           serialises), forensic_aul.engine.database.access, sqlite3, json.
 
-WHY a cache table at all: :func:`~forensic_aul.ops.summary.summary.summarise`
+WHY a cache table at all: :func:`~forensic_aul.engine.database.summary.summarise`
 makes six to seven full passes over ``logs`` (a COUNT, a MIN, a MAX, three
 GROUP BY aggregations and a bucketed histogram). On a multi-million-row extract
 that is tens of seconds — acceptable once, at the end of an extraction that
@@ -33,7 +33,7 @@ from pathlib import Path
 
 from forensic_aul._version import __version__
 from forensic_aul.engine.database.access import open_analysis_database
-from forensic_aul.ops.summary.summary import (
+from forensic_aul.engine.database.summary import (
     AnnotatedAction,
     HistogramBucket,
     Summary,
@@ -104,7 +104,7 @@ def refresh_summary(conn: sqlite3.Connection) -> bool:
     """
     # Local import: summary.py must not import this module at module scope
     # (cache.py already imports summary.py for the dataclasses).
-    from forensic_aul.ops.summary.summary import (
+    from forensic_aul.engine.database.summary import (
         DEFAULT_BUCKETS,
         DEFAULT_TOP,
         summarise_connection,

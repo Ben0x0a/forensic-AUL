@@ -1,4 +1,4 @@
-"""Render a :class:`~forensic_aul.ops.summary.summary.Summary` as text.
+"""Render a :class:`~forensic_aul.engine.database.summary.Summary` as text.
 
 Pure formatting: every function builds and returns a string and never prints.
 The CLI handler (and the GUI) decide when and where to emit it. This keeps the
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from forensic_aul.ops.summary.summary import Summary
+from forensic_aul.engine.database.summary import Summary
 
 
 def format_summary(s: Summary) -> str:

@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
 
 from forensic_aul.ops.acquisition.report import load_sidecar_for
 from forensic_aul.ops.export.exporter import run_export
-from forensic_aul.ops.query.reader import LogFilter
+from forensic_aul import LogFilter
 from gui.controllers import phrase_failure
 from gui.recent_store import RecentStore
 from gui.settings_store import SettingsStore

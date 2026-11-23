@@ -42,7 +42,7 @@ SENSITIVE = "sensitive"
 # Domain types whose instances are sensitive as a whole. Matched by bare class name
 # against the value's MRO (so subclasses count) — never imported. Reference homes:
 # forensic_aul/device_info.py, ops/extraction/options.py, engine/models/log_entry.py,
-# ops/query/reader.py.
+# engine/database/reader.py.
 SENSITIVE_TYPE_NAMES = frozenset(
     {"DeviceInfo", "SimInfo", "CaseInfo", "LogEntry", "LogRow", "MessageData"}
 )

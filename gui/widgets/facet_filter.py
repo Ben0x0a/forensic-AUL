@@ -12,7 +12,7 @@ each needs its count to be worth choosing between. QComboBox offers none of
 that; a QMenu of checkboxes does, and stays one line of toolbar.
 
 WHY the counts are the *unfiltered* totals: they come from the statistics cached
-at extract time (see ops/summary/cache.py), so opening this list costs nothing.
+at extract time (see engine/database/summary_cache.py), so opening this list costs nothing.
 Recomputing them against the currently-active filters would mean a GROUP BY over
 the whole table on every keystroke — exactly the cost this screen was rebuilt to
 remove. The button's tooltip says so, rather than letting the numbers imply a

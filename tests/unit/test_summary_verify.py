@@ -8,8 +8,8 @@ import pytest
 
 from forensic_aul.engine.integrity import compute_sha256, seal_log_file
 from forensic_aul.engine.database.schema import apply_pragmas, init_schema
-from forensic_aul.ops.summary.cache import clear_summary, load_summary, store_summary
-from forensic_aul.ops.summary.summary import Summary, summarise
+from forensic_aul.engine.database.summary_cache import clear_summary, load_summary, store_summary
+from forensic_aul.engine.database.summary import Summary, summarise
 from forensic_aul.engine.utils.time import parse_duration_seconds
 from forensic_aul.ops.verify.verify import verify_database
 

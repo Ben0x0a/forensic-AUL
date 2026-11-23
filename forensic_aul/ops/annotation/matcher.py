@@ -25,7 +25,7 @@ from typing import Any
 
 from forensic_aul.engine.database.access import open_analysis_database
 from forensic_aul.ops.knowledge_base.models import KnowledgeBase, Signature
-from forensic_aul.ops.summary.cache import refresh_summary
+from forensic_aul.engine.database.summary_cache import refresh_summary
 from forensic_aul.outcomes import AnnotateResult
 
 log = logging.getLogger(__name__)

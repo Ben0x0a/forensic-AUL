@@ -5,7 +5,12 @@ Defines : the *data* behind the ``summary`` command — ``summarise`` runs the
           histogram) and returns a structured :class:`Summary`. No printing /
           formatting lives here; the CLI handler (launcher/cmds/summary_cmd.py)
           and the GUI render the returned object however they like.
-Used by : launcher/cmds/summary_cmd.py, forensic_aul.__init__ (public API).
+Used by : forensic_aul.engine.database.summary_cache, the public API
+          (``summarise``, via forensic_aul) and the summary command.
+
+WHY in engine/database: the statistics are part of what the store keeps about
+itself (summary_cache); the extraction and annotation bricks refresh them without
+importing another brick.
 Uses    : the standard library only (sqlite3).
 """
 

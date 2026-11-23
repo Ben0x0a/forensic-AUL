@@ -13,8 +13,8 @@ from forensic_aul.ops.annotation.matcher import (
     annotation_state,
     clear_annotations,
 )
-from forensic_aul.ops.summary.cache import load_summary, store_summary
-from forensic_aul.ops.summary.summary import summarise_connection
+from forensic_aul.engine.database.summary_cache import load_summary, store_summary
+from forensic_aul.engine.database.summary import summarise_connection
 from forensic_aul.engine.database.schema import apply_pragmas, init_schema
 
 

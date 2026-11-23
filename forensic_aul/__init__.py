@@ -63,7 +63,8 @@ from forensic_aul.ops.query import (
 )
 
 # Read-only analysis helpers (summary view + chain-of-custody verification)
-from forensic_aul.ops.summary.summary import Summary, summarise
+from forensic_aul.engine.database.summary import Summary, summarise
+from forensic_aul.engine.database.summary_cache import load_summary
 from forensic_aul.ops.verify.verify import VerifyResult, verify_database
 
 # Device acquisition (collect a .logarchive over USB; optional pymobiledevice3)
@@ -159,6 +160,7 @@ __all__ = [
     "LogRow",
     "LogStore",
     "summarise",
+    "load_summary",
     "Summary",
     "verify_database",
     "VerifyResult",

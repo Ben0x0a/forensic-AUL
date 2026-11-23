@@ -366,7 +366,7 @@ class TestMessageMatch:
             list(query_logs(db, LogFilter(message_match="hello")))
 
     def test_fts_match_query_quoting(self):
-        from forensic_aul.ops.query.reader import fts_match_query
+        from forensic_aul.engine.database.reader import fts_match_query
 
         assert fts_match_query('foo "bar"') == '"foo" """bar"""'
         assert fts_match_query("%%% ...") is None

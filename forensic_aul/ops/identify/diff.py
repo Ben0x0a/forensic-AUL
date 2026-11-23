@@ -13,7 +13,7 @@ Used by : forensic_aul.ops.workflows.identify (run_identify_workflow),
           forensic_aul.ops.identify.results (IdentifyResults — reopens the
           same hidden_keys/view objects and the source_order/source_file
           backfill), launcher/cmds/identify_cmd.py.
-Uses    : forensic_aul.ops.query.reader (has_kb_tables), forensic_aul.outcomes
+Uses    : forensic_aul.engine.database.reader (has_kb_tables), forensic_aul.outcomes
           (DiffResult), forensic_aul.engine.utils.time (iso8601_from_unix_ns).
 
 Noise definition
@@ -40,7 +40,7 @@ import sqlite3
 from pathlib import Path
 
 from forensic_aul.engine.utils.time import iso8601_from_unix_ns
-from forensic_aul.ops.query.reader import has_kb_tables
+from forensic_aul.engine.database.reader import has_kb_tables
 from forensic_aul.outcomes import DiffResult
 
 log = logging.getLogger(__name__)

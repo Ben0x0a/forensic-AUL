@@ -84,7 +84,7 @@ from forensic_aul.ops.extraction.timesync_setup import setup_timesync
 from forensic_aul.ops.extraction import format_watch
 from forensic_aul.ops.extraction.tracev3_parse import FileParseStats, process_tracev3
 from forensic_aul.ops.extraction.workers import parallel_parse
-from forensic_aul.ops.summary.cache import refresh_summary
+from forensic_aul.engine.database.summary_cache import refresh_summary
 from forensic_aul.outcomes import ExtractResult, ExtractStatus
 
 # Relative phase weights for the extract progress bar (ratios, normalised by the

@@ -421,7 +421,7 @@ def test_post_parse_phases_are_rerunnable_with_identical_results(tmp_path):
         finalize_indexes,
         init_schema,
     )
-    from forensic_aul.ops.summary.cache import refresh_summary
+    from forensic_aul.engine.database.summary_cache import refresh_summary
 
     db = tmp_path / "rerun.sqlite"
     conn = sqlite3.connect(str(db))

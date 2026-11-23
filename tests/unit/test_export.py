@@ -22,7 +22,7 @@ from forensic_aul.ops.export.exporter import (
     _infer_format,
     run_export,
 )
-from forensic_aul.ops.query.reader import LogFilter, _to_unix_ns
+from forensic_aul.engine.database.reader import LogFilter, _to_unix_ns
 from forensic_aul.engine.utils.time import parse_duration_seconds as _parse_duration_seconds
 
 # Wall-clock base: 2024-01-15T12:00:01Z, in nanoseconds since the Unix epoch.

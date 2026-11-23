@@ -2,7 +2,7 @@
 
 Output of [`export`](../cli/export.md) / `forensic_aul.run_export`. Source:
 `forensic_aul/ops/export/exporter.py` (record shape and writers) and
-`forensic_aul/ops/query/reader.py` (row model and the annotation rollup).
+`forensic_aul/engine/database/reader.py` (row model and the annotation rollup).
 
 ## Format selection
 

@@ -30,7 +30,7 @@ from forensic_aul.ops.identify.diff import (
     create_hidden_keys_objects,
     ensure_source_columns,
 )
-from forensic_aul.ops.query.reader import escape_like
+from forensic_aul.engine.database.reader import escape_like
 
 log = logging.getLogger(__name__)
 

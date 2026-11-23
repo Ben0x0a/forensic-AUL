@@ -7,7 +7,7 @@ Defines : ``open_analysis_database`` — the one place a path is turned into a
           ("file is not a database") leaking to the consumer, and one place where
           an interrupted extract's output is refused.
 Used by : forensic_aul.ops.query, forensic_aul.ops.export.exporter,
-          forensic_aul.ops.summary.summary, forensic_aul.ops.annotation.matcher,
+          forensic_aul.engine.database.summary, forensic_aul.ops.annotation.matcher,
           forensic_aul.ops.verify.verify.
 Uses    : forensic_aul.errors (InvalidDatabaseError, IncompleteDatabaseError),
           forensic_aul.engine.database.schema (the extract_status vocabulary),

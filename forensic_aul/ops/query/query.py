@@ -5,15 +5,15 @@ Defines : ``query_logs`` (streamed filtered rows), ``LogStore`` (a held-open
           UIs), and the one-shot conveniences ``count_logs`` / ``fetch_logs``
           (exact paging) and ``fetch_context`` (the rows around a line on the
           forensic ``event_order`` timeline), all thin wrappers over LogStore.
-          Rows come back as :class:`~forensic_aul.ops.query.reader.LogRow`
+          Rows come back as :class:`~forensic_aul.engine.database.reader.LogRow`
           objects; the filter vocabulary is
-          :class:`~forensic_aul.ops.query.reader.LogFilter`. Consumers that
+          :class:`~forensic_aul.engine.database.reader.LogFilter`. Consumers that
           prefer raw SQL should query the stable ``v_logs`` view (see
           engine/database/schema.py) instead of the normalised tables.
 Used by : forensic_aul/__init__.py (re-exports the entry points), the GUI
           (gui/views/screen_exploit.py holds a LogStore) and any launcher
           feature that needs rows in memory rather than a file.
-Uses    : forensic_aul.ops.query.reader (filters → SQL → streamed rows),
+Uses    : forensic_aul.engine.database.reader (filters → SQL → streamed rows),
           forensic_aul.engine.database.access (validated open),
           forensic_aul.engine.database.schema (ensure_views).
 """
@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Iterator
 
 from forensic_aul.engine.database.access import open_analysis_database
-from forensic_aul.ops.query.reader import (
+from forensic_aul.engine.database.reader import (
     LogFilter,
     LogRow,
     build_where,

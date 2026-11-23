@@ -42,7 +42,7 @@ def parse_duration_seconds(value: str) -> int | None:
 
     Returns the number of seconds, or None if *value* is not a recognised
     ``<number><s|m|h|d>`` duration. Consumed by the shared
-    ``last`` filter of the query/export readers (ops/query/reader.py).
+    ``last`` filter of the query/export readers (engine/database/reader.py).
     """
     m = _DURATION_RE.fullmatch(value.strip().lower())
     if not m:

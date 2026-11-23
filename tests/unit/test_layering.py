@@ -28,7 +28,7 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[2]
 _PACKAGES = ("forensic_aul", "app", "launcher", "gui")
 _FRONTENDS = ("app", "launcher", "gui")
-_ENGINE_MAY_IMPORT = ("forensic_aul.engine", "forensic_aul.config", "forensic_aul.errors")
+_ENGINE_MAY_IMPORT = ("forensic_aul.engine", "forensic_aul.config", "forensic_aul.errors", "forensic_aul._version")
 
 
 # ── Known violations (the ratchet) ─────────────────────────────────────────────
@@ -46,15 +46,8 @@ _KNOWN_FRONTEND_ENGINE = {
 # Rule 4 — cycles between bricks, each as the set of bricks in one cycle.
 _KNOWN_CYCLES: set[frozenset[str]] = set()  # none left — keep it that way
 
-# Rule 5 — (importing module, imported module). Both are the logs-schema SQL spread
-# over bricks; one data-access module removes them (Phase 4, S7).
-_KNOWN_BRICK_TO_BRICK = {
-    ("forensic_aul.ops.annotation.matcher", "forensic_aul.ops.summary.cache"),
-    ("forensic_aul.ops.extraction.extract", "forensic_aul.ops.summary.cache"),
-    ("forensic_aul.ops.export.exporter", "forensic_aul.ops.query.reader"),
-    ("forensic_aul.ops.identify.diff", "forensic_aul.ops.query.reader"),
-    ("forensic_aul.ops.identify.results", "forensic_aul.ops.query.reader"),
-}
+# Rule 5 — (importing module, imported module).
+_KNOWN_BRICK_TO_BRICK: set[tuple[str, str]] = set()  # none left — keep it that way
 _DATA_MODULES = ("models", "options")
 
 

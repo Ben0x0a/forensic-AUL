@@ -20,7 +20,7 @@ from forensic_aul.ops.query.query import (
     fetch_logs,
     query_logs,
 )
-from forensic_aul.ops.query.reader import LogFilter, LogRow
+from forensic_aul.engine.database.reader import LogFilter, LogRow
 
 __all__ = [
     "LogFilter", "LogRow", "LogStore", "query_logs",

@@ -1,6 +1,6 @@
 """AUL Parser — ``summary`` subcommand (dispatch only).
 
-Parses args, calls ``forensic_aul.ops.summary.summary.summarise`` (all the
+Parses args, calls ``forensic_aul.summarise`` (all the
 read-only querying), then prints the report rendered by
 ``forensic_aul.ops.summary.report.format_summary``. No data or presentation
 logic lives here.
@@ -38,7 +38,7 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def run(args: argparse.Namespace) -> int:
-    from forensic_aul.ops.summary.summary import summarise
+    from forensic_aul import summarise
     from forensic_aul.ops.summary.report import format_summary
 
     try:

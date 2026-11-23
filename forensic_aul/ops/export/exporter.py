@@ -3,7 +3,7 @@
 Defines : the export logic — ``run_export`` (rows chosen by the shared
           ``LogFilter``, output by ``fmt`` / ``include_fields``) and the
           format-writer registry (``export_formats``). Row filtering/streaming is delegated to
-          the shared read layer (``ops/query/reader.py``) so a filter behaves
+          the shared read layer (``engine/database/reader.py``) so a filter behaves
           identically in ``run_export`` and ``query_logs``. Knowledge-base
           aware: when annotations exist on the rows being exported, every
           extracted value label (from the ``extracted_values`` table) becomes
@@ -11,7 +11,7 @@ Defines : the export logic — ``run_export`` (rows chosen by the shared
           object (JSON).
 Used by : launcher/cmds/export_cmd.py (argparse glue → ``run_export``) and any
           external caller importing ``forensic_aul.ops.export``.
-Uses    : forensic_aul.ops.query.reader (filters → streamed LogRow) and the
+Uses    : forensic_aul.engine.database.reader (filters → streamed LogRow) and the
           standard library (sqlite3, csv, json).
 
 Adding an output format = write one ``_write_<fmt>`` function with the shared
@@ -38,7 +38,7 @@ from typing import Callable, Iterator
 
 from forensic_aul.engine.database.access import open_analysis_database
 from forensic_aul.outcomes import ExportResult
-from forensic_aul.ops.query.reader import (
+from forensic_aul.engine.database.reader import (
     LogFilter,
     LogRow,
     build_where,

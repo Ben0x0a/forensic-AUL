@@ -9,8 +9,13 @@ Defines : the reusable read machinery consumed by every row-level reader —
           ``query_logs`` entry point lives in ``forensic_aul/ops/query/__init__.py``;
           the file exporter (``ops/export/exporter.py``) consumes the same
           machinery so a filter behaves identically in both.
-Used by : forensic_aul/ops/query/__init__.py (query_logs) and
-          forensic_aul/ops/export/exporter.py (run_export).
+Used by : forensic_aul.ops.query (query_logs, LogStore), forensic_aul.ops.export
+          (run_export), forensic_aul.ops.identify (diff, results), the public
+          API (LogFilter, LogRow).
+
+WHY in engine/database: this is the read half of the logs store, next to its
+schema and writer. Every brick that reads logs goes through it, so the filter
+semantics and the SQL over the logs schema live in one place (review S7).
 Uses    : the standard library only (sqlite3, datetime), plus
           forensic_aul.engine.utils.time for timestamp formatting/parsing.
 

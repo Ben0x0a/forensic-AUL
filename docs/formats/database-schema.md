@@ -418,7 +418,7 @@ An **external-content** FTS5 index over `logs.message`, plus `logs_ai` / `logs_a
   single `INSERT INTO logs_fts(logs_fts) VALUES('rebuild')` populates it at the end
   of the run (`finalize_deferred_fts`), then the triggers are installed. A run
   interrupted before that finaliser leaves the index empty.
-- Consumers must probe with `has_fts_index()` (`ops/query/reader.py`), which checks
+- Consumers must probe with `has_fts_index()` (`engine/database/reader.py`), which checks
   the shadow table `logs_fts_docsize` — a plain scan of an external-content table
   would report an emptied index as populated. The `message_match` filter **raises**
   rather than silently falling back to a `LIKE` scan when no usable index exists.
@@ -446,7 +446,7 @@ the temporal histogram — everything
   means readers get the statistics instantly instead of freezing on open.
 - `CHECK (id = 1)` makes "at most one cached summary" a schema-level invariant, so
   a rewrite can only ever REPLACE the previous row.
-- Read with `load_summary()` (`ops/summary/cache.py`), which returns `None` when
+- Read with `load_summary()` (`engine/database/summary_cache.py`), which returns `None` when
   the table or row is absent. **There is no fallback compute on the read path**: a
   database extracted before this table existed reports "not evaluated" rather than
   silently spending a minute recomputing. Re-extract to populate it.
