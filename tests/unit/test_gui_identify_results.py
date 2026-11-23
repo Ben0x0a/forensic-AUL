@@ -122,8 +122,8 @@ def _cleanup_screens():
     gc.collect()
     # Only then release the stores the (now destroyed) models were reading.
     for screen in _LIVE_SCREENS:
-        if screen._store is not None:
-            screen._store.close()
+        if screen._ctrl.store is not None:
+            screen._ctrl.close()
     _LIVE_SCREENS.clear()
 
 
@@ -194,7 +194,7 @@ def test_hide_identical_lines_prunes_and_bumps_hidden(qapp, tmp_path):
     screen._hide_row({"message": "background chatter", "process": "p2"})
     after = _load_all(screen._model)
     assert after == before - 1
-    assert screen._store.counts().hidden == 1
+    assert screen._ctrl.counts().hidden == 1
     assert "(1)" in screen._hidden_btn.text()
 
 
@@ -206,7 +206,7 @@ def test_unhide_from_rules_panel_restores(qapp, tmp_path):
     assert _load_all(screen._model) == 1
     screen._unhide("background chatter", "p2")
     assert _load_all(screen._model) == 2
-    assert screen._store.counts().hidden == 0
+    assert screen._ctrl.counts().hidden == 0
 
 
 # ── Export ────────────────────────────────────────────────────────────────────
