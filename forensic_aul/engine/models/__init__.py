@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from forensic_aul.engine.models.chunks import (
     CatalogChunk,
+    CatalogPersona,
     CatalogSubchunk,
     ChunkPreamble,
     HeaderChunk,
@@ -54,6 +55,7 @@ from forensic_aul.engine.models.timesync import (
 
 __all__ = [
     "CatalogChunk",
+    "CatalogPersona",
     "CatalogSubchunk",
     "ChunkPreamble",
     "HeaderChunk",

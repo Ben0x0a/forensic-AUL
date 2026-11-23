@@ -6,7 +6,7 @@ field-for-field to maximise traceability between implementations.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 
@@ -85,7 +85,7 @@ class ProcessInfoEntry:
     second_number_proc_id: int         # u32 — part of composite process key
     pid: int                           # u32
     effective_user_id: int             # u32 (euid)
-    unknown2: int                      # u32
+    persona_id: int                    # u32 (was "unknown2" before iOS 27 named it)
     number_uuids_entries: int          # u32
     unknown3: int                      # u32
     uuid_info_entries: list[ProcessUUIDEntry]
@@ -110,6 +110,15 @@ class CatalogSubchunk:
 
 
 @dataclass
+class CatalogPersona:
+    """One entry of the catalog persona block (iOS 27 / macOS 27)."""
+    persona_id: int     # u32 — matches ProcessInfoEntry.persona_id
+    persona_type: int   # u32 — kernel persona type (bsd/sys/persona.h)
+    uuid_offset: int    # u32
+    uuid: str           # the persona UUID, as text
+
+
+@dataclass
 class CatalogChunk:
     """Parsed Catalog chunk (tag 0x600b) containing process/subsystem metadata."""
     chunk_tag: int
@@ -120,12 +129,20 @@ class CatalogChunk:
     number_process_information_entries: int  # u16
     catalog_offset_sub_chunks: int          # u16
     number_sub_chunks: int                  # u16
-    unknown: bytes                          # 6 bytes padding
+    # iOS 27 / macOS 27: the persona block (0 / 0 before; these 4 bytes were
+    # read as padding until then).
+    persona_offset: int                     # u16
+    persona_count: int                      # u16
+    unknown: int                            # u16 — still unidentified
     earliest_firehose_timestamp: int        # u64
     catalog_uuids: list[str]               # big-endian 128-bit UUIDs as hex strings
     catalog_subsystem_strings: bytes        # raw null-terminated string pool
     catalog_process_info_entries: dict[str, ProcessInfoEntry]  # key: "first:second"
     catalog_subchunks: list[CatalogSubchunk]
+    personas: list[CatalogPersona] = field(default_factory=list)
+    # Format drift seen while parsing (a section whose records did not fill the
+    # space its header gives it, …): the early warning of an OS format change.
+    observations: list[str] = field(default_factory=list)
 
     def get_process_info(
         self, first_proc_id: int, second_proc_id: int

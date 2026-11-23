@@ -41,6 +41,8 @@ SIG_BV4_FOOTER: int = 0x24347662        # b"bv4$" — terminator after payload
 
 # ── Catalog sub-chunk compression algorithm ids ───────────────────────────────
 CATALOG_COMPRESSION_LZ4: int = 0x100
+# LZBITMAP (iOS 27 / macOS 27). Both values are seen; their difference is unknown.
+CATALOG_COMPRESSION_LZBITMAP: frozenset[int] = frozenset({0x700, 0x701})
 
 # ── Timesync file signatures ──────────────────────────────────────────────────
 TIMESYNC_BOOT_SIGNATURE: int = 0xBBB0      # u16 — start of a TimesyncBoot record

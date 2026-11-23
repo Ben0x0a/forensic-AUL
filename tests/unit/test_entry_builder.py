@@ -52,7 +52,7 @@ def _minimal_catalog() -> CatalogChunk:
         number_process_information_entries=0,
         catalog_offset_sub_chunks=0,
         number_sub_chunks=0,
-        unknown=b"\x00" * 6,
+        persona_offset=0, persona_count=0, unknown=0,
         earliest_firehose_timestamp=0,
         catalog_uuids=[],
         catalog_subsystem_strings=b"",
@@ -455,7 +455,7 @@ def _catalog_with_main_uuid() -> CatalogChunk:
     proc = ProcessInfoEntry(
         index=0, unknown=0, catalog_main_uuid_index=0, catalog_dsc_uuid_index=0,
         first_number_proc_id=1, second_number_proc_id=2, pid=10, effective_user_id=0,
-        unknown2=0, number_uuids_entries=0, unknown3=0, uuid_info_entries=[],
+        persona_id=0, number_uuids_entries=0, unknown3=0, uuid_info_entries=[],
         number_subsystems=0, unknown4=0, subsystem_entries=[],
         main_uuid=_MAIN_UUID, dsc_uuid="",
     )

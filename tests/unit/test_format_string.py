@@ -94,7 +94,7 @@ def _catalog_with_uuid_ranges():
     proc = ProcessInfoEntry(
         index=0, unknown=0, catalog_main_uuid_index=0, catalog_dsc_uuid_index=1,
         first_number_proc_id=1, second_number_proc_id=2, pid=10, effective_user_id=0,
-        unknown2=0, number_uuids_entries=2, unknown3=0,
+        persona_id=0, number_uuids_entries=2, unknown3=0,
         uuid_info_entries=[
             ProcessUUIDEntry(size=0x1000, unknown=0, catalog_uuid_index=0,
                              load_address=0x0, uuid="LIB_LOW"),
@@ -108,7 +108,7 @@ def _catalog_with_uuid_ranges():
         chunk_tag=0x600b, chunk_sub_tag=0, chunk_data_size=0,
         catalog_subsystem_strings_offset=0, catalog_process_info_entries_offset=0,
         number_process_information_entries=1, catalog_offset_sub_chunks=0,
-        number_sub_chunks=0, unknown=b"", earliest_firehose_timestamp=0,
+        number_sub_chunks=0, persona_offset=0, persona_count=0, unknown=0, earliest_firehose_timestamp=0,
         catalog_uuids=["MAIN", "DSC"], catalog_subsystem_strings=b"",
         catalog_process_info_entries={"1_2": proc}, catalog_subchunks=[],
     )
