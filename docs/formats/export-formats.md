@@ -12,7 +12,7 @@ Output of [`export`](../cli/export.md) / `forensic_aul.run_export`. Source:
 | `json` | `.json` | a single JSON array of objects |
 | `jsonl` | `.jsonl` | one JSON object per line |
 
-The format comes from `ExportFilters.fmt` when set; otherwise it is **inferred
+The format comes from `run_export(..., fmt=…)` when set; otherwise it is **inferred
 from the output file's suffix** (case-insensitive). If neither yields a format, a
 `ValueError` is raised. The registry (`_WRITERS`) is the single source of the valid
 names — `export_formats()` returns them.

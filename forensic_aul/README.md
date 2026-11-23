@@ -45,22 +45,21 @@ internal implementation detail and may change.
 | `ExtractOptions` | dataclass | `(batch_size=100000, fast_fts=True, fast_write=False, fts=True, keep_raw=False, jobs=1, overwrite=False, integrity="full", work_dir=None, reset_work_dir=False)` | Every tunable of `run_extract` / `open_or_extract`. Frozen; the defaults are the shipped ones. |
 | `open_or_extract` | func | `(logarchive, db_path: Path, **run_extract_kwargs)` → `Path` | "Parse once, reuse": returns `db_path` immediately when it already exists, otherwise runs `run_extract` and returns the produced path. |
 | `query_logs` | func | `(database: Path, *, process=None, subsystem=None, level=None, message_prefix=None, message_contains=None, message_match=None, format_str=None, like=None, time_from=None, time_to=None, last=None, signature=None, action=None, tag=None, annotated_only=False, limit=None)` → `Iterator[LogRow]` | **The stable in-memory read API** — the same filter vocabulary as `run_export`, but yielding `LogRow` objects instead of writing a file, so consumers never touch the internal schema. List filters accept a single string or a list. `message_prefix` / `message_contains` match the composed message *literally* (`%`/`_` escaped — prefix vs anywhere); `message_match` is an FTS5 keyword search (requires the index — a DB extracted with `--no-fts` raises); `like` is a raw SQL LIKE (the CLI flag is `export --like`); `format_str` matches the invariant template exactly. Raises `FileNotFoundError` / `ValueError`. See *Reading rows back* below. |
-| `count_logs` | func | `(database: Path, filters: LogFilters \| None = None)` → `int` | Total logs matching *filters* — the paging counterpart of `fetch_logs` (call once per filter change, then page). |
-| `fetch_logs` | func | `(database: Path, filters: LogFilters \| None = None, *, offset=0, limit=500)` → `list[LogRow]` | One exact page of logs (offset/limit count LOGS, not annotation-joined rows), ordered (timestamp_unix_ns, id). Built for table UIs scrolling large databases; for one-shot streamed reads prefer `query_logs`. |
+| `count_logs` | func | `(database: Path, filters: LogFilter \| None = None)` → `int` | Total logs matching *filters* — the paging counterpart of `fetch_logs` (call once per filter change, then page). |
+| `fetch_logs` | func | `(database: Path, filters: LogFilter \| None = None, *, offset=0, limit=500)` → `list[LogRow]` | One exact page of logs (offset/limit count LOGS, not annotation-joined rows), ordered (timestamp_unix_ns, id). Built for table UIs scrolling large databases; for one-shot streamed reads prefer `query_logs`. |
 | `fetch_context` | func | `(database: Path, log_id: int, *, before=20, after=20)` → `list[LogRow]` | The rows surrounding a log on the **forensic timeline** (`event_order`, never wall-clock — a shifted clock cannot reorder the context). Anchor included (`row.log_id == log_id`). |
 | `LogRow` | class | fields `timestamp_iso, timestamp_unix_ns, event_order, process, pid, tid, log_level, event_type, subsystem, category, message, format_string, signature_ids`; methods `values_dict()`, `value_for(label)` | One log entry with its annotations/extracted values rolled up — what `query_logs` yields. |
-| `LogFilters` | dataclass | fields: `time_from, time_to, last, process, subsystem, level, like, message_prefix, message_contains, message_match, format_str, signature, action, tag, annotated_only` | The shared filter vocabulary (`ExportFilters` extends it with `fmt` / `include_fields`). |
+| `LogFilter` | dataclass | fields: `time_from, time_to, last, process, subsystem, category, level, like, message_prefix, message_contains, message_match, format_str, signature, action, tag, annotated_only` | The one row filter, taken by `query_logs`, `count_logs` / `fetch_logs` / `LogStore` and `run_export`. List fields accept a single string. |
 | `run_diff` | func | `(baseline_db: Path, action_db: Path, csv_out: Path \| None, sqlite_out: Path)` → `DiffResult` | Attributes log lines to a user action by diffing a post-action DB against a baseline. Writes a SQLite DB (all post-cutoff rows with an `excluded` flag, a `matched_signatures` column when the action DB carries KB annotations, plus a reversible `hidden_keys` prune layer + `v_identified_visible` view) and, unless `csv_out=None`, a CSV of the retained lines. Returns a `DiffResult`. |
 | `run_identify_workflow` | func | `(case_number: str \| None = None, *, output_dir=Path("."), udid=None, still_seconds=60, exhibit_number=None, analyst=None, notes=None, batch_size=1000, jobs=1, fts=False, integrity="off", kb=None, write_csv=True, confirm=None, wait_still=None, wait_for_action=None, status=None, progress=None)` → `IdentifyResult` | The full interactive action-attribution workflow: connect, optionally pause for `still_seconds` (`wait_still`) so the baseline window (starting *before* the pause) absorbs idle/connection noise, acquire a baseline, call `wait_for_action()` while the operator performs the action, acquire again, extract both, optionally annotate the action DB against `kb`, diff. A research-tool default (`integrity="off"`) skips the hashing/acquisition-report chain-of-custody step for speed; pass `"full"`/`"fingerprint"` to keep it. All interaction is injected via callbacks so any front-end (CLI, GUI, tests) can drive it; `progress` receives weighted overall-progress events across the whole run. All artefacts of a run go into one session directory `output_dir/<prefix>/` (prefix = `<case>-<imei|udid>-<UTC>`); `case_number` falsy → prefix `identify-<UTC timestamp>`. Note the library default `batch_size=1000`; the CLI passes `forensic_aul.config.BATCH_SIZE` (100000) instead. Raises `ImportError` / `ValueError` / `AcquisitionAborted` / `AcquisitionError`. |
 | `IdentifyResults` | class | `IdentifyResults(database: Path \| str)` — context manager; `.counts() -> ResultCounts`, `.rows(*, include_noise=False, include_kb_known=False, include_hidden=False, search=None, limit=None, offset=0) -> list[sqlite3.Row]`, `.hide(message, process)`, `.unhide(message, process)`, `.hidden_keys() -> list[tuple[str, str]]`, `.export_csv(path, *, include_noise=False, include_kb_known=True) -> int` | Read/annotate access to a diff database produced by `run_diff` — browse, search, and reversibly hide `(message, process)` pairs after the fact. Upgrades an older diff DB (no `hidden_keys`/`v_identified_visible`) on open. Raises `FileNotFoundError` / `InvalidDatabaseError`. |
-| `run_export` | func | `(database: Path, output: Path, filters: ExportFilters \| None = None)` → `ExportResult` | Filtered export of an analysis DB to CSV / JSON / JSONL (format inferred from the suffix or `filters.fmt`). Knowledge-base aware. Returns an `ExportResult`. Raises `FileNotFoundError` / `ValueError` on bad input. |
+| `run_export` | func | `(database: Path, output: Path, filters: LogFilter \| None = None, *, fmt=None, include_fields=True)` → `ExportResult` | Filtered export of an analysis DB to CSV / JSON / JSONL (format from `fmt`, else inferred from the suffix). Knowledge-base aware. Returns an `ExportResult`. Raises `FileNotFoundError` / `ValueError` on bad input. |
 | `acquire` | func | `(case_number: str, *, output_dir: Path, udid=None, start_time=None, size_limit=None, age_limit=None, exhibit_number=None, analyst=None, notes=None, extract=False, db_path=None, batch_size=1000, pack=True, confirm=None)` → `AcquireResult` | **Collect a `.logarchive` from a USB-connected iOS device** (needs the optional `pymobiledevice3` — `pip install "forensic-aul[acquire]"`). Hashes it and, with `pack=True` (the default), packs archive + sidecar into a single portable `.faul` container; `pack=False` writes the legacy loose layout (`.logarchive` dir + separate `.acquisition.json`). Optionally runs `run_extract`. Note the library default `batch_size=1000`; the CLI passes `forensic_aul.config.BATCH_SIZE` (100000) instead. `output_dir` is a **required** keyword — there is no current-directory default, so evidence can never land somewhere unintended. `confirm(device)->bool` is an optional pre-collection hook (the library does no I/O itself). Raises `ImportError` (dep missing), `AcquisitionAborted`, `AcquisitionError`. |
 | `ForensicAULError` | exception | — | **Base class of every purposeful library error** (`SourceError`, `InvalidDatabaseError`, `AcquisitionError`, `KnowledgeBaseError`, …). Catch it to handle "the library rejected the input / could not do the work" uniformly; genuine bugs still propagate. |
 | `SourceError` | exception | subclasses `ForensicAULError, ValueError` | An evidence source could not be detected / validated / prepared (`detect_source_type` / `prepare_source`). Existing `except ValueError` handlers keep working. |
 | `InvalidDatabaseError` | exception | subclasses `ForensicAULError, ValueError` | The given path is not an analysis database (not SQLite, or no `logs` table). Raised by the path-based readers: `query_logs`, `run_export`, `summarise`, `annotate_database`, `verify_database`. |
 | `AcquisitionError` / `AcquisitionAborted` | exceptions | subclass `ForensicAULError` | Raised by `acquire` / `run_identify_workflow`: a failure, or the `confirm` hook declining. |
 | `DeviceInfo` | dataclass | device metadata (`udid`, `imei`, `serial_number`, SIMs, …) | The connected-device record; passed to the `confirm` hook and on `AcquireResult.device`. |
-| `ExportFilters` | dataclass | `LogFilters` fields + `fmt, include_fields` | Declarative filter/option set for `run_export` (decoupled from any CLI). |
 | `load_kb` | func | `(root: Path \| str)` → `KnowledgeBase` | Load + validate the YAML knowledge base (the signature definitions). Raises `KnowledgeBaseError` on invalid content. |
 | `annotate_database` | func | `(db: Path \| str, kb: KnowledgeBase, *, only_ids=None, only_tags=None)` → `AnnotateResult` | Open the analysis DB at `db`, match every selected signature against `logs`, write `kb_signatures` / `log_annotations`, commit and close. Use this to (re-)annotate **at will** without re-extracting. Returns an `AnnotateResult` (`.counts` is the `signature_id → match_count` mapping). Raises `FileNotFoundError`. |
 | `annotate_connection` | func | `(conn: sqlite3.Connection, kb: KnowledgeBase, *, only_ids=None, only_tags=None)` → `AnnotateResult` | Same as `annotate_database` but on a caller-owned connection (for in-memory DBs / caller-managed transactions); `result.db_path` is `None`. |
@@ -99,7 +98,7 @@ import logging
 from pathlib import Path
 from forensic_aul import (
     CaseInfo, ExtractOptions, run_extract, prepare_source, load_kb, annotate_database,
-    run_export, ExportFilters,
+    run_export, LogFilter,
 )
 
 logging.basicConfig(level=logging.INFO)   # the library logs; the host app configures handlers
@@ -127,7 +126,7 @@ print(ann.total_matches, ann.counts)      # ann.counts → {signature_id: match_
 # 3) Export a filtered, annotation-aware view.
 out = run_export(
     res.db_path, Path("report.csv"),
-    ExportFilters(level=["Error", "Fault"], annotated_only=True),
+    LogFilter(level=["Error", "Fault"], annotated_only=True),
 )
 print(f"exported {out.rows} rows → {out.output_path}")
 ```
@@ -185,11 +184,11 @@ Every purposeful library error derives from `ForensicAULError`, so a consumer
 can wrap any call in one handler while letting genuine bugs propagate:
 
 ```python
-from forensic_aul import CaseInfo, ForensicAULError, run_extract, query_logs
+from forensic_aul import CaseInfo, ForensicAULError, LogFilter, run_extract, query_logs
 
 try:
     res = run_extract(src, db, CaseInfo(case_number="C1"))
-    rows = list(query_logs(res.db_path, subsystem="com.apple.locationd"))
+    rows = list(query_logs(res.db_path, LogFilter(subsystem="com.apple.locationd")))
 except ForensicAULError as exc:      # bad input, unusable source/database, …
     print(f"forensic_aul rejected the request: {exc}")
 ```
@@ -221,13 +220,13 @@ and may change between versions.
 memory (constant memory: it streams):
 
 ```python
-from forensic_aul import query_logs
+from forensic_aul import LogFilter, query_logs
 
-for row in query_logs(
-        "case.db",
+for row in query_logs("case.db", LogFilter(
         subsystem="com.apple.rapport",
         message_prefix="Bonjour unauth peer found",   # literal prefix, %/_ escaped
-        last="24h", limit=1000):
+        last="24h",
+), limit=1000):
     print(row.timestamp_iso, row.process, row.message)
     print(row.signature_ids, row.values_dict())        # KB annotations, if any
 ```

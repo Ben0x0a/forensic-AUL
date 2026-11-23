@@ -84,7 +84,7 @@ def kb(tmp_path):
 def test_public_api_imports():
     # The exact import line a downstream app would use, plus the rest of __all__.
     from forensic_aul import (  # noqa: F401
-        ExportFilters,
+        LogFilter,
         KnowledgeBaseError,
         LogEntry,
         PreparedSource,
@@ -245,7 +245,7 @@ def test_public_api_surface_importable():
     import forensic_aul
 
     for name in (
-        "run_extract", "open_or_extract", "query_logs", "LogRow", "LogFilters",
+        "run_extract", "open_or_extract", "query_logs", "LogRow", "LogFilter",
         "ForensicAULError", "SourceError", "InvalidDatabaseError",
         "run_identify_workflow", "IdentifyResult", "find_loose_dirs",
         "INTEGRITY_MODES", "ProgressEvent", "ProgressSink",

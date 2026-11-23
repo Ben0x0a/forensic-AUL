@@ -143,7 +143,7 @@ resolved format). Column layout per format is documented in
 
 - **`--like` is `LIKE`, not regex.** Wrap the term in `%` for a substring match,
   and remember `_` is a single-character wildcard that needs escaping if literal.
-  The library keyword has the same name (`LogFilters.like`, `query_logs(like=…)`).
+  The library keyword has the same name (`LogFilter.like`).
 - **`--to` is exclusive, `--from` is inclusive.** An end-of-day bound of
   `…T23:59:59` silently drops the last second; use the next day's midnight.
 - **Annotation filters fail loudly on an un-annotated database** — run

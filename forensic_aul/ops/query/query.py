@@ -7,7 +7,7 @@ Defines : ``query_logs`` (streamed filtered rows), ``LogStore`` (a held-open
           forensic ``event_order`` timeline), all thin wrappers over LogStore.
           Rows come back as :class:`~forensic_aul.ops.query.reader.LogRow`
           objects; the filter vocabulary is
-          :class:`~forensic_aul.ops.query.reader.LogFilters`. Consumers that
+          :class:`~forensic_aul.ops.query.reader.LogFilter`. Consumers that
           prefer raw SQL should query the stable ``v_logs`` view (see
           engine/database/schema.py) instead of the normalised tables.
 Used by : forensic_aul/__init__.py (re-exports the entry points), the GUI
@@ -27,7 +27,7 @@ from typing import Iterator
 
 from forensic_aul.engine.database.access import open_analysis_database
 from forensic_aul.ops.query.reader import (
-    LogFilters,
+    LogFilter,
     LogRow,
     build_where,
     check_time_filters,
@@ -43,30 +43,15 @@ from forensic_aul.ops.query.reader import (
 log = logging.getLogger(__name__)
 
 __all__ = [
-    "LogFilters", "LogRow", "LogStore", "query_logs",
+    "LogFilter", "LogRow", "LogStore", "query_logs",
     "count_logs", "fetch_logs", "fetch_context",
 ]
 
 
 def query_logs(
     database: Path | str,
+    filters: LogFilter | None = None,
     *,
-    process: list[str] | str | None = None,
-    subsystem: list[str] | str | None = None,
-    category: list[str] | str | None = None,
-    level: list[str] | str | None = None,
-    message_prefix: str | None = None,
-    message_contains: str | None = None,
-    message_match: str | None = None,
-    format_str: str | None = None,
-    like: str | None = None,
-    time_from: str | None = None,
-    time_to: str | None = None,
-    last: str | None = None,
-    signature: list[str] | str | None = None,
-    action: str | None = None,
-    tag: list[str] | str | None = None,
-    annotated_only: bool = False,
     limit: int | None = None,
 ) -> Iterator[LogRow]:
     """Stream filtered log rows from *database* as :class:`LogRow` objects.
@@ -77,12 +62,13 @@ def query_logs(
 
         from forensic_aul import query_logs
 
-        for row in query_logs("case.db",
-                              subsystem="com.apple.rapport",
-                              message_prefix="Bonjour unauth peer found"):
+        for row in query_logs("case.db", LogFilter(
+                subsystem="com.apple.rapport",
+                message_prefix="Bonjour unauth peer found")):
             print(row.timestamp_iso, row.process, row.message)
 
-    Filter semantics: list-valued filters (*process*, *subsystem*, *category*,
+    *filters* is a :class:`LogFilter` (all rows when omitted). Filter semantics:
+    list-valued fields (*process*, *subsystem*, *category*,
     *level*, *signature*, *tag*) accept a single string or a list — values within a
     filter are OR-combined; different filters are AND-combined.
     *message_prefix* matches the composed message **literally** (``%``/``_``
@@ -112,24 +98,7 @@ def query_logs(
     if not db.is_file():
         raise FileNotFoundError(f"{db} is not a file")
 
-    filters = LogFilters(
-        time_from=time_from,
-        time_to=time_to,
-        last=last,
-        process=_as_list(process),
-        subsystem=_as_list(subsystem),
-        category=_as_list(category),
-        level=_as_list(level),
-        like=like,
-        message_prefix=message_prefix,
-        message_contains=message_contains,
-        message_match=message_match,
-        format_str=format_str,
-        signature=_as_list(signature),
-        action=action,
-        tag=_as_list(tag),
-        annotated_only=annotated_only,
-    )
+    filters = filters if filters is not None else LogFilter()
     # Reject a bad value now, before the caller starts iterating; the
     # archive-relative bound itself needs the open database (see _stream_rows).
     check_time_filters(filters)
@@ -138,7 +107,7 @@ def query_logs(
 
 def _stream_rows(
     db: Path,
-    filters: LogFilters,
+    filters: LogFilter,
     limit: int | None,
 ) -> Iterator[LogRow]:
     """Generator body of :func:`query_logs` — owns the database connection.
@@ -204,7 +173,7 @@ class LogStore:
     def close(self) -> None:
         self._conn.close()
 
-    def count(self, filters: LogFilters | None = None) -> int:
+    def count(self, filters: LogFilter | None = None) -> int:
         """Total logs matching *filters* — call once per filter change, then
         page with :meth:`fetch`.
 
@@ -212,12 +181,12 @@ class LogStore:
             ValueError: a filter value is malformed, an annotation filter is
                 used without KB tables, or ``message_match`` without an index.
         """
-        where, params = self._where(filters or LogFilters())
+        where, params = self._where(filters or LogFilter())
         return count_rows(self._conn, where, params)
 
     def fetch(
         self,
-        filters: LogFilters | None = None,
+        filters: LogFilter | None = None,
         *,
         offset: int = 0,
         limit: int = 500,
@@ -228,7 +197,7 @@ class LogStore:
         exact regardless of how many annotations a log carries. Rows come back
         ordered by (timestamp_unix_ns, id), consistent across pages.
         """
-        where, params = self._where(filters or LogFilters())
+        where, params = self._where(filters or LogFilter())
         return fetch_page(
             self._conn, where, params,
             has_kb=self.has_kb, offset=offset, limit=limit,
@@ -292,7 +261,7 @@ class LogStore:
             return []
         return [dict(zip(_ANNOTATION_KEYS, row)) for row in rows]
 
-    def _where(self, f: LogFilters) -> tuple[str, list]:
+    def _where(self, f: LogFilter) -> tuple[str, list]:
         """Shared filters → WHERE step behind :meth:`count` and :meth:`fetch`."""
         _require_kb_filters(self.has_kb, f)
         time_from_ns, time_to_ns = resolve_time_bounds(self._conn, f)
@@ -317,7 +286,7 @@ _ANNOTATIONS_SQL = """
 """
 
 
-def count_logs(database: Path | str, filters: LogFilters | None = None) -> int:
+def count_logs(database: Path | str, filters: LogFilter | None = None) -> int:
     """Total logs in *database* matching *filters* — the paging counterpart of
     :func:`fetch_logs`. One-shot convenience over :class:`LogStore`; a caller
     issuing several reads should hold its own store instead.
@@ -332,7 +301,7 @@ def count_logs(database: Path | str, filters: LogFilters | None = None) -> int:
 
 def fetch_logs(
     database: Path | str,
-    filters: LogFilters | None = None,
+    filters: LogFilter | None = None,
     *,
     offset: int = 0,
     limit: int = 500,
@@ -359,7 +328,7 @@ def fetch_context(
         return store.context(log_id, before=before, after=after)
 
 
-def _require_kb_filters(has_kb: bool, f: LogFilters) -> None:
+def _require_kb_filters(has_kb: bool, f: LogFilter) -> None:
     """Shared guard: annotation filters demand an annotated database."""
     if not has_kb and (f.signature or f.action or f.tag or f.annotated_only):
         raise ValueError("this database has no KB annotations — run `annotate` first")
@@ -378,10 +347,3 @@ def _ensure_views_best_effort(conn: sqlite3.Connection) -> None:
         ensure_views(conn)
     except sqlite3.Error as exc:
         log.debug("could not create read views (read-only database?): %s", exc)
-
-
-def _as_list(value: list[str] | str | None) -> list[str] | None:
-    """Accept a bare string where a list is expected (single-value convenience)."""
-    if value is None or isinstance(value, list):
-        return value
-    return [value]

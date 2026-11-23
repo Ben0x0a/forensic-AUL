@@ -131,9 +131,9 @@ for a filter set; `fetch_logs` gives one page. `offset`/`limit` count **logs**, 
 annotation-joined rows, so pages never drift.
 
 ```python
-from forensic_aul import LogFilters, count_logs, fetch_logs, fetch_context
+from forensic_aul import LogFilter, count_logs, fetch_logs, fetch_context
 
-filters = LogFilters(level=["Error", "Fault"], subsystem="com.apple.locationd")
+filters = LogFilter(level=["Error", "Fault"], subsystem="com.apple.locationd")
 
 total = count_logs("case.db", filters)                       # -> int
 page  = fetch_logs("case.db", filters, offset=0, limit=100)  # -> list[LogRow]
@@ -179,14 +179,13 @@ memory, yielding `LogRow` objects. The generator owns its connection and closes 
 when exhausted, garbage-collected, or abandoned.
 
 ```python
-from forensic_aul import query_logs
+from forensic_aul import LogFilter, query_logs
 
-for row in query_logs(
-        "case.db",
+for row in query_logs("case.db", LogFilter(
         subsystem="com.apple.rapport",
         message_prefix="Bonjour unauth peer found",   # literal prefix, %/_ escaped
         last="24h",
-        limit=1000):
+), limit=1000):
     print(row.timestamp_iso, row.process, row.pid, row.log_level, row.message)
     print(row.signature_ids)          # list[str] — knowledge-base signatures matched
     print(row.values_dict())          # {label: "value"} — extracted named values
@@ -216,22 +215,23 @@ inert). It requires an extract built with `fts=True` (the `run_extract` default)
 on a database without a usable index it raises `ValueError`.
 
 ```python
-rows = list(query_logs("case.db", message_match="airdrop transfer", limit=50))
+rows = list(query_logs("case.db", LogFilter(message_match="airdrop transfer"), limit=50))
 ```
 
 ---
 
 ## The filter vocabulary
 
-`LogFilters` is shared by the query layer and, extended as `ExportFilters`, by the
-exporter. Within a list field values are OR-combined; across fields they are
-AND-combined. List fields accept a bare string as a convenience in `query_logs`.
+`LogFilter` is the one row filter: `query_logs`, `count_logs` / `fetch_logs` /
+`LogStore` and `run_export` all take it. Within a list field values are
+OR-combined; across fields they are AND-combined. List fields accept a bare string
+(`LogFilter(process="locationd")`).
 
 | Field | Meaning |
 |---|---|
 | `time_from` / `time_to` | ISO 8601 bounds (lower inclusive, upper exclusive) |
 | `last` | shortcut for `time_from = <end of archive> - DURATION` (`10m`, `1h`, `24h`, `7d`); the end of the archive is the newest resolved timestamp in the database, never the current time |
-| `process`, `subsystem`, `level` | list filters on the lookup columns |
+| `process`, `subsystem`, `category`, `level` | list filters on the lookup columns |
 | `message_prefix` | literal prefix on the composed message (`%`/`_` escaped) |
 | `message_contains` | literal substring on the composed message |
 | `message_match` | FTS5 keyword search — needs a full-text index |
@@ -239,9 +239,9 @@ AND-combined. List fields accept a bare string as a convenience in `query_logs`.
 | `format_str` | exact match on the invariant format-string template |
 | `signature`, `action`, `tag`, `annotated_only` | annotation filters — need an annotated database |
 
-`ExportFilters` adds `fmt` (`"csv"` / `"json"` / `"jsonl"`; `None` infers from the
-output suffix) and `include_fields` (default `True` — emit the extracted-value
-columns/objects).
+`run_export` takes two output options next to the filter: `fmt` (`"csv"` /
+`"json"` / `"jsonl"`; `None` infers from the output suffix) and `include_fields`
+(default `True` — emit the extracted-value columns/objects).
 
 Matching on `format_str` is the most robust strategy where a format string exists,
 but two message classes have none worth matching: **dynamic messages** (no format
@@ -254,12 +254,12 @@ templates** like a bare `%{public}s`. For those, match the composed message with
 ## Export to CSV, JSON or JSONL
 
 ```python
-from forensic_aul import ExportFilters, run_export
+from forensic_aul import LogFilter, run_export
 
 out = run_export(
     Path("case.db"),
     Path("report.csv"),                # format inferred from the suffix
-    ExportFilters(level=["Error", "Fault"], annotated_only=True, last="7d"),
+    LogFilter(level=["Error", "Fault"], annotated_only=True, last="7d"),
 )
 print(out.rows, out.output_path, out.fmt)
 
@@ -267,7 +267,7 @@ print(out.rows, out.output_path, out.fmt)
 run_export(
     Path("case.db"),
     Path("report.out"),
-    ExportFilters(fmt="jsonl", include_fields=False),
+    fmt="jsonl", include_fields=False,
 )
 ```
 

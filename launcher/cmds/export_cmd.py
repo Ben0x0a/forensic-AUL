@@ -1,12 +1,12 @@
 """AUL Parser — ``export`` subcommand (CLI glue).
 
 Defines : the argparse wiring for ``export`` and a thin ``run(args)`` that maps
-          parsed arguments onto ``ExportFilters`` and delegates to the library
+          parsed arguments onto ``LogFilter`` and delegates to the library
           ``forensic_aul.ops.export.exporter.run_export``. All export logic lives in
           the library; this module only handles CLI concerns (flags, error → exit
           code, the final stdout summary line).
 Used by : launcher/cli.py (subcommand registration + dispatch).
-Uses    : forensic_aul.ops.export.exporter (run_export, ExportFilters).
+Uses    : forensic_aul.ops.export.exporter (run_export), forensic_aul (LogFilter).
 """
 
 from __future__ import annotations
@@ -91,11 +91,11 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def run(args: argparse.Namespace) -> int:
-    from forensic_aul.ops.export.exporter import ExportFilters, run_export
+    from forensic_aul import LogFilter
+    from forensic_aul.ops.export.exporter import run_export
     from forensic_aul.ops.export.report import format_export_result
 
-    filters = ExportFilters(
-        fmt=args.format,
+    filters = LogFilter(
         time_from=args.time_from,
         time_to=args.time_to,
         last=args.last,
@@ -107,11 +107,11 @@ def run(args: argparse.Namespace) -> int:
         action=args.action,
         tag=args.tag,
         annotated_only=args.annotated_only,
-        include_fields=args.include_fields,
     )
 
     try:
-        res = run_export(args.database, args.output, filters)
+        res = run_export(args.database, args.output, filters,
+                         fmt=args.format, include_fields=args.include_fields)
     except (FileNotFoundError, ValueError) as exc:
         log.error(f"error: {exc}")
         return 1

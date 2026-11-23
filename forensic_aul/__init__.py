@@ -44,14 +44,14 @@ from forensic_aul.ops.identify.results import IdentifyResults, ResultCounts
 from forensic_aul.ops.identify.workflow import run_identify_workflow
 
 # Filtered export to CSV / JSON / JSONL (knowledge-base aware)
-from forensic_aul.ops.export.exporter import ExportFilters, run_export
+from forensic_aul.ops.export.exporter import run_export
 
 # In-memory query API — same filter vocabulary as export, but yielding rows.
 # LogRow / v_logs (see engine/database/schema.py) are the stable read contract.
 # count_logs/fetch_logs page for table UIs; fetch_context gives the rows around
 # a line on the forensic timeline (event_order).
 from forensic_aul.ops.query import (
-    LogFilters,
+    LogFilter,
     LogRow,
     LogStore,
     count_logs,
@@ -147,12 +147,11 @@ __all__ = [
     "IdentifyResults",
     "ResultCounts",
     "run_export",
-    "ExportFilters",
     "query_logs",
     "count_logs",
     "fetch_logs",
     "fetch_context",
-    "LogFilters",
+    "LogFilter",
     "LogRow",
     "LogStore",
     "summarise",

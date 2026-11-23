@@ -150,11 +150,11 @@ handler covers "the library rejected the input / could not do the work", while
 genuine bugs (`AttributeError`, `sqlite3` internals, …) still propagate loudly.
 
 ```python
-from forensic_aul import CaseInfo, ForensicAULError, query_logs, run_extract
+from forensic_aul import CaseInfo, ForensicAULError, LogFilter, query_logs, run_extract
 
 try:
     res  = run_extract(src, db, CaseInfo(case_number="C1"))
-    rows = list(query_logs(res.db_path, subsystem="com.apple.locationd"))
+    rows = list(query_logs(res.db_path, LogFilter(subsystem="com.apple.locationd")))
 except ForensicAULError as exc:
     print(f"forensic_aul rejected the request: {exc}")
 ```

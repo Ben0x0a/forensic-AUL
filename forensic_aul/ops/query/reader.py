@@ -1,7 +1,7 @@
 """Shared read layer over an analysis database (filters → streamed log rows).
 
 Defines : the reusable read machinery consumed by every row-level reader —
-          ``LogFilters`` (the filter vocabulary), ``LogRow`` (one log entry with
+          ``LogFilter`` (the filter vocabulary), ``LogRow`` (one log entry with
           its annotations rolled up), ``build_where`` / ``resolve_time_bounds``
           (filters → SQL), ``has_kb_tables`` / ``has_fts_index`` /
           ``fts_match_query`` (capability probes + safe FTS query building),
@@ -35,12 +35,14 @@ log = logging.getLogger(__name__)
 # ── Filters ───────────────────────────────────────────────────────────────────
 
 @dataclass
-class LogFilters:
-    """Row filters shared by ``query_logs`` and ``run_export``.
+class LogFilter:
+    """The one row filter: ``query_logs``, ``count_logs`` / ``fetch_logs`` /
+    ``LogStore``, ``run_export``, the CLI and the GUI all take it.
 
     Independent of argparse so the read logic can be driven programmatically
     (GUI, scripts, tests) as well as from the CLI. List fields are OR-combined
-    within a field and AND-combined across fields.
+    within a field and AND-combined across fields; each also accepts a single
+    string (``LogFilter(process="locationd")``).
     """
 
     time_from: str | None = None        # ISO 8601 lower bound (inclusive)
@@ -77,6 +79,17 @@ class LogFilters:
     action: str | None = None           # case-insensitive substring of the annotation action
     tag: list[str] | None = None
     annotated_only: bool = False
+
+    def __post_init__(self) -> None:
+        # A bare string where a list is expected is one value, not its characters.
+        for name in _LIST_FIELDS:
+            value = getattr(self, name)
+            if isinstance(value, str):
+                setattr(self, name, [value])
+
+
+# The list-valued LogFilter fields (single-string convenience in __post_init__).
+_LIST_FIELDS = ("process", "subsystem", "category", "level", "signature", "tag")
 
 
 # ── Filter construction ──────────────────────────────────────────────────────
@@ -137,7 +150,7 @@ def fts_match_query(text: str) -> str | None:
     return " ".join(quoted) if quoted else None
 
 
-def check_time_filters(f: LogFilters) -> None:
+def check_time_filters(f: LogFilter) -> None:
     """Validate the time filters without touching a database.
 
     Lets a caller reject a bad value up front (before opening or iterating),
@@ -168,7 +181,7 @@ def archive_end_ns(conn: sqlite3.Connection) -> int | None:
 
 
 def resolve_time_bounds(
-    conn: sqlite3.Connection, f: LogFilters,
+    conn: sqlite3.Connection, f: LogFilter,
 ) -> tuple[int | None, int | None]:
     """Resolve the time filters to (from_ns, to_ns) unix-nanosecond bounds.
 
@@ -202,7 +215,7 @@ def _last_seconds(value: str) -> int:
 
 def build_where(
     conn: sqlite3.Connection,
-    f: LogFilters,
+    f: LogFilter,
     time_from_ns: int | None,
     time_to_ns: int | None,
 ) -> tuple[str, list]:

@@ -1,8 +1,8 @@
 """Filtered export of an analysis database to CSV / JSON / JSONL.
 
-Defines : the export logic — ``run_export`` plus the ``ExportFilters`` container
-          that decouples it from any CLI argument parser, and the format-writer
-          registry (``export_formats``). Row filtering/streaming is delegated to
+Defines : the export logic — ``run_export`` (rows chosen by the shared
+          ``LogFilter``, output by ``fmt`` / ``include_fields``) and the
+          format-writer registry (``export_formats``). Row filtering/streaming is delegated to
           the shared read layer (``ops/query/reader.py``) so a filter behaves
           identically in ``run_export`` and ``query_logs``. Knowledge-base
           aware: when annotations exist on the rows being exported, every
@@ -39,7 +39,7 @@ from typing import Callable, Iterator
 from forensic_aul.engine.database.access import open_analysis_database
 from forensic_aul.outcomes import ExportResult
 from forensic_aul.ops.query.reader import (
-    LogFilters,
+    LogFilter,
     LogRow,
     build_where,
     check_time_filters,
@@ -54,33 +54,23 @@ log = logging.getLogger(__name__)
 
 # ── Filters / output options ──────────────────────────────────────────────────
 
-@dataclass
-class ExportFilters(LogFilters):
-    """Filters and output options for :func:`run_export`.
-
-    Extends the shared :class:`~forensic_aul.ops.query.reader.LogFilters`
-    vocabulary with the two export-only knobs (output format, extracted-field
-    emission). Mirrors the CLI flags but is independent of argparse so the
-    export logic can be driven programmatically (GUI, scripts, tests) as well
-    as from the CLI.
-    """
-
-    fmt: str | None = None              # a key of _WRITERS; None → infer from output suffix
-    include_fields: bool = True         # emit extracted_fields columns/objects
-
-
 # ── Public entry point ────────────────────────────────────────────────────────
 
 def run_export(
     database: Path | str,
     output: Path | str,
-    filters: ExportFilters | None = None,
+    filters: LogFilter | None = None,
+    *,
+    fmt: str | None = None,
+    include_fields: bool = True,
 ) -> ExportResult:
     """Export rows from *database* to *output*.
 
     *database* is a SQLite store produced by ``run_extract`` (and optionally
-    annotated by ``annotate_database``). The output format is taken from
-    ``filters.fmt`` or inferred from *output*'s suffix.
+    annotated by ``annotate_database``). *filters* selects the rows (the same
+    :class:`LogFilter` as ``query_logs``). The output format is *fmt* (a key of
+    ``export_formats()``) or inferred from *output*'s suffix; *include_fields*
+    emits the extracted-value columns (CSV) / object (JSON).
 
     Returns:
         An :class:`~forensic_aul.outcomes.ExportResult` with the ``output_path``,
@@ -95,11 +85,11 @@ def run_export(
     """
     # Library callers routinely pass plain strings; normalise once, here.
     database, output = Path(database), Path(output)
-    f = filters or ExportFilters()
+    f = filters if filters is not None else LogFilter()
 
-    fmt = f.fmt or _infer_format(output)
+    fmt = fmt or _infer_format(output)
     if fmt is None:
-        raise ValueError(f"cannot infer format from {output.name}; set ExportFilters.fmt")
+        raise ValueError(f"cannot infer format from {output.name}; pass fmt=")
     if fmt not in _WRITERS:
         raise ValueError(f"unknown export format {fmt!r}; expected one of {export_formats()}")
 
@@ -110,7 +100,7 @@ def run_export(
     conn = open_analysis_database(database)
     try:
         time_from_ns, time_to_ns = resolve_time_bounds(conn, f)
-        rows = _run(conn, output, f, fmt, time_from_ns, time_to_ns)
+        rows = _run(conn, output, f, fmt, include_fields, time_from_ns, time_to_ns)
     finally:
         conn.close()
     return ExportResult(output_path=output, rows=rows, fmt=fmt)
@@ -119,8 +109,9 @@ def run_export(
 def _run(
     conn: sqlite3.Connection,
     output: Path,
-    f: ExportFilters,
+    f: LogFilter,
     fmt: str,
+    include_fields: bool,
     time_from_ns: int | None,
     time_to_ns: int | None,
 ) -> int:
@@ -133,7 +124,7 @@ def _run(
     where, params = build_where(conn, f, time_from_ns, time_to_ns)
 
     # Discover the universe of extracted labels (only relevant when include_fields).
-    include_fields = f.include_fields and has_kb
+    include_fields = include_fields and has_kb
     labels: list[str] = []
     if include_fields:
         labels = discover_labels(conn, where, params)
@@ -270,7 +261,7 @@ _WRITERS: dict[str, _Writer] = {
 
 
 def export_formats() -> tuple[str, ...]:
-    """The registered format names (the valid values of ``ExportFilters.fmt``)."""
+    """The registered format names (the valid values of run_export's ``fmt``)."""
     return tuple(_WRITERS)
 
 

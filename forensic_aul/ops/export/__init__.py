@@ -10,5 +10,6 @@ Uses    : the standard library only (sqlite3, csv, json).
 
 Public API:
 
-    from forensic_aul.ops.export.exporter import run_export, ExportFilters
+    from forensic_aul import LogFilter, run_export
+    run_export(db, "out.csv", LogFilter(level="Error"), fmt="csv")
 """

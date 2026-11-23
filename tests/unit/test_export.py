@@ -19,11 +19,10 @@ from forensic_aul.ops.annotation.matcher import init_annotation_schema
 from forensic_aul.engine.database.ordering import assign_ordering
 from forensic_aul.engine.database.schema import apply_pragmas, init_schema
 from forensic_aul.ops.export.exporter import (
-    ExportFilters,
     _infer_format,
     run_export,
 )
-from forensic_aul.ops.query.reader import _to_unix_ns
+from forensic_aul.ops.query.reader import LogFilter, _to_unix_ns
 from forensic_aul.engine.utils.time import parse_duration_seconds as _parse_duration_seconds
 
 # Wall-clock base: 2024-01-15T12:00:01Z, in nanoseconds since the Unix epoch.
@@ -187,7 +186,7 @@ class TestBasicExport:
         db = tmp_path / "a.db"
         _make_db(db)
         out = tmp_path / "out.txt"  # unknown suffix
-        n = run_export(db, out, ExportFilters(fmt="csv"))
+        n = run_export(db, out, fmt="csv")
         assert n.rows == 3
         header, _ = _read_csv(out)
         assert header[0] == "timestamp"
@@ -210,17 +209,17 @@ class TestErrors:
         db = tmp_path / "a.db"
         _make_db(db, with_kb=False)
         with pytest.raises(ValueError):
-            run_export(db, tmp_path / "out.csv", ExportFilters(annotated_only=True))
+            run_export(db, tmp_path / "out.csv", LogFilter(annotated_only=True))
 
 
 # ── Log-column filters ────────────────────────────────────────────────────────
 
-class TestLogFilters:
+class TestLogFilter:
     def test_process_filter(self, tmp_path):
         db = tmp_path / "a.db"
         _make_db(db)
         out = tmp_path / "out.csv"
-        n = run_export(db, out, ExportFilters(process=["syslogd"]))
+        n = run_export(db, out, LogFilter(process=["syslogd"]))
         assert n.rows == 2  # id 1 and 3
         header, data = _read_csv(out)
         assert {r[header.index("process")] for r in data} == {"syslogd"}
@@ -229,7 +228,7 @@ class TestLogFilters:
         db = tmp_path / "a.db"
         _make_db(db)
         out = tmp_path / "out.csv"
-        n = run_export(db, out, ExportFilters(level=["Error"]))
+        n = run_export(db, out, LogFilter(level=["Error"]))
         assert n.rows == 1
         header, data = _read_csv(out)
         assert data[0][header.index("message")] == "Location updated"
@@ -238,7 +237,7 @@ class TestLogFilters:
         db = tmp_path / "a.db"
         _make_db(db)
         out = tmp_path / "out.csv"
-        n = run_export(db, out, ExportFilters(like="%Location%"))
+        n = run_export(db, out, LogFilter(like="%Location%"))
         assert n.rows == 1
 
     def test_time_window(self, tmp_path):
@@ -246,9 +245,9 @@ class TestLogFilters:
         _make_db(db)
         out = tmp_path / "out.csv"
         # from the 2nd row's instant (inclusive) → drops the 1st row.
-        n = run_export(db, out, ExportFilters(time_from="2024-01-15T12:00:02"))
+        n = run_export(db, out, LogFilter(time_from="2024-01-15T12:00:02"))
         assert n.rows == 2
-        n2 = run_export(db, out, ExportFilters(
+        n2 = run_export(db, out, LogFilter(
             time_from="2024-01-15T12:00:02", time_to="2024-01-15T12:00:03"))
         assert n2.rows == 1  # upper bound exclusive → only the 2nd row
 
@@ -256,7 +255,7 @@ class TestLogFilters:
         db = tmp_path / "a.db"
         _make_db(db)
         out = tmp_path / "out.csv"
-        n = run_export(db, out, ExportFilters(process=["does-not-exist"]))
+        n = run_export(db, out, LogFilter(process=["does-not-exist"]))
         assert n.rows == 0
 
 
@@ -286,7 +285,7 @@ class TestKbExport:
         db = tmp_path / "a.db"
         _make_db(db, with_kb=True, annotate=True)
         out = tmp_path / "out.csv"
-        run_export(db, out, ExportFilters(include_fields=False))
+        run_export(db, out, include_fields=False)
         header, _ = _read_csv(out)
         assert "lat" not in header and "lon" not in header
 
@@ -304,7 +303,7 @@ class TestKbExport:
         db = tmp_path / "a.db"
         _make_db(db, with_kb=True, annotate=True)
         out = tmp_path / "out.csv"
-        n = run_export(db, out, ExportFilters(annotated_only=True))
+        n = run_export(db, out, LogFilter(annotated_only=True))
         assert n.rows == 1
         header, data = _read_csv(out)
         assert data[0][header.index("message")] == "Location updated"
@@ -313,21 +312,21 @@ class TestKbExport:
         db = tmp_path / "a.db"
         _make_db(db, with_kb=True, annotate=True)
         out = tmp_path / "out.csv"
-        assert run_export(db, out, ExportFilters(signature=["loc.update"])).rows == 1
-        assert run_export(db, out, ExportFilters(signature=["nope"])).rows == 0
+        assert run_export(db, out, LogFilter(signature=["loc.update"])).rows == 1
+        assert run_export(db, out, LogFilter(signature=["nope"])).rows == 0
 
     def test_action_substring_filter(self, tmp_path):
         db = tmp_path / "a.db"
         _make_db(db, with_kb=True, annotate=True)
         out = tmp_path / "out.csv"
-        assert run_export(db, out, ExportFilters(action="location")).rows == 1  # case-insensitive
+        assert run_export(db, out, LogFilter(action="location")).rows == 1  # case-insensitive
 
     def test_tag_filter(self, tmp_path):
         db = tmp_path / "a.db"
         _make_db(db, with_kb=True, annotate=True)
         out = tmp_path / "out.csv"
-        assert run_export(db, out, ExportFilters(tag=["privacy"])).rows == 1
-        assert run_export(db, out, ExportFilters(tag=["nonexistent"])).rows == 0
+        assert run_export(db, out, LogFilter(tag=["privacy"])).rows == 1
+        assert run_export(db, out, LogFilter(tag=["nonexistent"])).rows == 0
 
 
 # ── source_order / source_file (L10 completion) ───────────────────────────────
@@ -459,7 +458,7 @@ def _db_with_unresolved(tmp_path) -> Path:
 
 
 def _export_rows(db: Path, out: Path, **filters) -> list[dict]:
-    run_export(db, out, ExportFilters(**filters))
+    run_export(db, out, LogFilter(**filters))
     return list(csv.DictReader(out.read_text(encoding="utf-8-sig").splitlines()))
 
 

@@ -30,7 +30,8 @@ from PySide6.QtWidgets import (
 )
 
 from forensic_aul.ops.acquisition.report import load_sidecar_for
-from forensic_aul.ops.export.exporter import ExportFilters, run_export
+from forensic_aul.ops.export.exporter import run_export
+from forensic_aul.ops.query.reader import LogFilter
 from gui.controllers import phrase_failure
 from gui.recent_store import RecentStore
 from gui.settings_store import SettingsStore
@@ -223,18 +224,17 @@ class ExportScreen(OperationScreen):
             self.show_result(False, "Choose an output file.")
             return
         db, out = Path(self._db.path()), Path(self._out.path())
-        filters = ExportFilters(
+        filters = LogFilter(
             process=_csv_list(self._process.text()),
             subsystem=_csv_list(self._subsystem.text()),
             level=_csv_list(self._level.text()),
             like=self._like.text().strip() or None,
             last=self._last.text().strip() or None,
-            fmt=self._fmt.value,
-            include_fields=True,
         )
+        fmt = self._fmt.value
         self._export_btn.setEnabled(False)
         self._export_btn.setText("Exporting…")
-        self.run_task(lambda: run_export(db, out, filters), self._on_done, self._on_failed)
+        self.run_task(lambda: run_export(db, out, filters, fmt=fmt), self._on_done, self._on_failed)
 
     def _on_done(self, result: Any) -> None:
         self._reset_button()

@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from forensic_aul import LogRow, query_logs
+from forensic_aul import LogFilter, LogRow, query_logs
 from forensic_aul.engine.database.schema import apply_pragmas, ensure_views, init_schema
 from forensic_aul.ops.annotation.matcher import init_annotation_schema
 
@@ -116,7 +116,7 @@ class TestQueryBasics:
         assert all(isinstance(r, LogRow) for r in rows)
 
     def test_row_fields(self, db):
-        row = next(iter(query_logs(db, process="locationd")))
+        row = next(iter(query_logs(db, LogFilter(process="locationd"))))
         assert row.process == "locationd"
         assert row.pid == 55 and row.tid == 102
         assert row.log_level == "Error" and row.event_type == "Log"
@@ -127,7 +127,7 @@ class TestQueryBasics:
         assert row.signature_ids == [] and row.values_dict() == {}
 
     def test_format_string_exposed(self, db):
-        rows = list(query_logs(db, process="syslogd", level="Default"))
+        rows = list(query_logs(db, LogFilter(process="syslogd", level="Default")))
         assert rows[0].format_string == "Hello %@"
 
     def test_limit_counts_logs(self, db):
@@ -145,12 +145,12 @@ class TestQueryBasics:
 
 class TestQueryFilters:
     def test_single_string_accepted_for_list_filters(self, db):
-        assert len(list(query_logs(db, process="syslogd"))) == 3
-        assert len(list(query_logs(db, subsystem="com.apple.locationd"))) == 1
-        assert len(list(query_logs(db, level=["Error", "Info"]))) == 2
+        assert len(list(query_logs(db, LogFilter(process="syslogd")))) == 3
+        assert len(list(query_logs(db, LogFilter(subsystem="com.apple.locationd")))) == 1
+        assert len(list(query_logs(db, LogFilter(level=["Error", "Info"])))) == 2
 
     def test_message_prefix(self, db):
-        assert [r.message for r in query_logs(db, message_prefix="Hello")] == [
+        assert [r.message for r in query_logs(db, LogFilter(message_prefix="Hello"))] == [
             "Hello world", "Hello again",
         ]
 
@@ -158,27 +158,26 @@ class TestQueryFilters:
         # The literal "%"/"_" in the prefix must match themselves, not act as
         # wildcards: "progress 100%" may only match row 4, and a wildcard-style
         # prefix must not suddenly match everything.
-        assert len(list(query_logs(db, message_prefix="progress 100%_x"))) == 1
-        assert len(list(query_logs(db, message_prefix="%"))) == 0
-        assert len(list(query_logs(db, message_prefix="progress 100%Z"))) == 0
+        assert len(list(query_logs(db, LogFilter(message_prefix="progress 100%_x")))) == 1
+        assert len(list(query_logs(db, LogFilter(message_prefix="%")))) == 0
+        assert len(list(query_logs(db, LogFilter(message_prefix="progress 100%Z")))) == 0
 
     def test_format_str_exact(self, db):
-        rows = list(query_logs(db, format_str="Hello %@"))
+        rows = list(query_logs(db, LogFilter(format_str="Hello %@")))
         assert [r.message for r in rows] == ["Hello world", "Hello again"]
-        assert list(query_logs(db, format_str="no such template")) == []
+        assert list(query_logs(db, LogFilter(format_str="no such template"))) == []
 
     def test_message_contains_is_literal(self, db):
         # Substring anywhere, with %/_ matching themselves (unlike like).
-        assert len(list(query_logs(db, message_contains="100%_x"))) == 1
-        assert len(list(query_logs(db, message_contains="%"))) == 1  # the literal % row
-        assert [r.message for r in query_logs(db, message_contains="again")] == ["Hello again"]
+        assert len(list(query_logs(db, LogFilter(message_contains="100%_x")))) == 1
+        assert len(list(query_logs(db, LogFilter(message_contains="%")))) == 1  # the literal % row
+        assert [r.message for r in query_logs(db, LogFilter(message_contains="again"))] == ["Hello again"]
 
     def test_like_stays_raw_like(self, db):
-        assert len(list(query_logs(db, like="%Location%"))) == 1
+        assert len(list(query_logs(db, LogFilter(like="%Location%")))) == 1
 
     def test_time_window(self, db):
-        rows = list(query_logs(db, time_from="2024-01-15T12:00:02",
-                               time_to="2024-01-15T12:00:03"))
+        rows = list(query_logs(db, LogFilter(time_from="2024-01-15T12:00:02", time_to="2024-01-15T12:00:03")))
         assert [r.message for r in rows] == ["Location updated"]
 
 
@@ -186,16 +185,16 @@ class TestQueryFilters:
 
 class TestQueryKb:
     def test_annotations_rolled_up(self, kb_db):
-        row = next(iter(query_logs(kb_db, annotated_only=True)))
+        row = next(iter(query_logs(kb_db, LogFilter(annotated_only=True))))
         assert row.message == "Location updated"
         assert row.signature_ids == ["loc.update"]
         assert row.values_dict() == {"lat": "48.8", "lon": "2.3"}
         assert row.value_for("lat") == "48.8" and row.value_for("absent") == ""
 
     def test_signature_and_tag_filters(self, kb_db):
-        assert len(list(query_logs(kb_db, signature="loc.update"))) == 1
-        assert len(list(query_logs(kb_db, tag="privacy"))) == 1
-        assert len(list(query_logs(kb_db, tag="nonexistent"))) == 0
+        assert len(list(query_logs(kb_db, LogFilter(signature="loc.update")))) == 1
+        assert len(list(query_logs(kb_db, LogFilter(tag="privacy")))) == 1
+        assert len(list(query_logs(kb_db, LogFilter(tag="nonexistent")))) == 0
 
 
 # ── Errors ────────────────────────────────────────────────────────────────────
@@ -208,17 +207,17 @@ class TestQueryErrors:
 
     def test_bad_duration_raises_eagerly(self, db):
         with pytest.raises(ValueError):
-            query_logs(db, last="10x")
+            query_logs(db, LogFilter(last="10x"))
 
 
 class TestLastWindow:
     def test_last_is_relative_to_the_end_of_the_archive(self, db):
         # Rows at +0/+1/+2/+3 s (Jan 2024): "1s" back from the newest = last two.
-        rows = list(query_logs(db, last="1s"))
+        rows = list(query_logs(db, LogFilter(last="1s")))
         assert [r.message for r in rows] == ["Hello again", "progress 100%_x done"]
 
     def test_kb_filter_without_kb_raises_on_iteration(self, db):
-        it = query_logs(db, annotated_only=True)
+        it = query_logs(db, LogFilter(annotated_only=True))
         with pytest.raises(ValueError):
             next(it)
 
@@ -269,11 +268,11 @@ class TestVLogsView:
 
 class TestPagedAccess:
     def test_count_matches_query(self, db):
-        from forensic_aul import LogFilters, count_logs
+        from forensic_aul import LogFilter, count_logs
 
         assert count_logs(db) == 4
-        assert count_logs(db, LogFilters(process=["syslogd"])) == 3
-        assert count_logs(db, LogFilters(process=["absent"])) == 0
+        assert count_logs(db, LogFilter(process=["syslogd"])) == 3
+        assert count_logs(db, LogFilter(process=["absent"])) == 0
 
     def test_fetch_logs_pages_are_exact_and_ordered(self, db):
         from forensic_aul import fetch_logs
@@ -307,7 +306,7 @@ class TestPagedAccess:
         conn.commit()
         conn.close()
 
-        anchor = next(iter(query_logs(db, message_prefix="Hello again")))
+        anchor = next(iter(query_logs(db, LogFilter(message_prefix="Hello again"))))
         ctx = fetch_context(db, anchor.log_id, before=10, after=10)
         assert [r.message for r in ctx] == ["Location updated", "Hello again", "progress 100%_x done"]
         assert any(r.log_id == anchor.log_id for r in ctx)
@@ -326,25 +325,25 @@ class TestPagedAccess:
 
 class TestMessageMatch:
     def test_keyword_match_is_case_insensitive_and_anywhere(self, db):
-        rows = list(query_logs(db, message_match="hello"))
+        rows = list(query_logs(db, LogFilter(message_match="hello")))
         assert [r.log_id for r in rows] == [1, 3]
 
     def test_terms_are_and_combined(self, db):
-        rows = list(query_logs(db, message_match="hello world"))
+        rows = list(query_logs(db, LogFilter(message_match="hello world")))
         assert [r.log_id for r in rows] == [1]
 
     def test_fts_query_syntax_is_inert(self, db):
         # OR must be a literal term (no message contains it), never an operator;
         # quotes / NEAR / stars must not raise an FTS syntax error either.
-        assert list(query_logs(db, message_match="hello OR world")) == []
-        assert list(query_logs(db, message_match='NEAR("hello" "world")')) == []
+        assert list(query_logs(db, LogFilter(message_match="hello OR world"))) == []
+        assert list(query_logs(db, LogFilter(message_match='NEAR("hello" "world")'))) == []
         # A dangling quote / star must not raise an FTS syntax error; the star
         # is a separator to the tokeniser, so this is the keyword "hello".
-        rows = list(query_logs(db, message_match='"hello*'))
+        rows = list(query_logs(db, LogFilter(message_match='"hello*')))
         assert [r.log_id for r in rows] == [1, 3]
 
     def test_punctuation_only_terms_mean_no_filter(self, db):
-        assert len(list(query_logs(db, message_match="%%% ..."))) == 4
+        assert len(list(query_logs(db, LogFilter(message_match="%%% ...")))) == 4
 
     def test_no_fts_index_raises(self, db):
         conn = sqlite3.connect(str(db))
@@ -354,7 +353,7 @@ class TestMessageMatch:
         conn.commit()
         conn.close()
         with pytest.raises(ValueError, match="full-text index"):
-            list(query_logs(db, message_match="hello"))
+            list(query_logs(db, LogFilter(message_match="hello")))
 
     def test_empty_fts_index_with_rows_counts_as_absent(self, db):
         # An interrupted --fast-fts extract leaves logs_fts empty while logs has
@@ -364,7 +363,7 @@ class TestMessageMatch:
         conn.commit()
         conn.close()
         with pytest.raises(ValueError, match="full-text index"):
-            list(query_logs(db, message_match="hello"))
+            list(query_logs(db, LogFilter(message_match="hello")))
 
     def test_fts_match_query_quoting(self):
         from forensic_aul.ops.query.reader import fts_match_query
@@ -377,13 +376,13 @@ class TestMessageMatch:
 
 class TestLogStore:
     def test_capabilities_count_and_paging(self, kb_db):
-        from forensic_aul import LogFilters, LogStore
+        from forensic_aul import LogFilter, LogStore
 
         with LogStore(kb_db) as store:
             assert store.has_kb is True
             assert store.has_fts is True
             assert store.count() == 4
-            assert store.count(LogFilters(process=["syslogd"])) == 3
+            assert store.count(LogFilter(process=["syslogd"])) == 3
             page = store.fetch(offset=2, limit=2)
             assert [r.message for r in page] == ["Hello again", "progress 100%_x done"]
 
@@ -401,12 +400,12 @@ class TestLogStore:
             assert [r.log_id for r in ctx] == [2, 3, 4]
 
     def test_annotation_filter_without_kb_raises(self, db):
-        from forensic_aul import LogFilters, LogStore
+        from forensic_aul import LogFilter, LogStore
 
         with LogStore(db) as store:
             assert store.has_kb is False
             with pytest.raises(ValueError, match="no KB annotations"):
-                store.count(LogFilters(annotated_only=True))
+                store.count(LogFilter(annotated_only=True))
 
 
 # ── Unmatched filter values are reported (L11 residue) ────────────────────────
@@ -421,7 +420,7 @@ def test_unknown_filter_value_warns_and_returns_nothing(tmp_path, caplog):
     db = tmp_path / "warn.db"
     _make_db(db)
     with caplog.at_level(logging.WARNING):
-        rows = list(query_logs(db, process="syslgod"))       # typo
+        rows = list(query_logs(db, LogFilter(process="syslgod")))       # typo
     assert rows == []
     warnings = " ".join(r.message for r in caplog.records if r.levelno >= logging.WARNING)
     assert "syslgod" in warnings
@@ -436,7 +435,7 @@ def test_partially_unknown_filter_warns_but_still_filters(tmp_path, caplog):
     db = tmp_path / "partial.db"
     _make_db(db)
     with caplog.at_level(logging.WARNING):
-        rows = list(query_logs(db, process=["syslogd", "syslgod"]))
+        rows = list(query_logs(db, LogFilter(process=["syslogd", "syslgod"])))
     assert rows, "the valid name must still match"
     warnings = " ".join(r.message for r in caplog.records if r.levelno >= logging.WARNING)
     assert "syslgod" in warnings and "still apply" in warnings
@@ -448,6 +447,12 @@ def test_known_filter_value_warns_about_nothing(tmp_path, caplog):
     db = tmp_path / "clean.db"
     _make_db(db)
     with caplog.at_level(logging.WARNING):
-        rows = list(query_logs(db, process="syslogd"))
+        rows = list(query_logs(db, LogFilter(process="syslogd")))
     assert rows
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def test_log_filter_takes_a_single_string_as_one_value():
+    """A bare string is one value, never a list of its characters."""
+    f = LogFilter(process="locationd", level=["Error", "Fault"], tag="privacy")
+    assert (f.process, f.level, f.tag) == (["locationd"], ["Error", "Fault"], ["privacy"])
