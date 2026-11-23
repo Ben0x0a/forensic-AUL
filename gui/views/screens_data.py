@@ -1,19 +1,16 @@
 """Data screens: Export (step 4) and Verify hash.
 
-Defines : ExportScreen — export filtered rows to CSV / JSON / JSONL via
-          ``forensic_aul.ops.export.run_export``; VerifyHashScreen — recompute a
+Defines : ExportScreen — export filtered rows to CSV / JSON / JSONL (through
+          ExportController); VerifyHashScreen — recompute a
           file's digest (SHA-256 / SHA-1 / MD5) and compare it to an expected
           value, keeping a session table of results.
 Used by : gui.views.shell (stacked screens).
 Uses    : PySide6, gui.views.screen_base, gui.widgets.components,
-          gui.widgets.path_picker, gui.controllers (phrase_failure),
-          forensic_aul.ops.export, hashlib.
+          gui.widgets.path_picker, gui.controllers.data (every library call).
 """
 
 from __future__ import annotations
 
-import hashlib
-from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import Qt
@@ -29,10 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from forensic_aul import load_sidecar_for
-from forensic_aul import run_export
-from forensic_aul import LogFilter
-from gui.controllers import phrase_failure
+from gui.controllers.data import ExportController, VerifyHashController
 from gui.recent_store import RecentStore
 from gui.settings_store import SettingsStore
 from gui.views.screen_base import OperationScreen, RecentList
@@ -58,8 +52,6 @@ _DB_FILTER = "SQLite database (*.db *.sqlite *.sqlite3);;All files (*)"
 # Output filter per format keeps the save dialog honest about the extension.
 _OUT_FILTER = "CSV (*.csv);;JSON (*.json);;JSON Lines (*.jsonl)"
 
-# Read files in chunks so hashing a multi-GB image never loads it whole.
-_HASH_CHUNK = 1 << 20  # 1 MiB
 
 
 # ── Selectable choice cards ─────────────────────────────────────────────────────
@@ -125,6 +117,7 @@ class ExportScreen(OperationScreen):
         self._settings = settings
         self._recents = recents
         self.navigate = None
+        self._ctrl = ExportController(self)
 
         self.content.addWidget(eyebrow("Export"))
         self.content.addWidget(h1("Export from a SQLite database"))
@@ -217,35 +210,18 @@ class ExportScreen(OperationScreen):
         self._db.set_path(path)
 
     def _start(self) -> None:
-        if not self._db.path():
-            self.show_result(False, "Choose a database to export.")
-            return
-        if not self._out.path():
-            self.show_result(False, "Choose an output file.")
-            return
-        db, out = Path(self._db.path()), Path(self._out.path())
-        filters = LogFilter(
-            process=_csv_list(self._process.text()),
-            subsystem=_csv_list(self._subsystem.text()),
-            level=_csv_list(self._level.text()),
-            like=self._like.text().strip() or None,
-            last=self._last.text().strip() or None,
+        self._ctrl.start(
+            db=self._db.path(), out=self._out.path(), fmt=self._fmt.value,
+            process=self._process.text(), subsystem=self._subsystem.text(),
+            level=self._level.text(), like=self._like.text(), last=self._last.text(),
         )
-        fmt = self._fmt.value
-        self._export_btn.setEnabled(False)
-        self._export_btn.setText("Exporting…")
-        self.run_task(lambda: run_export(db, out, filters, fmt=fmt), self._on_done, self._on_failed)
 
-    def _on_done(self, result: Any) -> None:
-        self._reset_button()
-        rows = getattr(result, "rows", 0)
-        fmt = getattr(result, "fmt", "") or self._fmt.value
-        out = str(getattr(result, "output_path", self._out.path()))
-        self.show_result(True, f"Exported {rows:,} row(s) as {fmt.upper()} → {Path(out).name}")
-
-    def _on_failed(self, exc: BaseException) -> None:
-        self._reset_button()
-        self.show_result(False, phrase_failure(exc) or "export failed")
+    def set_exporting(self, running: bool) -> None:
+        if running:
+            self._export_btn.setEnabled(False)
+            self._export_btn.setText("Exporting…")
+        else:
+            self._reset_button()
 
     def _reset_button(self) -> None:
         self._export_btn.setEnabled(True)
@@ -266,6 +242,7 @@ class VerifyHashScreen(OperationScreen):
         self._settings = settings
         self._recents = recents
         self._last_computed = ""
+        self._ctrl = VerifyHashController(self)
 
         self.content.addWidget(eyebrow("Validate tools"))
         self.content.addWidget(h1("Hash verification"))
@@ -329,10 +306,7 @@ class VerifyHashScreen(OperationScreen):
         self._last_sidecar_src = src
         if not src or self._expected.text().strip():
             return  # nothing selected, or the analyst already typed a digest
-        report = load_sidecar_for(Path(src))
-        if report is None:
-            return
-        sha = (report.get("acquisition") or {}).get("logarchive_sha256")
+        sha = self._ctrl.expected_from_sidecar(src)
         if sha:
             self._expected.setText(sha)
             # The sidecar records a SHA-256 content hash — match the algorithm.
@@ -341,50 +315,17 @@ class VerifyHashScreen(OperationScreen):
                 self._algo.setCurrentIndex(index)
 
     def _start(self) -> None:
-        path = self._file.path()
-        if not path:
-            return
-        algo = self._algo.currentData()
-        # Captured now, not re-read from the widgets once the hash finishes: a
-        # large file can take a while to hash, and the analyst is free to edit
-        # File / Expected hash while it runs. Reading the widgets afterwards
-        # would label the result row with whatever is in the field *then* —
-        # silently attributing the just-computed digest to a different file.
-        name = Path(path).name
-        expected = _normalise_hash(self._expected.text())
-        self._run_btn.setEnabled(False)
-        self._run_btn.setText("Hashing…")
-        self.run_task(
-            lambda: _hash_file(Path(path), algo),
-            lambda computed: self._on_done(name, expected, computed),
-            lambda exc: self._on_failed(name, exc),
-        )
+        self._ctrl.start(path=self._file.path(), algo=self._algo.currentData(),
+                         expected=self._expected.text())
 
-    def _on_done(self, name: str, expected: str, computed: str) -> None:
-        self._run_btn.setEnabled(True)
-        self._run_btn.setText("Recompute & compare")
-        self._last_computed = computed
-        self._copy_btn.setEnabled(True)
-        if not expected:
-            status = ("INFO", "info")
-        elif expected == computed.lower():
-            status = ("OK", "ok")
-        else:
-            status = ("MISMATCH", "err")
-        self._add_row(name, computed, expected, status)
+    def set_hashing(self, running: bool, *, computed: str = "") -> None:
+        self._run_btn.setEnabled(not running)
+        self._run_btn.setText("Hashing…" if running else "Recompute & compare")
+        if computed:
+            self._last_computed = computed
+            self._copy_btn.setEnabled(True)
 
-    def _on_failed(self, name: str, exc: BaseException) -> None:
-        self._run_btn.setEnabled(True)
-        self._run_btn.setText("Recompute & compare")
-        # WHY a tooltip, not a discarded reason (the previous behaviour): a bare
-        # ERROR pill gives the analyst nothing to act on — permission denied,
-        # file vanished mid-run, and a read error all look identical. The full
-        # traceback is also in the log panel; this puts the short, GUI-phrased
-        # reason where the analyst is already looking.
-        reason = phrase_failure(exc) or "hashing failed"
-        self._add_row(name, "—", "—", ("ERROR", "err"), tooltip=reason)
-
-    def _add_row(
+    def add_row(
         self,
         name: str,
         computed: str,
@@ -417,23 +358,5 @@ class VerifyHashScreen(OperationScreen):
 
 # ── Helpers ─────────────────────────────────────────────────────────────────────
 
-def _hash_file(path: Path, algo: str) -> str:
-    """Stream *path* through *algo* (sha256/sha1/md5) and return the hex digest."""
-    digest = hashlib.new(algo)
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(_HASH_CHUNK), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _normalise_hash(text: str) -> str:
-    return text.strip().lower().replace(" ", "")
-
-
 def _short_hash(value: str) -> str:
     return f"{value[:8]}…{value[-6:]}" if len(value) > 20 else value
-
-
-def _csv_list(text: str) -> list[str] | None:
-    items = [token.strip() for token in text.split(",") if token.strip()]
-    return items or None

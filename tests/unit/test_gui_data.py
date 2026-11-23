@@ -153,7 +153,7 @@ def test_export_on_failed_uses_phrase_failure(qapp):
     captured: dict = {}
     exp.show_result = lambda ok, msg: captured.update(ok=ok, msg=msg)
 
-    exp._on_failed(FileNotFoundError("/nope.db is not a file"))
+    exp._ctrl._on_failed(FileNotFoundError("/nope.db is not a file"))
     assert captured == {"ok": False, "msg": "File not found — /nope.db is not a file"}
 
 
