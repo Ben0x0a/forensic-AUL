@@ -5,6 +5,8 @@ any real logarchive file.
 """
 
 import struct
+
+import pytest
 import lz4.block as lz4_block
 
 from forensic_aul.engine.parser.format import (
@@ -16,7 +18,9 @@ from forensic_aul.engine.parser.format import (
     SIG_BV41_UNCOMPRESSED,
     SIG_BV4_FOOTER,
 )
+from forensic_aul.errors import CorruptRecord, UnsupportedFormat
 from forensic_aul.engine.parser.chunkset import (
+    codec_for,
     decompress_chunkset,
     iter_subchunks,
 )
@@ -70,13 +74,27 @@ class TestDecompressChunkset:
         result = decompress_chunkset(chunk)
         assert result == payload
 
-    def test_invalid_signature_returns_none(self, caplog):
-        # Build a chunkset with a garbage signature
+    def test_unknown_codec_is_unsupported_not_dropped(self):
+        # A codec this version does not know is reported as such (the signal that
+        # a newer OS changed the format), never a silent None.
         bad_sig = b"\xDE\xAD\xBE\xEF"
         inner = bad_sig + struct.pack("<I", 4) + b"\x00" * 4
         chunk = _preamble(CHUNK_TAG_CHUNKSET, 0, len(inner)) + inner
-        result = decompress_chunkset(chunk)
-        assert result is None
+        with pytest.raises(UnsupportedFormat, match="deadbeef"):
+            decompress_chunkset(chunk)
+
+    def test_lzbitmap_payload_is_decoded(self):
+        from tests.parser.lzbitmap_fixture import FIXTURE_PATH, fixture_plaintext
+        inner = FIXTURE_PATH.read_bytes()
+        chunk = _preamble(CHUNK_TAG_CHUNKSET, 0, len(inner)) + inner
+        assert codec_for(chunk).name == "lzbitmap"
+        assert decompress_chunkset(chunk) == fixture_plaintext()
+
+    def test_implausible_size_is_refused(self):
+        inner = struct.pack("<II", 0x2D347662, 1 << 30) + b"\x00" * 8   # bv4-, 1 GiB
+        chunk = _preamble(CHUNK_TAG_CHUNKSET, 0, len(inner)) + inner
+        with pytest.raises(CorruptRecord, match="safety cap"):
+            decompress_chunkset(chunk)
 
     def test_empty_uncompressed_payload(self):
         chunk = _build_uncompressed_chunkset(b"")

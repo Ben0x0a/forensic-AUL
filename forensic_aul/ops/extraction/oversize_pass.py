@@ -73,8 +73,11 @@ def collect_oversize(
                         # chunksets borrow the previous catalog.
                         catalog = None
                 elif raw.tag == CHUNK_TAG_CHUNKSET and catalog is not None:
-                    decompressed = decompress_chunkset(raw.data)
-                    if decompressed is None:
+                    try:
+                        decompressed = decompress_chunkset(raw.data)
+                    except PARSE_ERRORS as exc:
+                        # Counted by the main pass, which decodes the same chunkset.
+                        log.debug("oversize pass: chunkset not decoded: %s", exc)
                         continue
                     for sub in iter_subchunks(decompressed):
                         if sub.chunk_tag != CHUNK_TAG_OVERSIZE:

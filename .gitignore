@@ -39,7 +39,7 @@ original/
 # --- Test evidence & generated data (real device data / too large for git) ---
 # data/manual_test/ = the owner's inputs for manual testing; data/test_data/ = the
 # agent's working copies. Neither is ever read by the automated test suite.
-data/
+/data/
 tests/data/
 tests/results/
 

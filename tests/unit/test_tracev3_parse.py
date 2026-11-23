@@ -53,7 +53,8 @@ def _patch_stream(monkeypatch, module) -> list[int]:
 
     def fake_decompress(data):
         decompressed.append(current["offset"])
-        return None                      # stop there: only the decision is under test
+        # Stop there: only the decision is under test.
+        raise CorruptRecord("not decoded")
 
     current = {"offset": None}
 

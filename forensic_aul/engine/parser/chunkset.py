@@ -1,7 +1,20 @@
 """Parse Apple Unified Log Chunkset chunks (tag 0x600d).
 
-A chunkset chunk is a compressed (LZ4 block) or uncompressed container that
-holds the actual log sub-chunks (Firehose, Oversize, Statedump, Simpledump).
+A chunkset chunk is a compressed (or stored) container holding the actual log
+sub-chunks (Firehose, Oversize, Statedump, Simpledump).
+
+Defines : ``decompress_chunkset`` (the decompressor registry: the payload's magic
+          selects the codec), ``CODECS`` (that registry), ``iter_subchunks`` and
+          ``SubChunkRef``.
+Used by : forensic_aul.ops.extraction.tracev3_parse and .oversize_pass.
+Uses    : forensic_aul.engine.parser.lzbitmap, the ``lz4`` package,
+          forensic_aul.engine.parser.format (tags, signatures),
+          forensic_aul.errors (typed format errors), forensic_aul.config (size cap).
+
+WHY a registry keyed by magic: the payload names its own codec (``bv41`` LZ4,
+``bv4-`` stored, ``ZBM`` LZBITMAP since iOS 27 / macOS 27, and an archive may mix
+them). Adding a codec is one entry here; an unknown magic is an UnsupportedFormat
+— counted and reported as "this version cannot read it", never silently dropped.
 
 Binary layout reference: macos-UnifiedLogs/src/chunkset.rs
 """
@@ -9,6 +22,7 @@ Binary layout reference: macos-UnifiedLogs/src/chunkset.rs
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Generator
 
@@ -19,18 +33,18 @@ except ImportError:
     _HAS_LZ4 = False
 
 from forensic_aul.config import MAX_CHUNKSET_DECOMPRESSED_SIZE
-from forensic_aul.engine.parser.reader import BinaryReader, reader_from_bytes
-
+from forensic_aul.engine.parser import lzbitmap
 from forensic_aul.engine.parser.format import (
     CHUNK_PREAMBLE_SIZE,
     CHUNK_TAG_FIREHOSE,
     CHUNK_TAG_OVERSIZE,
-    CHUNK_TAG_STATEDUMP,
     CHUNK_TAG_SIMPLEDUMP,
+    CHUNK_TAG_STATEDUMP,
+    SIG_BV4_FOOTER,
     SIG_BV41_COMPRESSED,
     SIG_BV41_UNCOMPRESSED,
-    SIG_BV4_FOOTER,
 )
+from forensic_aul.errors import CorruptRecord, TruncatedRecord, UnsupportedFormat
 
 log = logging.getLogger(__name__)
 
@@ -49,83 +63,108 @@ class SubChunkRef:
     source_offset: int     # byte offset of this sub-chunk in the decompressed data
 
 
-def decompress_chunkset(chunk_data: bytes) -> bytes | None:
-    """Decompress (or pass through) a raw chunkset payload.
+@dataclass(frozen=True)
+class Codec:
+    """One chunkset codec: the magic its payload starts with, and its decoder.
 
-    *chunk_data* begins at the chunk_tag field (i.e. includes the 16-byte
-    outer preamble).
-
-    Returns:
-        Decompressed bytes, or None on error.
+    ``decode`` takes the payload (after the 16-byte chunk preamble) and returns
+    the decompressed bytes, raising the typed format errors on bad input.
     """
-    if not _HAS_LZ4:
-        raise RuntimeError(
-            "lz4 library not installed. Run: pip install lz4"
-        )
 
-    r = reader_from_bytes(chunk_data)
-    # Skip outer preamble (already parsed by the tracev3 iterator)
-    r.skip(CHUNK_PREAMBLE_SIZE)
-
-    sig = r.u32()
-    uncompress_size = r.u32()
-
-    # Refuse an implausible decompressed size before it reaches lz4 (which would
-    # pre-allocate it). Real chunksets are well under the cap; a larger value
-    # means a corrupt/crafted tracev3 — drop this chunkset, keep parsing the rest.
-    if uncompress_size > MAX_CHUNKSET_DECOMPRESSED_SIZE:
-        log.error(f"Chunkset: claimed decompressed size {uncompress_size} exceeds the {MAX_CHUNKSET_DECOMPRESSED_SIZE}-byte safety cap — refusing (corrupt or crafted chunk)")
-        return None
-
-    if sig == SIG_BV41_UNCOMPRESSED:
-        # Data is stored uncompressed (observed in Special/ directory).
-        raw = r.read(uncompress_size)
-        _consume_bv4_footer(r)
-        return raw
-
-    if sig != SIG_BV41_COMPRESSED:
-        log.error(f"Chunkset: unexpected signature 0x{sig:08x} (expected bv41=0x{SIG_BV41_COMPRESSED:08x} or bv4-=0x{SIG_BV41_UNCOMPRESSED:08x})")
-        return None
-
-    block_size = r.u32()
-    compressed = r.read(block_size)
-
-    # Tighter, per-chunk bound: LZ4 cannot expand beyond ~255x, so a claimed size
-    # larger than that for this block is corrupt — refuse before allocating.
-    if uncompress_size > block_size * _LZ4_MAX_RATIO + CHUNK_PREAMBLE_SIZE:
-        log.error(f"Chunkset: claimed decompressed size {uncompress_size} implausible for {block_size} compressed bytes (>{_LZ4_MAX_RATIO}x) — refusing")
-        return None
-
-    try:
-        decompressed = lz4_block.decompress(
-            compressed, uncompressed_size=uncompress_size
-        )
-    except lz4_block.LZ4BlockError as exc:
-        log.error(f"LZ4 decompression failed: {exc}")
-        return None
-
-    if len(decompressed) != uncompress_size:
-        log.error(f"Chunkset: decompressed size {len(decompressed)} != expected {uncompress_size}")
-        return None
-
-    _consume_bv4_footer(r)
-    return decompressed
+    name: str
+    magic: bytes
+    decode: Callable[[bytes], bytes]
 
 
-def _consume_bv4_footer(r: BinaryReader) -> None:
-    """Read and validate the trailing ``bv4$`` footer.
+def _u32(data: bytes, at: int) -> int:
+    if at + 4 > len(data):
+        raise TruncatedRecord(f"chunkset: 4 bytes needed at {at}, {len(data) - at} left")
+    return int.from_bytes(data[at:at + 4], "little")
 
-    A truncated stream (no footer) or a wrong footer is logged but does not
-    abort the caller — by that point the payload has already been read out
-    successfully and the rest of the file is still parseable.
-    """
-    try:
-        footer = r.u32()
-    except EOFError:
+
+def _check_size(claimed: int) -> None:
+    # Refuse an implausible size before anything is allocated: a larger value
+    # means a corrupt or crafted tracev3 — drop this chunkset, keep the rest.
+    if claimed > MAX_CHUNKSET_DECOMPRESSED_SIZE:
+        raise CorruptRecord(f"chunkset: claimed decompressed size {claimed} exceeds the "
+                            f"{MAX_CHUNKSET_DECOMPRESSED_SIZE}-byte safety cap")
+
+
+def _footer(payload: bytes, at: int) -> None:
+    """The trailing ``bv4$`` footer: logged if absent or wrong, never fatal — the
+    data before it has already been read out successfully."""
+    if at + 4 > len(payload):
         log.debug("chunkset: footer truncated (no trailing bv4$)")
         return
+    footer = _u32(payload, at)
     if footer != SIG_BV4_FOOTER:
         log.warning(f"chunkset: unexpected footer 0x{footer:08x} (expected bv4$=0x{SIG_BV4_FOOTER:08x})")
+
+
+def _decode_stored(payload: bytes) -> bytes:
+    """``bv4-``: stored uncompressed (observed in Special/)."""
+    size = _u32(payload, 4)
+    _check_size(size)
+    if 8 + size > len(payload):
+        raise TruncatedRecord(f"chunkset: stored payload of {size} bytes is truncated")
+    _footer(payload, 8 + size)
+    return payload[8:8 + size]
+
+
+def _decode_lz4(payload: bytes) -> bytes:
+    """``bv41``: one LZ4 block."""
+    if not _HAS_LZ4:
+        raise RuntimeError("lz4 library not installed. Run: pip install lz4")
+    size, block_size = _u32(payload, 4), _u32(payload, 8)
+    _check_size(size)
+    if size > block_size * _LZ4_MAX_RATIO + CHUNK_PREAMBLE_SIZE:
+        raise CorruptRecord(f"chunkset: claimed size {size} implausible for {block_size} "
+                            f"compressed bytes (>{_LZ4_MAX_RATIO}x)")
+    if 12 + block_size > len(payload):
+        raise TruncatedRecord(f"chunkset: LZ4 block of {block_size} bytes is truncated")
+    try:
+        data = lz4_block.decompress(payload[12:12 + block_size], uncompressed_size=size)
+    except lz4_block.LZ4BlockError as exc:
+        raise CorruptRecord(f"LZ4 decompression failed: {exc}") from exc
+    if len(data) != size:
+        raise CorruptRecord(f"chunkset: decompressed {len(data)} bytes, expected {size}")
+    _footer(payload, 12 + block_size)
+    return data
+
+
+def _decode_lzbitmap(payload: bytes) -> bytes:
+    """``ZBM``: an LZBITMAP stream (iOS 27 / macOS 27); it ends at its own
+    end-of-stream marker, which is the "footer" upstream reads."""
+    data, _used = lzbitmap.decompress(payload, max_size=MAX_CHUNKSET_DECOMPRESSED_SIZE)
+    return data
+
+
+# The registry. Order matters only if one magic were a prefix of another.
+CODECS: tuple[Codec, ...] = (
+    Codec("lz4", SIG_BV41_COMPRESSED.to_bytes(4, "little"), _decode_lz4),
+    Codec("stored", SIG_BV41_UNCOMPRESSED.to_bytes(4, "little"), _decode_stored),
+    Codec("lzbitmap", lzbitmap.ZBM_MAGIC, _decode_lzbitmap),
+)
+
+
+def codec_for(chunk_data: bytes) -> Codec:
+    """The codec a raw chunkset (preamble included) declares by its magic."""
+    payload = chunk_data[CHUNK_PREAMBLE_SIZE:]
+    for codec in CODECS:
+        if payload.startswith(codec.magic):
+            return codec
+    raise UnsupportedFormat(f"chunkset: unknown compression magic {payload[:4].hex()}")
+
+
+def decompress_chunkset(chunk_data: bytes) -> bytes:
+    """Decompress (or pass through) a raw chunkset; *chunk_data* includes the
+    16-byte outer preamble.
+
+    Raises:
+        UnsupportedFormat: an unknown codec magic.
+        CorruptRecord / TruncatedRecord: the payload does not decode.
+    """
+    return codec_for(chunk_data).decode(chunk_data[CHUNK_PREAMBLE_SIZE:])
 
 
 def iter_subchunks(decompressed: bytes) -> Generator[SubChunkRef, None, None]:

@@ -181,10 +181,11 @@ def process_tracev3(
                     log.warning(f"{rel}  chunkset at offset 0x{raw.file_offset:x} has no usable catalog — skipped")
                     continue
                 n_chunksets += 1
-                decompressed = decompress_chunkset(raw.data)
-                if decompressed is None:
+                try:
+                    decompressed = decompress_chunkset(raw.data)
+                except PARSE_ERRORS as exc:
                     n_parse_errors += 1
-                    log.warning(f"{rel}  chunkset #{n_chunksets} decompression failed (offset=0x{raw.file_offset:x})")
+                    log.warning(f"{rel}  chunkset #{n_chunksets} not decoded (offset=0x{raw.file_offset:x}): {exc}")
                     continue
                 n_chunksets_decoded += 1
                 log.debug(
