@@ -1,6 +1,7 @@
 """Diff logic for the ``identify`` subcommand.
 
-Defines : ``run_diff`` — given two extracted SQLite databases (baseline +
+Defines : ``run_diff`` (= ``classify_rows`` → the SQLite and CSV outputs) — given
+          two extracted SQLite databases (baseline +
           post-action), produces an optional CSV of *retained* lines (entries
           attributable to the action) and a SQLite ``identified_logs`` table
           containing every entry from the action DB whose timestamp is after
@@ -37,6 +38,8 @@ import contextlib
 import csv
 import logging
 import sqlite3
+from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
 from forensic_aul.engine.utils.time import iso8601_from_unix_ns
@@ -186,29 +189,101 @@ def run_diff(
     """
     cutoff_ns = _baseline_cutoff_ns(baseline_db)
     log.info(f"Baseline cutoff (unix_ns): {cutoff_ns}")
-
     baseline_keys = _load_baseline_keys(baseline_db)
     log.info(f"Baseline noise set: {len(baseline_keys)} unique (message, process) tuples")
 
-    if csv_out is not None:
-        csv_out.parent.mkdir(parents=True, exist_ok=True)
-    sqlite_out.parent.mkdir(parents=True, exist_ok=True)
-    if sqlite_out.exists():
-        sqlite_out.unlink()
-
-    n_retained = 0
-    n_excluded = 0
-
+    n_retained = n_excluded = n_unresolved = 0
     with contextlib.ExitStack() as stack:
-        src = stack.enter_context(sqlite3.connect(str(action_db)))
-        dst = stack.enter_context(sqlite3.connect(str(sqlite_out)))
-        # BOM so Excel auto-detects UTF-8; no file at all when csv_out is None.
-        fp = stack.enter_context(csv_out.open("w", newline="", encoding="utf-8-sig")) \
-            if csv_out is not None else None
-        writer = csv.writer(fp) if fp is not None else None
+        db_out = stack.enter_context(_SqliteOut(sqlite_out))
+        csv_writer = stack.enter_context(_CsvOut(csv_out)) if csv_out is not None else None
+        for row in classify_rows(action_db, cutoff_ns, baseline_keys):
+            db_out.add(row)
+            if row.excluded:
+                n_excluded += 1
+                continue
+            n_retained += 1
+            n_unresolved += row.timestamp_unix_ns == 0
+            if csv_writer is not None:
+                csv_writer.add(row)
 
+    if n_unresolved:
+        log.warning(f"Diff: {n_unresolved} action row(s) had an unresolved timestamp (timestamp_unix_ns=0) — kept as retained with excluded=0 and a note (cannot be proven pre-cutoff)")
+    log.info(f"Diff complete: {n_retained} retained, {n_excluded} excluded")
+    return DiffResult(
+        csv_path=csv_out,
+        sqlite_path=sqlite_out,
+        retained=n_retained,
+        excluded=n_excluded,
+    )
+
+
+# ── Compute ──────────────────────────────────────────────────────────────────
+
+@dataclass(frozen=True, slots=True)
+class DiffRow:
+    """One action-database row after the cutoff, classified."""
+
+    timestamp: str              # ISO 8601 UTC; "" when unresolved
+    timestamp_unix_ns: int
+    event_order: int | None
+    source_order: int | None
+    source_file: str | None
+    process: str | None
+    pid: int | None
+    tid: int | None
+    log_level: str | None
+    event_type: str | None
+    subsystem: str | None
+    category: str | None
+    message: str | None
+    matched_signatures: str
+    excluded: bool              # baseline noise (see the module docstring)
+    note: str
+
+
+def classify_rows(
+    action_db: Path, cutoff_ns: int, baseline_keys: set[tuple[str, str]],
+) -> Iterator[DiffRow]:
+    """Stream every *action_db* row after *cutoff_ns*, classified retained or
+    excluded. Pure computation: nothing is written."""
+    with contextlib.closing(sqlite3.connect(str(action_db))) as src:
+        for row in src.execute(_build_csv_sql(src), (cutoff_ns,)):
+            (ts_ns, event_order, source_order, source_file, proc, pid, tid,
+             lvl, et, sub, cat, msg, matched_sigs) = row
+            if ts_ns == 0:
+                # Unresolved timestamp: an empty ISO (not the 1970 sentinel), and
+                # retained — it cannot be proven to predate the action.
+                ts, note, excluded = "", "unresolved timestamp (timestamp_unix_ns=0)", False
+            else:
+                ts, note = iso8601_from_unix_ns(ts_ns), ""
+                excluded = msg is not None and (msg, proc or "") in baseline_keys
+            yield DiffRow(ts, ts_ns, event_order, source_order, source_file, proc, pid,
+                          tid, lvl, et, sub, cat, msg, matched_sigs or "", excluded, note)
+
+
+# ── Outputs ──────────────────────────────────────────────────────────────────
+
+class _SqliteOut:
+    """The ``identified_logs`` database: every classified row, with its flag."""
+
+    _BATCH = 1_000
+    _INSERT = """
+        INSERT INTO identified_logs
+            (timestamp, timestamp_unix_ns, event_order, source_order, source_file,
+             process, pid, tid,
+             log_level, event_type, subsystem, category, message,
+             matched_signatures, excluded, note)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
+
+    def __init__(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists():
+            path.unlink()
+        self._conn = sqlite3.connect(str(path))
+        self._batch: list[tuple] = []
         # Output SQLite schema: identical columns to the CSV plus the flag.
-        dst.execute("""
+        self._conn.execute("""
             CREATE TABLE identified_logs (
                 id                  INTEGER PRIMARY KEY,
                 timestamp           TEXT,
@@ -229,84 +304,60 @@ def run_diff(
                 note                TEXT
             )
         """)
-        dst.execute(
-            "CREATE INDEX idx_identified_logs_excluded ON identified_logs(excluded)"
-        )
-        dst.execute(
-            "CREATE INDEX idx_identified_logs_ts ON identified_logs(timestamp_unix_ns)"
-        )
-        # hidden_keys / v_identified_visible: analyst judgment, kept separate
-        # from `excluded`. `excluded` is the engine's mechanical classification
-        # and is never rewritten after the diff runs; hidden_keys is reversible
-        # (the viewer's "hide identical lines"), persisted here so a reopened
-        # session keeps the pruning across runs.
-        create_hidden_keys_objects(dst)
+        self._conn.execute("CREATE INDEX idx_identified_logs_excluded ON identified_logs(excluded)")
+        self._conn.execute("CREATE INDEX idx_identified_logs_ts ON identified_logs(timestamp_unix_ns)")
+        # hidden_keys / v_identified_visible: analyst judgment, kept separate from
+        # `excluded`. `excluded` is the engine's mechanical classification and is
+        # never rewritten after the diff runs; hidden_keys is reversible (the
+        # viewer's "hide identical lines"), persisted so a reopened session keeps
+        # the pruning across runs.
+        create_hidden_keys_objects(self._conn)
 
-        if writer is not None:
-            writer.writerow(_CSV_HEADER)
+    def add(self, r: DiffRow) -> None:
+        self._batch.append((r.timestamp, r.timestamp_unix_ns, r.event_order, r.source_order,
+                            r.source_file, r.process, r.pid, r.tid, r.log_level, r.event_type,
+                            r.subsystem, r.category, r.message, r.matched_signatures,
+                            int(r.excluded), r.note))
+        if len(self._batch) >= self._BATCH:
+            self._flush()
 
-        cur = src.execute(_build_csv_sql(src), (cutoff_ns,))
+    def _flush(self) -> None:
+        self._conn.executemany(self._INSERT, self._batch)
+        self._batch.clear()
 
-        insert_sql = """
-            INSERT INTO identified_logs
-                (timestamp, timestamp_unix_ns, event_order, source_order, source_file,
-                 process, pid, tid,
-                 log_level, event_type, subsystem, category, message,
-                 matched_signatures, excluded, note)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """
+    def __enter__(self) -> _SqliteOut:
+        return self
 
-        batch: list[tuple] = []
-        BATCH = 1_000
-        n_unresolved = 0
+    def __exit__(self, exc_type, *_rest) -> None:  # type: ignore[no-untyped-def]
+        try:
+            if exc_type is None:
+                if self._batch:
+                    self._flush()
+                self._conn.commit()
+        finally:
+            self._conn.close()
 
-        for row in cur:
-            (ts_ns, event_order, source_order, source_file, proc, pid, tid,
-             lvl, et, sub, cat, msg, matched_sigs) = row
-            matched_sigs = matched_sigs or ""
-            if ts_ns == 0:
-                # Unresolved timestamp: emit empty ISO (not the 1970 sentinel) and
-                # keep it retained (excluded=0) — it cannot be proven pre-cutoff.
-                ts = ""
-                note = "unresolved timestamp (timestamp_unix_ns=0)"
-                excluded = 0
-                n_unresolved += 1
-            else:
-                ts = iso8601_from_unix_ns(ts_ns)
-                note = ""
-                key = (msg, proc or "")
-                excluded = 1 if (msg is not None and key in baseline_keys) else 0
 
-            batch.append((ts, ts_ns, event_order, source_order, source_file,
-                          proc, pid, tid, lvl, et, sub, cat, msg,
-                          matched_sigs, excluded, note))
-            if len(batch) >= BATCH:
-                dst.executemany(insert_sql, batch)
-                batch.clear()
+class _CsvOut:
+    """The retained rows as CSV (UTF-8 with BOM, so Excel detects the encoding)."""
 
-            if excluded:
-                n_excluded += 1
-            else:
-                if writer is not None:
-                    writer.writerow([ts, ts_ns, event_order, source_order, source_file,
-                                     proc, pid, tid, lvl, et, sub, cat,
-                                     msg, matched_sigs, note])
-                n_retained += 1
+    def __init__(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._fh = path.open("w", newline="", encoding="utf-8-sig")
+        self._writer = csv.writer(self._fh)
+        self._writer.writerow(_CSV_HEADER)
 
-        if batch:
-            dst.executemany(insert_sql, batch)
+    def add(self, r: DiffRow) -> None:
+        self._writer.writerow([r.timestamp, r.timestamp_unix_ns, r.event_order, r.source_order,
+                               r.source_file, r.process, r.pid, r.tid, r.log_level,
+                               r.event_type, r.subsystem, r.category, r.message,
+                               r.matched_signatures, r.note])
 
-        dst.commit()
+    def __enter__(self) -> _CsvOut:
+        return self
 
-    if n_unresolved:
-        log.warning(f"Diff: {n_unresolved} action row(s) had an unresolved timestamp (timestamp_unix_ns=0) — kept as retained with excluded=0 and a note (cannot be proven pre-cutoff)")
-    log.info(f"Diff complete: {n_retained} retained, {n_excluded} excluded")
-    return DiffResult(
-        csv_path=csv_out,
-        sqlite_path=sqlite_out,
-        retained=n_retained,
-        excluded=n_excluded,
-    )
+    def __exit__(self, *_exc) -> None:  # type: ignore[no-untyped-def]
+        self._fh.close()
 
 
 def create_hidden_keys_objects(conn: sqlite3.Connection) -> None:
