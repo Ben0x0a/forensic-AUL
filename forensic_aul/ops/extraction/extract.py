@@ -392,7 +392,8 @@ def _extract(
         if existing.exists() and not opts.overwrite:
             raise OutputExistsError(
                 f"{existing} already exists; set overwrite=True to replace it "
-                "(extracting into an existing database would merge two acquisitions)"
+                "(extracting into an existing database would merge two acquisitions)",
+                path=existing,
             )
 
     _t0 = time.monotonic()

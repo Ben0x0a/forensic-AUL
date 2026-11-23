@@ -87,9 +87,9 @@ class AcquireController:
     def on_devices(self, devices: list[Any]) -> None:
         self._view.set_devices(devices)
 
-    def on_scan_failed(self, tb: str) -> None:
+    def on_scan_failed(self, exc: BaseException) -> None:
         self._view.set_device_scan_failed()
-        self._view.show_result(False, phrase_failure(tb) or "scan failed")
+        self._view.show_result(False, phrase_failure(exc) or "scan failed")
 
     # ── Collection ──────────────────────────────────────────────────────────────
 
@@ -155,9 +155,9 @@ class AcquireController:
         )
         self._view.set_continue_visible(True)
 
-    def on_failed(self, tb: str) -> None:
+    def on_failed(self, exc: BaseException) -> None:
         self._view.set_running(False)
-        self._view.show_result(False, phrase_failure(tb) or "acquisition failed")
+        self._view.show_result(False, phrase_failure(exc) or "acquisition failed")
 
     def on_cancelled(self, _exc: Any) -> None:
         # An outcome, not an error: with pack=True (the GUI's only path) the
@@ -308,9 +308,9 @@ class ExtractController:
         )
         self._view.show_done_actions()
 
-    def on_failed(self, tb: str) -> None:
+    def on_failed(self, exc: BaseException) -> None:
         self._view.hide_progress()
-        self._view.show_result(False, phrase_failure(tb) or "extraction failed")
+        self._view.show_result(False, phrase_failure(exc) or "extraction failed")
         self._view.show_idle_actions()
 
     def on_cancelled(self, exc: Any) -> None:

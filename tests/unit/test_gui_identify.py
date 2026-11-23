@@ -85,7 +85,7 @@ class _ThreadRunner:
 
     The three-way routing below mirrors gui.workers.base.Worker.run exactly: an
     OperationCancelled goes to on_cancelled as the OBJECT, anything else to
-    on_failed as a formatted traceback. A test that only checked "did we get to
+    on_failed as the exception object. A test that only checked "did we get to
     SETUP" would pass either way, so the split has to be real here.
     """
 
@@ -121,12 +121,8 @@ class _ThreadRunner:
             if self._on_cancelled is not None:
                 self._on_cancelled(self._error)
         elif self._error is not None:
-            import traceback
-
-            tb = "".join(traceback.format_exception(
-                type(self._error), self._error, self._error.__traceback__))
             if self._on_failed is not None:
-                self._on_failed(tb)
+                self._on_failed(self._error)
         elif self._on_finished is not None:
             self._on_finished(self._result)
 

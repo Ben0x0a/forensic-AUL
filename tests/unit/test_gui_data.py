@@ -138,11 +138,7 @@ def test_verify_hash_failure_reason_is_not_discarded(qapp, tmp_path):
     vh._start()
     _task, _on_finished, on_failed = calls[0]
 
-    tb = (
-        'Traceback (most recent call last):\n  File "x.py", line 1, in <module>\n'
-        "FileNotFoundError: [Errno 2] No such file or directory: 'missing.bin'\n"
-    )
-    on_failed(tb)
+    on_failed(FileNotFoundError(2, "No such file or directory", "missing.bin"))
 
     pill = vh._table.cellWidget(0, 3).findChild(Pill)
     assert pill is not None
@@ -157,11 +153,7 @@ def test_export_on_failed_uses_phrase_failure(qapp):
     captured: dict = {}
     exp.show_result = lambda ok, msg: captured.update(ok=ok, msg=msg)
 
-    tb = (
-        'Traceback (most recent call last):\n  File "x.py", line 1, in <module>\n'
-        "FileNotFoundError: /nope.db is not a file\n"
-    )
-    exp._on_failed(tb)
+    exp._on_failed(FileNotFoundError("/nope.db is not a file"))
     assert captured == {"ok": False, "msg": "File not found — /nope.db is not a file"}
 
 

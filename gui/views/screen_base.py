@@ -210,7 +210,7 @@ class OperationScreen(ScrollScreen):
         self,
         task: Callable[[], Any],
         on_finished: Callable[[Any], None],
-        on_failed: Callable[[str], None] | None = None,
+        on_failed: Callable[[BaseException], None] | None = None,
         on_cancelled: Callable[[Any], None] | None = None,
     ) -> None:
         # WHY route through @Slot methods of *self* (a main-thread QObject) rather
@@ -236,11 +236,11 @@ class OperationScreen(ScrollScreen):
         if self._on_finished_cb is not None:
             self._on_finished_cb(result)
 
-    @Slot(str)
-    def _handle_failed(self, tb: str) -> None:
+    @Slot(object)
+    def _handle_failed(self, exc: Any) -> None:
         self.busyChanged.emit(False)
         if self._on_failed_cb is not None:
-            self._on_failed_cb(tb)
+            self._on_failed_cb(exc)
 
     @Slot(object)
     def _handle_cancelled(self, exc: Any) -> None:

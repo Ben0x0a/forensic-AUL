@@ -99,9 +99,9 @@ class IdentifyController:
     def on_devices(self, devices: list[Any]) -> None:
         self._view.set_devices(devices)
 
-    def on_scan_failed(self, tb: str) -> None:
+    def on_scan_failed(self, exc: BaseException) -> None:
         self._view.set_device_scan_failed()
-        self._view.show_result(False, phrase_failure(tb) or "scan failed")
+        self._view.show_result(False, phrase_failure(exc) or "scan failed")
 
     # ── Run ─────────────────────────────────────────────────────────────────────
 
@@ -213,9 +213,9 @@ class IdentifyController:
             # land afterwards to stay visible next to the summary.
             self._view.show_result(False, self._kb_warning)
 
-    def on_failed(self, tb: str) -> None:
+    def on_failed(self, exc: BaseException) -> None:
         self._view.set_state(self._view.SETUP)
-        self._view.show_result(False, phrase_failure(tb) or "identify failed")
+        self._view.show_result(False, phrase_failure(exc) or "identify failed")
 
     def on_cancelled(self, _exc: Any) -> None:
         # An expected outcome, not an error, and it arrives on its own signal —

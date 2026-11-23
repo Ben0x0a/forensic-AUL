@@ -243,9 +243,9 @@ class ExportScreen(OperationScreen):
         out = str(getattr(result, "output_path", self._out.path()))
         self.show_result(True, f"Exported {rows:,} row(s) as {fmt.upper()} → {Path(out).name}")
 
-    def _on_failed(self, tb: str) -> None:
+    def _on_failed(self, exc: BaseException) -> None:
         self._reset_button()
-        self.show_result(False, phrase_failure(tb) or "export failed")
+        self.show_result(False, phrase_failure(exc) or "export failed")
 
     def _reset_button(self) -> None:
         self._export_btn.setEnabled(True)
@@ -357,7 +357,7 @@ class VerifyHashScreen(OperationScreen):
         self.run_task(
             lambda: _hash_file(Path(path), algo),
             lambda computed: self._on_done(name, expected, computed),
-            lambda tb: self._on_failed(name, tb),
+            lambda exc: self._on_failed(name, exc),
         )
 
     def _on_done(self, name: str, expected: str, computed: str) -> None:
@@ -373,7 +373,7 @@ class VerifyHashScreen(OperationScreen):
             status = ("MISMATCH", "err")
         self._add_row(name, computed, expected, status)
 
-    def _on_failed(self, name: str, tb: str) -> None:
+    def _on_failed(self, name: str, exc: BaseException) -> None:
         self._run_btn.setEnabled(True)
         self._run_btn.setText("Recompute & compare")
         # WHY a tooltip, not a discarded reason (the previous behaviour): a bare
@@ -381,7 +381,7 @@ class VerifyHashScreen(OperationScreen):
         # file vanished mid-run, and a read error all look identical. The full
         # traceback is also in the log panel; this puts the short, GUI-phrased
         # reason where the analyst is already looking.
-        reason = phrase_failure(tb) or "hashing failed"
+        reason = phrase_failure(exc) or "hashing failed"
         self._add_row(name, "—", "—", ("ERROR", "err"), tooltip=reason)
 
     def _add_row(

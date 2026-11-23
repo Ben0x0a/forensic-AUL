@@ -94,8 +94,13 @@ class OutputExistsError(ForensicAULError, FileExistsError):
     Raised by ``run_extract`` when the output database (or the ``.partial`` of an
     interrupted run) exists and ``overwrite`` is off — writing into it would merge
     two acquisitions into one file. Subclasses ``FileExistsError``, which is what
-    it is, so a plain ``except FileExistsError`` still catches it.
+    it is, so a plain ``except FileExistsError`` still catches it. ``path`` is the
+    output in the way, so a frontend can phrase its own advice.
     """
+
+    def __init__(self, message: str, path: "Path | None" = None) -> None:
+        super().__init__(message)
+        self.path = path
 
 
 class CaseInfoError(ForensicAULError, ValueError):

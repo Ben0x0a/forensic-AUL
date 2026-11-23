@@ -32,12 +32,14 @@ class Worker(QObject):
 
     For simple operations, wrap any callable: ``Worker(run_extract, **kwargs)``.
     Purpose-built workers may subclass QObject directly instead, as long as they
-    expose the same ``finished(object)`` / ``failed(str)`` / ``cancelled(object)``
+    expose the same ``finished(object)`` / ``failed(object)`` / ``cancelled(object)``
     signals.
     """
 
     finished = Signal(object)   # result payload (whatever the callable returns)
-    failed = Signal(str)        # formatted traceback
+    # The exception OBJECT (not its traceback text): the GUI phrases it by type
+    # (gui.controllers.phrase_failure); the traceback goes to the log.
+    failed = Signal(object)
     # WHY a third outcome rather than reporting a cancellation as a failure: with
     # only two, a cancellation arrives as a traceback STRING and the controller
     # has to sniff the text to tell "the analyst stopped it" from "something
@@ -61,19 +63,18 @@ class Worker(QObject):
             _LOG.info(f"Worker cancelled: {exc}")
             self.cancelled.emit(exc)
             return
-        except Exception:  # noqa: BLE001 — surface any failure to the GUI, never crash the thread
+        except Exception as exc:  # noqa: BLE001 — surface any failure to the GUI, never crash the thread
             tb = traceback.format_exc()
             _LOG.error(f"""Worker failed:
 {tb}""")
             # Capture a full crash report (frame locals) — this is the single funnel
-            # every off-thread GUI operation flows through, and the failed signal
-            # only carries the formatted traceback string.
+            # every off-thread GUI operation flows through.
             try:
                 from app.diagnostics import capture_exception
                 capture_exception({"entrypoint": "gui", "op": getattr(self._fn, "__name__", None)})
             except Exception:  # noqa: BLE001 — crash reporting must never mask the failure
                 _LOG.debug("Crash report capture failed", exc_info=True)
-            self.failed.emit(tb)
+            self.failed.emit(exc)
             return
         self.finished.emit(result)
 
