@@ -21,6 +21,7 @@ from forensic_aul._version import __version__
 # KnowledgeBaseError included), so `except ForensicAULError` catches them all.
 from forensic_aul.errors import (
     CaseInfoError,
+    ExtractFailedError,
     ForensicAULError,
     IncompleteDatabaseError,
     InvalidDatabaseError,
@@ -105,6 +106,7 @@ from forensic_aul.engine.models import LogEntry
 
 # Return-value containers for the top-level operations
 from forensic_aul.outcomes import (
+    ExtractStatus,
     AcquireResult,
     AnnotateResult,
     DiffResult,
@@ -127,6 +129,7 @@ __all__ = [
     "OperationCancelled",
     "OutputExistsError",
     "CaseInfoError",
+    "ExtractFailedError",
     "CancelToken",
     "NEVER_CANCELLED",
     "run_extract",
@@ -170,6 +173,7 @@ __all__ = [
     "INTEGRITY_MODES",
     "LogEntry",
     "ExtractResult",
+    "ExtractStatus",
     "DiffResult",
     "ExportResult",
     "AnnotateResult",

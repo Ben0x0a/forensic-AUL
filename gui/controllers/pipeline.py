@@ -37,8 +37,10 @@ from forensic_aul.ops.acquisition.device import list_connected_devices
 from forensic_aul.ops.acquisition.report import load_sidecar_for
 from forensic_aul.ops.extraction.extract import run_extract
 from forensic_aul.ops.extraction.options import CaseInfo, ExtractOptions
+from forensic_aul.outcomes import ExtractStatus
 from gui.controllers import phrase_failure
 from gui.recent_store import RecentStore
+from gui.tokens import DARK_TOKENS
 
 log = logging.getLogger(__name__)
 
@@ -280,11 +282,20 @@ class ExtractController:
         count = getattr(result, "entry_count", 0)
         db_path = str(getattr(result, "db_path", self._view.output_path()))
         self._recents.add("database", db_path, f"{count:,} entries")
+        status = getattr(result, "status", ExtractStatus.OK)
+        reasons = "; ".join(getattr(result, "status_reasons", ()))
+        if status is ExtractStatus.FAILED:
+            # The database exists (and its log is sealed) but holds nothing usable.
+            self._view.show_result(False, f"Nothing could be decoded — {reasons}")
+            self._view.show_done_actions()
+            return
+        note = f"<br><span style='color:{DARK_TOKENS['warn']}'>Degraded — {reasons}</span>" \
+            if status is ExtractStatus.DEGRADED else ""
         self._view.show_result(
             True,
             f"Extracted {count:,} entries → {Path(db_path).name}<br>"
-            f"<span style='color:#545a68'>{getattr(result, 'device_model', '?') or '?'} · "
-            f"iOS {ios} · {getattr(result, 'parse_errors', 0)} parse errors</span>",
+            f"<span style='color:{DARK_TOKENS['text_faint']}'>{getattr(result, 'device_model', '?') or '?'} · "
+            f"iOS {ios} · {getattr(result, 'parse_errors', 0)} parse errors</span>{note}",
         )
         self._view.show_done_actions()
 

@@ -37,6 +37,7 @@ res = run_extract(
     ),
 )
 print(res.entry_count, res.ios_version, res.time_range)
+print(res.status, res.status_reasons)   # ExtractStatus.OK / DEGRADED / FAILED
 print(res.parse_errors, res.write_errors)
 print(res.source_sha256, res.source_files_verified, res.source_files_changed)
 ```
@@ -44,7 +45,11 @@ print(res.source_sha256, res.source_files_verified, res.source_files_changed)
 **Returns** an `ExtractResult` (frozen dataclass) with `db_path`, `metadata_id`,
 `entry_count`, `parse_errors`, `write_errors`, `source_type`, `source_sha256`,
 `device_model`, `ios_build`, `ios_version`, `boot_uuid`, `time_range`, and the
-per-file integrity counters.
+per-file integrity counters, plus the verdict: `status` is `ExtractStatus.OK`,
+`DEGRADED` (usable, but read `status_reasons`: parse or write errors, undecodable
+chunksets, a source file that changed) or `FAILED` (nothing could be decoded — an
+unsupported format; do not analyse it). `run_extract` does not raise on `FAILED`:
+the database is a genuine record of what could be read, so the caller decides.
 
 `CaseInfo` holds the case identifiers (`case_number`, `imei`, `exhibit_number`,
 `analyst_name`, `notes`); `ExtractOptions` holds every tunable (`jobs`, `fts`,

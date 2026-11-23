@@ -42,7 +42,7 @@ import logging
 import sqlite3
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from forensic_aul._version import __version__
@@ -79,10 +79,10 @@ from forensic_aul.ops.extraction.options import CaseInfo, ExtractOptions, RunCon
 from forensic_aul.ops.extraction.oversize_pass import OversizeCache, collect_oversize
 from forensic_aul.ops.extraction.source import PreparedSource, prepare_source
 from forensic_aul.ops.extraction.timesync_setup import setup_timesync
-from forensic_aul.ops.extraction.tracev3_parse import process_tracev3
+from forensic_aul.ops.extraction.tracev3_parse import FileParseStats, process_tracev3
 from forensic_aul.ops.extraction.workers import parallel_parse
 from forensic_aul.ops.summary.cache import refresh_summary
-from forensic_aul.outcomes import ExtractResult
+from forensic_aul.outcomes import ExtractResult, ExtractStatus
 
 # Relative phase weights for the extract progress bar (ratios, normalised by the
 # reporter). Tuned to the observed split on a large extract; finish() covers any
@@ -136,18 +136,26 @@ class _ParseStats:
     ios_build_version: str = ""
     boot_uuid: str = ""
     metadata_id: int = 0
+    chunksets: int = 0
+    chunksets_decoded: int = 0
+    # Files holding chunksets of which NONE could be decoded (relative paths).
+    undecodable_files: list[str] = field(default_factory=list)
 
-    def absorb(self, file_stats: tuple[str, str, str, int, int]) -> None:
-        """Fold one tracev3 file's (boot_uuid, model, build, written, errors) in."""
-        b_uuid, model, build, n_written, n_err = file_stats
-        self.total_entries += n_written
-        self.total_errors += n_err
-        if b_uuid and not self.boot_uuid:
-            self.boot_uuid = b_uuid
-        if model and not self.ios_model:
-            self.ios_model = model
-        if build and not self.ios_build_version:
-            self.ios_build_version = build
+    def absorb(self, rel: str, file_stats: FileParseStats) -> None:
+        """Fold one tracev3 file's statistics in."""
+        self.total_entries += file_stats.entries
+        self.total_errors += file_stats.errors
+        self.chunksets += file_stats.chunksets
+        self.chunksets_decoded += file_stats.chunksets_decoded
+        if file_stats.chunksets and not file_stats.chunksets_decoded:
+            self.undecodable_files.append(rel)
+            log.warning(f"{rel}  none of its {file_stats.chunksets} chunkset(s) could be decoded")
+        if file_stats.boot_uuid and not self.boot_uuid:
+            self.boot_uuid = file_stats.boot_uuid
+        if file_stats.ios_model and not self.ios_model:
+            self.ios_model = file_stats.ios_model
+        if file_stats.ios_build and not self.ios_build_version:
+            self.ios_build_version = file_stats.ios_build
 
 
 def _ingest_shutdown_log(
@@ -758,7 +766,7 @@ def _run_parse(ctx: RunContext) -> _ParseStats:
         # Serial in-process path: parse → writer.add directly.
         for i, (path, rel) in enumerate(zip(tracev3_files, rels), 1):
             log.info(f"[{i}/{len(tracev3_files)}] {rel}")
-            stats.absorb(process_tracev3(
+            stats.absorb(rel, process_tracev3(
                 path, logarchive, strings, oversize_cache,
                 ts.timesync_data, ts.boot_uuid_to_timesync_file_id,
                 tracev3_file_ids[rel], ts.anchor_id_map, writer.add,
@@ -776,17 +784,17 @@ def _run_parse(ctx: RunContext) -> _ParseStats:
         log.info(f"Parsing in parallel : {n_workers} worker process(es) + 1 writer (jobs={opts.jobs})")
         done = 0
 
-        def _handle_result(rel: str, file_stats: tuple, entries: list) -> None:
+        def _handle_result(rel: str, file_stats: FileParseStats, entries: list) -> None:
             nonlocal done, _done_bytes
             # Single writer (this process) — one DB connection, no contention.
             writer.add_batch(entries)
             writer.flush()                              # see the serial path
             writer.mark_file_parsed(tracev3_file_ids[rel])
-            stats.absorb(file_stats)
+            stats.absorb(rel, file_stats)
             done += 1
             _done_bytes += _sizes[rel]
             ctx.reporter.update(_done_bytes / _total_bytes, f"{done}/{len(rels)}")
-            log.info(f"[{done}/{len(rels)}] {rel}  ({file_stats[3]} entries)")
+            log.info(f"[{done}/{len(rels)}] {rel}  ({file_stats.entries} entries)")
 
         parallel_parse(
             rels,
@@ -959,10 +967,11 @@ def _finalise(ctx: RunContext, stats: _ParseStats) -> ExtractResult:
     log.info(f"  Elapsed           : {elapsed:.1f} s")
     log.info(f"  Output database   : {ctx.final_db_path.resolve()}")
     log.info(f"  Logarchive SHA-256: {ctx.prepared.content_sha256}")
-    log.info("  Log file SHA-256  : (computed after log is closed)")
+    if ctx.audit is not None:
+        log.info("  Log file SHA-256  : (computed after log is closed)")
     log.info("═" * 72)
 
-    return ExtractResult(
+    result = ExtractResult(
         # The FINAL name: this is only reached on success, and run_extract
         # promotes the .partial to it moments later.
         db_path=ctx.final_db_path,
@@ -980,4 +989,18 @@ def _finalise(ctx: RunContext, stats: _ParseStats) -> ExtractResult:
         source_files_verified=files_ok,
         source_files_changed=files_changed,
         source_files_unverifiable=files_unverifiable,
+        chunksets=stats.chunksets,
+        chunksets_decoded=stats.chunksets_decoded,
+        undecodable_files=tuple(stats.undecodable_files),
     )
+    # The verdict, in the log the run is audited by. FAILED is not raised: the
+    # database is a genuine (complete) record of what could be read; the caller
+    # decides — the CLI exits non-zero, identify stops.
+    reasons = "; ".join(result.status_reasons)
+    if result.status is ExtractStatus.OK:
+        log.info("Extract status  : OK")
+    elif result.status is ExtractStatus.DEGRADED:
+        log.warning(f"Extract status  : DEGRADED — {reasons}")
+    else:
+        log.error(f"Extract status  : FAILED — {reasons}")
+    return result

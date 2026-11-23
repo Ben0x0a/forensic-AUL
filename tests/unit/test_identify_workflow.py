@@ -20,7 +20,8 @@ import forensic_aul.ops.identify.workflow as wf
 from forensic_aul.engine.utils.progress import ProgressEvent
 from forensic_aul.ops.acquisition.acquire import AcquisitionAborted
 from forensic_aul.ops.identify.workflow import _IDENTIFY_PHASES, run_identify_workflow
-from forensic_aul.outcomes import DiffResult
+from forensic_aul.errors import ExtractFailedError
+from forensic_aul.outcomes import DiffResult, ExtractStatus
 
 _PHASE_ORDER = [name for name, _ in _IDENTIFY_PHASES]
 
@@ -361,3 +362,19 @@ class TestWorkflow:
             confirm=None, wait_for_action=None,
         )
         assert captured["csv_out"] is None
+
+    def test_a_failed_extract_stops_before_the_diff(self, patched, monkeypatch):
+        """B4: an extract that decoded nothing must stop identify — not run a diff
+        of two empty databases and fail later with a confusing message."""
+        import forensic_aul.ops.extraction.extract as extract_mod
+
+        def failed_run_extract(archive, db, case, opts, **kwargs):
+            Path(db).write_bytes(b"")
+            return SimpleNamespace(db_path=Path(db), status=ExtractStatus.FAILED,
+                                   status_reasons=("none of the 240 chunkset(s) could be decoded",))
+
+        monkeypatch.setattr(extract_mod, "run_extract", failed_run_extract)
+        with pytest.raises(ExtractFailedError, match="baseline extract decoded nothing"):
+            run_identify_workflow("CASE-1", output_dir=patched.out,
+                                  confirm=None, wait_for_action=None)
+        assert "diff" not in patched.calls

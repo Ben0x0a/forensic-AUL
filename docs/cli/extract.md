@@ -254,8 +254,8 @@ For the resulting tables and columns, see
 
 | Code | Meaning |
 |---|---|
-| `0` | Extraction completed and the log was sealed. |
-| `1` | Invocation error (both `INPUT` and `--diagnostics/--uuidtext` given; only one of the two loose dirs given; a loose dir that is not a directory; unrecognised source type; missing `--case-number`/`--imei`; `OUTPUT` exists and is not a regular file) **or** an unhandled failure during the run (a crash report is written and the log is still sealed). |
+| `0` | Extraction completed and the log was sealed. The status is `OK` or `DEGRADED` (a `DEGRADED` run logs a WARNING naming what was lost: parse errors, undecodable chunksets, a source file that changed…). |
+| `1` | Nothing could be decoded (status `FAILED` — e.g. an OS release whose log format this version does not support; the database and the sealed log are still written, for the record), **or** an invocation error (both `INPUT` and `--diagnostics/--uuidtext` given; only one of the two loose dirs given; a loose dir that is not a directory; unrecognised source type; missing `--case-number`/`--imei`; `OUTPUT` exists and is not a regular file) **or** an unhandled failure during the run (a crash report is written and the log is still sealed). |
 | `130` | Interrupted with Ctrl-C (SIGINT). The log is sealed before exiting; the database contains whatever was committed. |
 
 ---

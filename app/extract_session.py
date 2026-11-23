@@ -24,6 +24,7 @@ from pathlib import Path
 from forensic_aul import (
     CaseInfo,
     ExtractOptions,
+    ExtractStatus,
     ForensicAULError,
     OperationCancelled,
     run_extract,
@@ -49,12 +50,13 @@ def run_extract_session(
     """Run one evidence extract and return a process exit code (0 / 1 / 130).
 
     The library writes, reports and seals the audit log on every exit path; this
-    only maps the outcome. A cancellation (the CLI's Ctrl+C) exits 130.
+    only maps the outcome. A cancellation (the CLI's Ctrl+C) exits 130; an extract
+    whose status is FAILED (nothing decodable) exits 1.
     """
     configure_console(verbose=verbose)
     try:
-        run_extract(logarchive, db_path, case, replace(opts, audit_log=True),
-                    progress=progress, cancel=cancel)
+        result = run_extract(logarchive, db_path, case, replace(opts, audit_log=True),
+                             progress=progress, cancel=cancel)
     except (OperationCancelled, KeyboardInterrupt):
         return 130
     except ForensicAULError:
@@ -66,4 +68,6 @@ def run_extract_session(
         from app.diagnostics import capture_exception
         capture_exception({"entrypoint": "cli", "op": "extract"})
         return 1
-    return 0
+    # FAILED = nothing decodable: the database is kept (and its log sealed), but
+    # the command did not do its job, so a script must see a non-zero code.
+    return 1 if result.status is ExtractStatus.FAILED else 0

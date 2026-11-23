@@ -13,19 +13,38 @@ Used by : forensic_aul.ops.extraction.extract, forensic_aul.ops.identify.diff,
           forensic_aul/__init__.py; consumed by callers and the launcher.
 Uses    : the standard library only.
 
-These are plain immutable data carriers — no behaviour — kept in their own module
-so the orchestration code can import them without a cycle.
+These are immutable data carriers kept in their own module so the orchestration
+code can import them without a cycle. The one piece of behaviour is
+``ExtractResult.status`` (``ExtractStatus``): a pure verdict computed from the
+result's own counters, so it can never disagree with them.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     # Type-only import of a leaf data module (no runtime dependency at all).
     from forensic_aul.device_info import DeviceInfo
+
+
+class ExtractStatus(str, Enum):
+    """The verdict on one extract.
+
+    * ``OK`` — every chunkset decoded, no error.
+    * ``DEGRADED`` — usable, but something was lost or is suspect (parse or write
+      errors, undecodable chunksets, a source file changed, an empty source). Read
+      ``ExtractResult.status_reasons``.
+    * ``FAILED`` — nothing could be decoded: the tool does not understand this
+      source (e.g. an OS release whose format changed). Do not analyse it.
+    """
+
+    OK = "ok"
+    DEGRADED = "degraded"
+    FAILED = "failed"
 
 
 @dataclass(frozen=True)
@@ -61,6 +80,46 @@ class ExtractResult:
     # SHA-256 also stored in case_metadata. None when no audit log was written.
     log_path: Path | None = None
     log_sha256: str | None = None
+    # Decodability: chunksets in the source vs chunksets decompressed and walked,
+    # and the files of which not one chunkset could be decoded. They feed `status`.
+    chunksets: int = 0
+    chunksets_decoded: int = 0
+    undecodable_files: tuple[str, ...] = ()
+
+    @property
+    def status(self) -> ExtractStatus:
+        """``OK`` / ``DEGRADED`` / ``FAILED`` — see :class:`ExtractStatus`."""
+        return _assess(self)[0]
+
+    @property
+    def status_reasons(self) -> tuple[str, ...]:
+        """Why the status is not ``OK`` (empty when it is), in plain words."""
+        return _assess(self)[1]
+
+
+def _assess(r: ExtractResult) -> tuple[ExtractStatus, tuple[str, ...]]:
+    """The one status policy. Computed from the result's own counters, so the
+    verdict can never disagree with the numbers it is drawn from."""
+    if r.chunksets and not r.chunksets_decoded:
+        return ExtractStatus.FAILED, (
+            f"none of the {r.chunksets} chunkset(s) could be decoded — "
+            "this source's format is not supported",)
+    if r.chunksets and not r.entry_count:
+        return ExtractStatus.FAILED, (
+            f"{r.chunksets_decoded} chunkset(s) decoded but no log entry produced",)
+    reasons: list[str] = []
+    if not r.chunksets:
+        reasons.append("the source holds no log data")
+    if r.chunksets_decoded < r.chunksets:
+        reasons.append(f"{r.chunksets - r.chunksets_decoded} of {r.chunksets} chunksets "
+                       f"could not be decoded ({len(r.undecodable_files)} file(s) entirely)")
+    if r.parse_errors:
+        reasons.append(f"{r.parse_errors} parse error(s)")
+    if r.write_errors:
+        reasons.append(f"{r.write_errors} row(s) refused by the database")
+    if r.source_files_changed:
+        reasons.append(f"{r.source_files_changed} source file(s) changed during the run")
+    return (ExtractStatus.DEGRADED if reasons else ExtractStatus.OK), tuple(reasons)
 
 
 @dataclass(frozen=True)

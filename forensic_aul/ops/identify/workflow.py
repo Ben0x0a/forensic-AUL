@@ -321,7 +321,9 @@ async def _run_identify_async(
 
     # ── Extract both ──────────────────────────────────────────────────────────
     from forensic_aul.ops.extraction.extract import run_extract
+    from forensic_aul.errors import ExtractFailedError
     from forensic_aul.ops.extraction.options import CaseInfo, ExtractOptions
+    from forensic_aul.outcomes import ExtractStatus
 
     imei = device.imei or "UNKNOWN"
     opts = ExtractOptions(batch_size=batch_size, jobs=jobs, fts=fts, integrity=integrity)
@@ -339,8 +341,12 @@ async def _run_identify_async(
             exhibit_number=exhibit_number, analyst_name=analyst,
             notes=f"identify/{label}" + (f" — {notes}" if notes else ""),
         )
-        run_extract(archive, db, case, opts,
-                    progress=lambda ev: reporter.update(ev.overall, ev.detail))
+        result = run_extract(archive, db, case, opts,
+                             progress=lambda ev: reporter.update(ev.overall, ev.detail))
+        # Stop here rather than diff two empty databases (B4): a FAILED extract
+        # means this tool cannot decode the device's logs at all.
+        if getattr(result, "status", None) is ExtractStatus.FAILED:
+            raise ExtractFailedError(label, result)
 
     # ── Annotate (enrichment, not a requirement — never abort the run) ────────
     if kb is not None:

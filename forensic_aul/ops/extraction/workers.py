@@ -56,7 +56,7 @@ from forensic_aul.engine.parser.string_cache import StringCacheProvider
 from forensic_aul.engine.utils.cancellation import NEVER_CANCELLED, CancelToken
 from forensic_aul.errors import OperationCancelled
 from forensic_aul.ops.extraction.oversize_pass import OversizeCache
-from forensic_aul.ops.extraction.tracev3_parse import process_tracev3
+from forensic_aul.ops.extraction.tracev3_parse import FileParseStats, process_tracev3
 
 # How often the mirror thread copies the parent token into the workers'
 # multiprocessing.Event. Small enough that it adds nothing measurable to the
@@ -207,7 +207,7 @@ def worker_init(
     )
 
 
-def worker_parse(rel_path: str) -> tuple[tuple[str, str, str, int, int], list[LogEntry]]:
+def worker_parse(rel_path: str) -> tuple[FileParseStats, list[LogEntry]]:
     """Parse one tracev3 (path relative to the logarchive root) → (stats, entries)."""
     root: Path = _WORKER["root"]  # type: ignore[assignment]
     entries: list[LogEntry] = []

@@ -69,16 +69,18 @@ def test_chunkset_after_a_failed_catalog_is_not_decoded_with_the_previous_one(tm
     decompressed = _patch_stream(monkeypatch, tracev3_parse)
     path = tmp_path / "Persist" / "0000000000000001.tracev3"
 
-    _boot, _model, _build, written, errors = tracev3_parse.process_tracev3(
+    stats = tracev3_parse.process_tracev3(
         path, tmp_path, strings=None, oversize_cache={}, timesync_data={},
         boot_uuid_to_timesync_file_id={}, tracev3_file_id=1, anchor_id_map={},
         emit=lambda _entry: None, keep_raw=False,
     )
 
     assert decompressed == [0x10], "chunkset 2 belongs to the failed catalog B"
-    assert written == 0
+    assert stats.entries == 0
     # chunkset 1 decompression failure + catalog B failure + chunkset 2 skipped
-    assert errors == 3
+    assert stats.errors == 3
+    # Both chunksets are counted, neither decoded: the file is undecodable.
+    assert (stats.chunksets, stats.chunksets_decoded) == (2, 0)
 
 
 def test_oversize_pass_does_not_reuse_the_previous_catalog(tmp_path, monkeypatch):

@@ -1,6 +1,6 @@
 """Single-file tracev3 parser — Pass 2 inner loop.
 
-Defines : process_tracev3
+Defines : process_tracev3 and FileParseStats (what parsing one file produced)
 Used by : forensic_aul.ops.extraction.workers (worker_parse),
           forensic_aul.ops.extraction.extract (_run_parse, serial path)
 Uses    : forensic_aul.ops.extraction.entry_builder (firehose_to_log_entry),
@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from forensic_aul.engine.models import CatalogChunk, LogEntry, TimesyncBoot
@@ -55,6 +56,25 @@ log = logging.getLogger(__name__)
 
 # ── tracev3 file processing ───────────────────────────────────────────────────
 
+@dataclass(frozen=True)
+class FileParseStats:
+    """What parsing one tracev3 file produced.
+
+    Crosses the worker → writer process boundary, so it stays a plain, picklable
+    record. ``chunksets`` counts every chunkset in the file, ``chunksets_decoded``
+    those actually decompressed and walked: their ratio is the file's
+    decodability — 0 of N means this tool does not understand the file's format.
+    """
+
+    boot_uuid: str
+    ios_model: str
+    ios_build: str
+    entries: int
+    errors: int
+    chunksets: int
+    chunksets_decoded: int
+
+
 def process_tracev3(
     path: Path,
     logarchive_root: Path,
@@ -68,7 +88,7 @@ def process_tracev3(
     *,
     keep_raw: bool,
     cancel: CancelToken = NEVER_CANCELLED,
-) -> tuple[str, str, str, int, int]:
+) -> FileParseStats:
     """Parse one tracev3 file, passing every resolved LogEntry to *emit*.
 
     Pure with respect to the DB: the file is pre-registered (``tracev3_file_id``)
@@ -81,7 +101,7 @@ def process_tracev3(
     times per file for no useful gain. Worst-case latency is therefore one
     chunkset (see the parse-cancel latency note in docs/internal/performance.md).
 
-    Returns (boot_uuid, ios_model, ios_build_version, entries_written, parse_errors).
+    Returns a :class:`FileParseStats`.
 
     Raises:
         OperationCancelled: *cancel* was cancelled mid-file. Whatever was emitted
@@ -96,7 +116,9 @@ def process_tracev3(
     catalog: CatalogChunk | None = None
 
     n_chunks = 0
-    n_chunksets = 0
+    n_chunksets = 0          # chunksets with a usable catalog (numbers the log lines)
+    n_chunksets_seen = 0     # every chunkset in the file
+    n_chunksets_decoded = 0  # decompressed and walked
     n_firehose_blocks = 0
     n_entries_written = 0
     n_parse_errors = 0
@@ -151,6 +173,7 @@ def process_tracev3(
                     catalog = None
 
             elif raw.tag == CHUNK_TAG_CHUNKSET:
+                n_chunksets_seen += 1
                 if catalog is None:
                     # No usable catalog (none yet, or its parse failed): the entries
                     # cannot be attributed, so the chunkset is lost — count it.
@@ -163,6 +186,7 @@ def process_tracev3(
                     n_parse_errors += 1
                     log.warning(f"{rel}  chunkset #{n_chunksets} decompression failed (offset=0x{raw.file_offset:x})")
                     continue
+                n_chunksets_decoded += 1
                 log.debug(
                     "%s  chunkset #%d  compressed=%d B → decompressed=%d B",
                     rel, n_chunksets, raw.data_size, len(decompressed),
@@ -313,4 +337,8 @@ def process_tracev3(
         log.error(f"{rel}  fatal error after {n_entries_written} entries: {exc}")
 
     log.info(f"  {str(rel):<45}  chunks={n_chunks:<3}  chunksets={n_chunksets:<3}  entries={n_entries_written:<6}  oversize_hits={n_oversize_hits:<3}  statedump={n_statedump:<3}  simpledump={n_simpledump:<3}  errors={n_parse_errors}")
-    return boot_uuid, ios_model, ios_build_version, n_entries_written, n_parse_errors
+    return FileParseStats(
+        boot_uuid=boot_uuid, ios_model=ios_model, ios_build=ios_build_version,
+        entries=n_entries_written, errors=n_parse_errors,
+        chunksets=n_chunksets_seen, chunksets_decoded=n_chunksets_decoded,
+    )

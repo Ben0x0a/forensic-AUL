@@ -6,8 +6,9 @@ Defines : ``ForensicAULError`` — the base class every library-specific error
           an analysis database), ``IncompleteDatabaseError`` (one produced by a
           run that never finished), ``OutputExistsError`` (an output would be
           overwritten) and ``OperationCancelled`` (the operator stopped a long
-          operation) and ``CaseInfoError`` (case identifiers missing for an
-          evidence extract). Operation-specific errors defined elsewhere
+          operation), ``CaseInfoError`` (case identifiers missing for an
+          evidence extract) and ``ExtractFailedError`` (an extract decoded
+          nothing, for callers that cannot go on without data). Operation-specific errors defined elsewhere
           (``AcquisitionError``, ``KnowledgeBaseError``) also derive from the
           base, so a consumer can catch everything the library raises with one
           ``except ForensicAULError``.
@@ -33,6 +34,8 @@ if TYPE_CHECKING:
     # Type-only: errors.py is imported by everything (including the cancellation
     # primitive), so it must stay dependency-free at runtime.
     from pathlib import Path
+
+    from forensic_aul.outcomes import ExtractResult
 
 
 class ForensicAULError(Exception):
@@ -102,6 +105,20 @@ class CaseInfoError(ForensicAULError, ValueError):
     def __init__(self, missing: tuple[str, ...]) -> None:
         super().__init__(f"required for an evidence extract: {', '.join(missing)}")
         self.missing = missing
+
+
+class ExtractFailedError(ForensicAULError):
+    """An extract finished with status ``FAILED``: nothing could be decoded.
+
+    ``run_extract`` itself never raises it — its database is a genuine record of
+    what could be read. A caller that cannot go on without data (identify, which
+    would otherwise diff two empty databases) raises it to stop early. ``result``
+    is the ``ExtractResult``; ``result.status_reasons`` say why.
+    """
+
+    def __init__(self, label: str, result: "ExtractResult") -> None:
+        super().__init__(f"{label} extract decoded nothing — {'; '.join(result.status_reasons)}")
+        self.result = result
 
 
 class OperationCancelled(ForensicAULError):
