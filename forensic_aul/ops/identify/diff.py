@@ -17,19 +17,35 @@ Used by : forensic_aul.ops.workflows.identify (run_identify_workflow),
 Uses    : forensic_aul.engine.database.reader (has_kb_tables), forensic_aul.outcomes
           (DiffResult), forensic_aul.engine.utils.time (iso8601_from_unix_ns).
 
-Noise definition
-----------------
-A line in the action DB is considered noise (``excluded = 1``) if either:
-  1. its ``timestamp_unix_ns`` is ≤ the baseline cutoff (i.e. it predates
-     the moment the action was performed), or
-  2. its ``(message, process_name)`` tuple already appears in the baseline.
+Noise definition and tiers
+--------------------------
+Only action rows newer than the baseline cutoff are considered (the cutoff is
+``MAX(timestamp_unix_ns)`` of the baseline — the last line collected before the
+operator performed the action). Each one gets a ``tier``:
 
-The cutoff is ``MAX(timestamp_unix_ns)`` from the baseline DB — i.e. the
-last log line collected before the operator performed the action.
+  ``repeat``        its ``(message, process)`` already appears in the baseline —
+                    background noise, ``excluded = 1``;
+  ``new_values``    its ``(format string, process)`` appears in the baseline but
+                    not with this message — a known event with new values;
+  ``new_template``  neither — an event the baseline never produced: the
+                    strongest sign the line belongs to the action.
 
-The CSV output omits category (1) entirely (they predate the action and
-carry no information about it) and only the entries from category (2) plus
-the retained ones, matching what the analyst wants in front of them.
+Retained rows are ``new_values`` + ``new_template``. WHY tiers and not a
+tighter key: a stricter "same template = noise" rule would drop the action's own
+lines whose template also fires idly (a camera opened twice); a looser one keeps
+70 % of lines (I2). Ranking keeps everything and says which lines to read first.
+
+A *generic* format string — no literal text once its ``%`` specifiers are
+removed, e.g. ``%{public}s`` — is not a template: two lines sharing it may have
+nothing in common, so it never makes a row ``new_values``. Dynamic messages
+(no format string) are compared by message only.
+
+The classification is SQL over the action database with the baseline attached:
+the baseline keys are copied into two indexed temporary tables, and every action
+row is LEFT JOINed against them.
+
+The CSV holds the retained rows only; the SQLite output holds every
+post-cutoff row with its tier and ``excluded`` flag.
 """
 
 from __future__ import annotations
@@ -37,6 +53,7 @@ from __future__ import annotations
 import contextlib
 import csv
 import logging
+import re
 import sqlite3
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -81,7 +98,13 @@ SELECT
     s.name                AS subsystem,
     c.name                AS category,
     l.message             AS message,
-    {matched_signatures}  AS matched_signatures
+    fs.value              AS format_string,
+    {matched_signatures}  AS matched_signatures,
+    CASE
+        WHEN bm.message IS NOT NULL THEN 'repeat'
+        WHEN bt.template IS NOT NULL THEN 'new_values'
+        ELSE 'new_template'
+    END                   AS tier
 FROM logs l
 LEFT JOIN logs_order   o  ON o.id  = l.id
 LEFT JOIN processes    p  ON p.id  = l.process_id
@@ -90,9 +113,43 @@ LEFT JOIN categories   c  ON c.id  = l.category_id
 LEFT JOIN log_levels   ll ON ll.id = l.log_level_id
 LEFT JOIN event_types  et ON et.id = l.event_type_id
 LEFT JOIN source_files sf ON sf.id = l.tracev3_file_id
+LEFT JOIN format_strs  fs ON fs.id = l.format_str_id
+LEFT JOIN temp.base_messages  bm
+       ON bm.message = l.message AND bm.process = COALESCE(p.name, '')
+LEFT JOIN temp.base_templates bt
+       ON bt.template = fs.value AND bt.process = COALESCE(p.name, '')
 WHERE l.timestamp_unix_ns > ? OR l.timestamp_unix_ns = 0
 ORDER BY l.timestamp_unix_ns ASC, l.id ASC
 """
+
+# The baseline keys, copied from the attached baseline into indexed temporary
+# tables so the classification above is two index lookups per row.
+_BASELINE_KEY_SQL = (
+    """CREATE TEMP TABLE base_messages AS
+        SELECT DISTINCT bl.message AS message, COALESCE(bp.name, '') AS process
+        FROM base.logs bl LEFT JOIN base.processes bp ON bp.id = bl.process_id
+        WHERE bl.message IS NOT NULL""",
+    "CREATE UNIQUE INDEX temp.base_messages_key ON base_messages(message, process)",
+    """CREATE TEMP TABLE base_templates AS
+        SELECT DISTINCT bf.value AS template, COALESCE(bp.name, '') AS process
+        FROM base.logs bl
+        JOIN base.format_strs bf ON bf.id = bl.format_str_id
+        LEFT JOIN base.processes bp ON bp.id = bl.process_id
+        WHERE faul_has_literal_text(bf.value)""",
+    "CREATE UNIQUE INDEX temp.base_templates_key ON base_templates(template, process)",
+)
+
+# A printf / os_log conversion: %, optional {privacy,…} annotation, flags,
+# width, precision, length modifier, conversion character (or %% / %@).
+# Consumed by: has_literal_text.
+_FORMAT_SPEC_RE = re.compile(r"%(?:\{[^}]*\})?[-+ #0'0-9.*]*(?:hh|h|ll|l|j|z|t|L|q)?[A-Za-z@%]")
+
+
+def has_literal_text(template: str | None) -> bool:
+    """True when *template* says something beyond its ``%`` specifiers."""
+    if not template:
+        return False
+    return any(ch.isalnum() for ch in _FORMAT_SPEC_RE.sub("", template))
 
 _MATCHED_SIGNATURES_SUBQUERY = """(
     SELECT GROUP_CONCAT(kbs.signature_id)
@@ -112,8 +169,14 @@ _CSV_HEADER = [
     "timestamp", "timestamp_unix_ns", "event_order", "source_order", "source_file",
     "process", "pid", "tid",
     "log_level", "event_type", "subsystem", "category", "message",
-    "matched_signatures", "note",
+    "matched_signatures", "tier", "format_string", "note",
 ]
+
+# The tier values, strongest signal first. Consumed by: classify_rows, run_diff,
+# ops/identify/results.py, the frontends.
+TIER_NEW_TEMPLATE = "new_template"
+TIER_NEW_VALUES = "new_values"
+TIER_REPEAT = "repeat"
 
 
 def _baseline_cutoff_ns(baseline_db: Path) -> int:
@@ -134,26 +197,6 @@ def _baseline_cutoff_ns(baseline_db: Path) -> int:
     return int(row[0])
 
 
-def _load_baseline_keys(baseline_db: Path) -> set[tuple[str, str]]:
-    """Load the (message, process_name) set that defines background noise.
-
-    Process name is resolved via the JOIN so the key is comparable across
-    DBs whose `processes.id` values differ.
-    """
-    keys: set[tuple[str, str]] = set()
-    # closing() so the read connection is released here, not at GC time.
-    with contextlib.closing(sqlite3.connect(str(baseline_db))) as conn:
-        cur = conn.execute("""
-            SELECT l.message, COALESCE(p.name, '')
-            FROM logs l
-            LEFT JOIN processes p ON p.id = l.process_id
-            WHERE l.message IS NOT NULL
-        """)
-        for msg, proc in cur:
-            keys.add((msg, proc))
-    return keys
-
-
 def run_diff(
     baseline_db: Path,
     action_db: Path,
@@ -162,11 +205,10 @@ def run_diff(
 ) -> DiffResult:
     """Diff a post-action database against a baseline and write both outputs.
 
-    Computes the baseline cutoff (``MAX(timestamp_unix_ns)`` over *baseline_db*)
-    and the baseline noise set (``(message, process_name)`` tuples), then streams
-    every entry from *action_db* newer than the cutoff, classifying each as
-    *retained* (attributable to the action) or *excluded* (noise already present
-    in the baseline). See the module docstring for the full noise definition.
+    Computes the baseline cutoff (``MAX(timestamp_unix_ns)`` over *baseline_db*),
+    then streams every entry from *action_db* newer than the cutoff with its tier
+    (``new_template`` / ``new_values`` / ``repeat``); ``repeat`` rows are the
+    *excluded* baseline noise. See the module docstring for the definitions.
 
     Args:
         baseline_db: SQLite database extracted *before* the action was performed.
@@ -189,31 +231,34 @@ def run_diff(
     """
     cutoff_ns = _baseline_cutoff_ns(baseline_db)
     log.info(f"Baseline cutoff (unix_ns): {cutoff_ns}")
-    baseline_keys = _load_baseline_keys(baseline_db)
-    log.info(f"Baseline noise set: {len(baseline_keys)} unique (message, process) tuples")
 
-    n_retained = n_excluded = n_unresolved = 0
+    n_retained = n_excluded = n_unresolved = n_new_templates = n_new_values = 0
     with contextlib.ExitStack() as stack:
         db_out = stack.enter_context(_SqliteOut(sqlite_out))
         csv_writer = stack.enter_context(_CsvOut(csv_out)) if csv_out is not None else None
-        for row in classify_rows(action_db, cutoff_ns, baseline_keys):
+        for row in classify_rows(action_db, baseline_db, cutoff_ns):
             db_out.add(row)
             if row.excluded:
                 n_excluded += 1
                 continue
             n_retained += 1
             n_unresolved += row.timestamp_unix_ns == 0
+            n_new_templates += row.tier == TIER_NEW_TEMPLATE
+            n_new_values += row.tier == TIER_NEW_VALUES
             if csv_writer is not None:
                 csv_writer.add(row)
 
     if n_unresolved:
         log.warning(f"Diff: {n_unresolved} action row(s) had an unresolved timestamp (timestamp_unix_ns=0) — kept as retained with excluded=0 and a note (cannot be proven pre-cutoff)")
-    log.info(f"Diff complete: {n_retained} retained, {n_excluded} excluded")
+    log.info(f"Diff complete: {n_retained} retained ({n_new_templates} new template, "
+             f"{n_new_values} new values), {n_excluded} excluded")
     return DiffResult(
         csv_path=csv_out,
         sqlite_path=sqlite_out,
         retained=n_retained,
         excluded=n_excluded,
+        new_templates=n_new_templates,
+        new_values=n_new_values,
     )
 
 
@@ -236,29 +281,42 @@ class DiffRow:
     subsystem: str | None
     category: str | None
     message: str | None
+    format_string: str | None   # the invariant template; None for a dynamic message
     matched_signatures: str
-    excluded: bool              # baseline noise (see the module docstring)
+    tier: str                   # TIER_NEW_TEMPLATE / TIER_NEW_VALUES / TIER_REPEAT
+    excluded: bool              # baseline noise: tier == repeat (see the module docstring)
     note: str
 
 
-def classify_rows(
-    action_db: Path, cutoff_ns: int, baseline_keys: set[tuple[str, str]],
-) -> Iterator[DiffRow]:
-    """Stream every *action_db* row after *cutoff_ns*, classified retained or
-    excluded. Pure computation: nothing is written."""
-    with contextlib.closing(sqlite3.connect(str(action_db))) as src:
+def classify_rows(action_db: Path, baseline_db: Path, cutoff_ns: int) -> Iterator[DiffRow]:
+    """Stream every *action_db* row after *cutoff_ns* with its tier against
+    *baseline_db*. Pure computation: both databases are only read (the baseline
+    keys live in temporary tables of this connection)."""
+    # Both read-only: they are this diff's inputs and must not change. The keys
+    # go to the connection's TEMP schema, which stays writable.
+    with contextlib.closing(sqlite3.connect(_read_only_uri(action_db), uri=True)) as src:
+        src.create_function("faul_has_literal_text", 1, has_literal_text, deterministic=True)
+        src.execute("ATTACH DATABASE ? AS base", (_read_only_uri(baseline_db),))
+        for statement in _BASELINE_KEY_SQL:
+            src.execute(statement)
         for row in src.execute(_build_csv_sql(src), (cutoff_ns,)):
             (ts_ns, event_order, source_order, source_file, proc, pid, tid,
-             lvl, et, sub, cat, msg, matched_sigs) = row
+             lvl, et, sub, cat, msg, fmt, matched_sigs, tier) = row
             if ts_ns == 0:
                 # Unresolved timestamp: an empty ISO (not the 1970 sentinel), and
                 # retained — it cannot be proven to predate the action.
                 ts, note, excluded = "", "unresolved timestamp (timestamp_unix_ns=0)", False
             else:
                 ts, note = iso8601_from_unix_ns(ts_ns), ""
-                excluded = msg is not None and (msg, proc or "") in baseline_keys
+                excluded = tier == TIER_REPEAT
             yield DiffRow(ts, ts_ns, event_order, source_order, source_file, proc, pid,
-                          tid, lvl, et, sub, cat, msg, matched_sigs or "", excluded, note)
+                          tid, lvl, et, sub, cat, msg, fmt, matched_sigs or "", tier,
+                          excluded, note)
+
+
+def _read_only_uri(db: Path) -> str:
+    """An SQLite URI opening *db* read-only (percent-encoded: any path is safe)."""
+    return Path(db).resolve().as_uri() + "?mode=ro"
 
 
 # ── Outputs ──────────────────────────────────────────────────────────────────
@@ -271,9 +329,9 @@ class _SqliteOut:
         INSERT INTO identified_logs
             (timestamp, timestamp_unix_ns, event_order, source_order, source_file,
              process, pid, tid,
-             log_level, event_type, subsystem, category, message,
-             matched_signatures, excluded, note)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             log_level, event_type, subsystem, category, message, format_string,
+             matched_signatures, tier, excluded, note)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
 
     def __init__(self, path: Path) -> None:
@@ -299,13 +357,16 @@ class _SqliteOut:
                 subsystem           TEXT,
                 category            TEXT,
                 message             TEXT,
+                format_string       TEXT,
                 matched_signatures  TEXT NOT NULL DEFAULT '',
+                tier                TEXT NOT NULL,
                 excluded            INTEGER NOT NULL,
                 note                TEXT
             )
         """)
         self._conn.execute("CREATE INDEX idx_identified_logs_excluded ON identified_logs(excluded)")
         self._conn.execute("CREATE INDEX idx_identified_logs_ts ON identified_logs(timestamp_unix_ns)")
+        self._conn.execute("CREATE INDEX idx_identified_logs_tier ON identified_logs(tier)")
         # hidden_keys / v_identified_visible: analyst judgment, kept separate from
         # `excluded`. `excluded` is the engine's mechanical classification and is
         # never rewritten after the diff runs; hidden_keys is reversible (the
@@ -316,8 +377,8 @@ class _SqliteOut:
     def add(self, r: DiffRow) -> None:
         self._batch.append((r.timestamp, r.timestamp_unix_ns, r.event_order, r.source_order,
                             r.source_file, r.process, r.pid, r.tid, r.log_level, r.event_type,
-                            r.subsystem, r.category, r.message, r.matched_signatures,
-                            int(r.excluded), r.note))
+                            r.subsystem, r.category, r.message, r.format_string,
+                            r.matched_signatures, r.tier, int(r.excluded), r.note))
         if len(self._batch) >= self._BATCH:
             self._flush()
 
@@ -351,7 +412,7 @@ class _CsvOut:
         self._writer.writerow([r.timestamp, r.timestamp_unix_ns, r.event_order, r.source_order,
                                r.source_file, r.process, r.pid, r.tid, r.log_level,
                                r.event_type, r.subsystem, r.category, r.message,
-                               r.matched_signatures, r.note])
+                               r.matched_signatures, r.tier, r.format_string, r.note])
 
     def __enter__(self) -> _CsvOut:
         return self
@@ -383,7 +444,8 @@ def create_hidden_keys_objects(conn: sqlite3.Connection) -> None:
 
 
 def ensure_source_columns(conn: sqlite3.Connection) -> None:
-    """Add ``source_order``/``source_file`` to ``identified_logs`` if absent.
+    """Add ``source_order``/``source_file``/``format_string``/``tier`` to
+    ``identified_logs`` if absent.
 
     Shared with :mod:`forensic_aul.ops.identify.results` so a pre-L10 diff DB
     (produced before these two columns existed) can gain them on open. Unlike
@@ -398,3 +460,8 @@ def ensure_source_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE identified_logs ADD COLUMN source_order INTEGER")
     if "source_file" not in cols:
         conn.execute("ALTER TABLE identified_logs ADD COLUMN source_file TEXT")
+    # Tiers (2026-11): NULL on a database diffed before they existed.
+    if "format_string" not in cols:
+        conn.execute("ALTER TABLE identified_logs ADD COLUMN format_string TEXT")
+    if "tier" not in cols:
+        conn.execute("ALTER TABLE identified_logs ADD COLUMN tier TEXT")

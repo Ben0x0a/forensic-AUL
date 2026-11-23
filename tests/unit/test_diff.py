@@ -330,3 +330,69 @@ def test_unresolved_rows_are_counted_and_warned_about(tmp_path, caplog):
         run_diff(base, action, tmp_path / "out.csv", tmp_path / "out.db")
     warnings = " ".join(r.message for r in caplog.records if r.levelno >= logging.WARNING)
     assert "2" in warnings and "unresolved" in warnings.lower()
+
+
+# ── Tiers (I2): new template / known template with new values / exact repeat ──
+
+def _db_fmt(path, rows) -> None:
+    """rows: list of (unix_ns, message, process_name, format_string | None)."""
+    conn = sqlite3.connect(str(path))
+    apply_pragmas(conn)
+    init_schema(conn)
+    procs = sorted({r[2] for r in rows})
+    fmts = sorted({r[3] for r in rows if r[3] is not None})
+    pid_of = {name: i + 1 for i, name in enumerate(procs)}
+    fid_of = {f: i + 1 for i, f in enumerate(fmts)}
+    conn.executemany("INSERT INTO processes(id, name) VALUES (?, ?)", [(v, k) for k, v in pid_of.items()])
+    conn.executemany("INSERT INTO format_strs(id, value) VALUES (?, ?)", [(v, k) for k, v in fid_of.items()])
+    for i, (ns, msg, proc, fmt) in enumerate(rows, 1):
+        conn.execute(
+            "INSERT INTO logs(id, timestamp_unix_ns, timestamp_mach, message, process_id, "
+            "format_str_id) VALUES (?,?,?,?,?,?)",
+            (i, ns, ns, msg, pid_of[proc], fid_of.get(fmt)),
+        )
+    conn.commit()
+    conn.close()
+
+
+def test_rows_are_tiered_against_the_baseline(tmp_path):
+    _db_fmt(tmp_path / "base.db", [
+        (100, "joined wifi Home", "wifid", "joined wifi %{public}s"),
+        (100, "idle tick", "kernel", "idle tick"),
+        (100, "anything at all", "app", "%{public}s"),           # generic template
+    ])
+    _db_fmt(tmp_path / "act.db", [
+        (200, "idle tick", "kernel", "idle tick"),                 # exact repeat
+        (201, "joined wifi Office", "wifid", "joined wifi %{public}s"),  # new values
+        (202, "camera opened", "camera", "camera opened"),         # new template
+        (203, "something else", "app", "%{public}s"),              # generic: not a known template
+        (204, "dynamic text", "app", None),                        # no format string
+    ])
+    res = run_diff(tmp_path / "base.db", tmp_path / "act.db", None, tmp_path / "out.db")
+
+    conn = sqlite3.connect(tmp_path / "out.db")
+    tiers = dict(conn.execute("SELECT message, tier FROM identified_logs"))
+    assert tiers == {
+        "idle tick": "repeat",
+        "joined wifi Office": "new_values",
+        "camera opened": "new_template",
+        "something else": "new_template",
+        "dynamic text": "new_template",
+    }
+    assert (res.retained, res.excluded, res.new_templates, res.new_values) == (4, 1, 3, 1)
+
+
+def test_inputs_are_opened_read_only(tmp_path):
+    """The diff only reads its two inputs (the keys go to a TEMP schema)."""
+    import os
+    import stat
+
+    _db_fmt(tmp_path / "base.db", [(100, "a", "p", "a")])
+    _db_fmt(tmp_path / "act.db", [(200, "b", "p", "b")])
+    for name in ("base.db", "act.db"):
+        os.chmod(tmp_path / name, stat.S_IRUSR)
+    try:
+        run_diff(tmp_path / "base.db", tmp_path / "act.db", None, tmp_path / "out.db")
+    finally:
+        for name in ("base.db", "act.db"):
+            os.chmod(tmp_path / name, stat.S_IRUSR | stat.S_IWUSR)

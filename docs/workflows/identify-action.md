@@ -43,10 +43,17 @@ which knowledge-base signatures are written.
 
 - The **cutoff** is `MAX(timestamp_unix_ns)` over the baseline database. Only rows
   newer than that are considered.
-- The **noise set** is every `(message, process)` pair seen in the baseline. A
-  post-cutoff row whose pair is already in that set is flagged `excluded` — the
-  device says it all the time, so it says nothing about your action.
-- Everything else is **retained**.
+- Each post-cutoff row gets a **tier**:
+  - `repeat`: its `(message, process)` pair was seen in the baseline. It is
+    flagged `excluded`, because the device says it all the time, so it says
+    nothing about your action.
+  - `new_values`: a template the baseline produced for that process, with a
+    new message.
+  - `new_template`: a template the baseline never produced for that process.
+    **Read these first.**
+- `new_template` + `new_values` are **retained**. See
+  [the identify database](../formats/identify-database.md#what-the-diff-computes)
+  for the exact rules.
 
 Two outputs, written — like the captures and databases the run produces — into
 the run's own session directory `<output-dir>/<prefix>/` (see

@@ -10,5 +10,7 @@ def format_diff_result(res: DiffResult) -> str:
     return "\n".join([
         "  Identify complete.",
         f"    Retained : {res.retained}  →  {res.csv_path}",
+        f"      new template : {res.new_templates}  (read these first)",
+        f"      new values   : {res.new_values}",
         f"    Excluded : {res.excluded}  (full set in {res.sqlite_path})",
     ])

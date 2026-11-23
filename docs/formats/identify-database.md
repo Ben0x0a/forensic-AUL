@@ -13,17 +13,27 @@ Two extracted analysis databases go in: a **baseline** (before the action) and a
 - **Cutoff** = `MAX(timestamp_unix_ns)` over the baseline, excluding the `0`
   failure sentinel. An all-unresolved baseline raises `ValueError` instead of
   yielding a cutoff of `0` that would let everything through.
-- **Noise set** = the set of `(message, process_name)` tuples present in the
-  baseline. Process name is resolved through the join, so the key is comparable
-  across databases whose `processes.id` values differ.
+- **Baseline keys** = the `(message, process)` pairs and the `(format string,
+  process)` pairs present in the baseline, copied into two indexed temporary
+  tables of the diff's own connection (both inputs are opened read-only).
+  Process names and format strings are resolved through the joins, so the keys
+  compare across databases whose ids differ. A *generic* format string — no
+  literal text once its `%` specifiers are removed, e.g. `%{public}s` — is left
+  out of the template keys: two lines sharing it may have nothing in common.
 
 Every action-database row with `timestamp_unix_ns > cutoff` **or**
-`timestamp_unix_ns = 0` is written to `identified_logs`, classified:
+`timestamp_unix_ns = 0` is written to `identified_logs` with a **tier**:
 
-| `excluded` | Meaning |
-|---|---|
-| `0` | **Retained** — attributable to the action |
-| `1` | **Noise** — its `(message, process)` tuple already appears in the baseline |
+| `tier` | `excluded` | Meaning |
+|---|---|---|
+| `new_template` | `0` | The baseline never produced this template for this process (or, for a dynamic message, this message) — **read these first** |
+| `new_values` | `0` | A known template for this process with a message the baseline did not have — a familiar event with new values |
+| `repeat` | `1` | **Noise** — its `(message, process)` pair already appears in the baseline |
+
+Retained = `new_template` + `new_values` — the same rows the former two-way diff
+retained; the tier ranks them. On the iOS 27 screenshot test capture: 111,141
+post-cutoff rows → 48,145 repeat, 31,071 new values, 31,925 new template (6,724
+distinct templates; the top process is `ScreenshotServicesService`).
 
 Rows that predate the cutoff are not written at all: they carry no information
 about the action. A row with an unresolved timestamp (`timestamp_unix_ns = 0`)
@@ -50,12 +60,14 @@ Rows are read ordered by `(timestamp_unix_ns ASC, id ASC)`.
 | `subsystem` | TEXT | |
 | `category` | TEXT | |
 | `message` | TEXT | |
+| `format_string` | TEXT | The invariant template (`format_strs.value`); NULL for a dynamic message |
 | `matched_signatures` | TEXT NOT NULL DEFAULT `''` | Comma-joined signature ids (`GROUP_CONCAT`), `''` when the action DB has no KB tables or the row is unannotated |
-| `excluded` | INTEGER NOT NULL | `0` retained, `1` baseline noise |
+| `tier` | TEXT | `new_template` / `new_values` / `repeat` (see above); NULL in a database diffed before tiers existed |
+| `excluded` | INTEGER NOT NULL | `0` retained, `1` baseline noise (`tier = repeat`) |
 | `note` | TEXT | Currently only the unresolved-timestamp note |
 
 Indexes: `idx_identified_logs_excluded(excluded)`,
-`idx_identified_logs_ts(timestamp_unix_ns)`.
+`idx_identified_logs_ts(timestamp_unix_ns)`, `idx_identified_logs_tier(tier)`.
 
 Everything is **denormalised** — the lookup tables are joined away at diff time, so
 the file stands alone.
@@ -138,7 +150,7 @@ raises `InvalidDatabaseError` otherwise — deliberately distinct from
 | `include_kb_known` → `matched_signatures = ''` |
 | `include_hidden` → `NOT EXISTS (matching hidden_keys row)` |
 
-`search` adds a literal substring match on `message` (`LIKE … ESCAPE '\'` with
+`tier` keeps one tier only (`il.tier = ?`). `search` adds a literal substring match on `message` (`LIKE … ESCAPE '\'` with
 `%`/`_` escaped through the same `_escape_like` the query layer uses). Rows come
 back ordered by `(timestamp_unix_ns ASC, id ASC)`, with `LIMIT`/`OFFSET` paging.
 
@@ -160,7 +172,7 @@ Header, in order:
 timestamp, timestamp_unix_ns, event_order, source_order, source_file,
 process, pid, tid,
 log_level, event_type, subsystem, category, message,
-matched_signatures, note
+matched_signatures, tier, format_string, note
 ```
 
 That is every `identified_logs` column except `id` and `excluded` (the flag is

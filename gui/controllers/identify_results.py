@@ -29,6 +29,8 @@ _EXPECTED = (OSError, ForensicAULError, ValueError, sqlite3.Error)
 # aliased column names (see ops/identify/results.py: _ROWS_COLUMNS).
 COLUMNS: list[tuple[str, str]] = [
     ("timestamp", "Timestamp"),
+    # new_template / new_values / repeat — which lines to read first (diff.py).
+    ("tier", "Tier"),
     ("process", "Process"),
     ("pid", "PID"),
     ("log_level", "Level"),

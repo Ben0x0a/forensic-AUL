@@ -166,6 +166,10 @@ class DiffResult:
     sqlite_path: Path                   # all post-cutoff rows with an ``excluded`` flag
     retained: int                       # rows written to the CSV
     excluded: int                       # rows flagged as baseline noise
+    # The retained rows by tier (see ops/identify/diff.py): templates the
+    # baseline never produced, and known templates with new values.
+    new_templates: int = 0
+    new_values: int = 0
 
 
 @dataclass(frozen=True)

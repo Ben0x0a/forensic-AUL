@@ -44,8 +44,8 @@ _EXPORT_HEADER = _CSV_HEADER
 _ROWS_COLUMNS = (
     "id, timestamp, timestamp_unix_ns, event_order, source_order, source_file, "
     "process, pid, tid, "
-    "log_level, event_type, subsystem, category, message, matched_signatures, "
-    "excluded, note"
+    "log_level, event_type, subsystem, category, message, format_string, "
+    "matched_signatures, tier, excluded, note"
 )
 
 
@@ -146,6 +146,7 @@ class IdentifyResults:
         include_kb_known: bool = False,
         include_hidden: bool = False,
         search: str | None = None,
+        tier: str | None = None,
     ) -> int:
         """Total rows :meth:`rows` would return for the same flags.
 
@@ -157,6 +158,7 @@ class IdentifyResults:
             include_kb_known=include_kb_known,
             include_hidden=include_hidden,
             search=search,
+            tier=tier,
         )
         return self._conn.execute(
             f"SELECT COUNT(*) FROM identified_logs il WHERE {where}", params
@@ -169,15 +171,21 @@ class IdentifyResults:
         include_kb_known: bool = False,
         include_hidden: bool = False,
         search: str | None = None,
+        tier: str | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> list[sqlite3.Row]:
-        """Return matching rows, ordered ``timestamp_unix_ns ASC, id ASC``."""
+        """Return matching rows, ordered ``timestamp_unix_ns ASC, id ASC``.
+
+        *tier* keeps one tier only (``"new_template"``, ``"new_values"``, or
+        ``"repeat"`` with *include_noise*); see ops/identify/diff.py.
+        """
         where, params = self._build_where(
             include_noise=include_noise,
             include_kb_known=include_kb_known,
             include_hidden=include_hidden,
             search=search,
+            tier=tier,
         )
         sql = f"SELECT {_ROWS_COLUMNS} FROM identified_logs il WHERE {where} " \
               "ORDER BY timestamp_unix_ns ASC, id ASC"
@@ -247,7 +255,8 @@ class IdentifyResults:
                     row["source_order"], row["source_file"],
                     row["process"], row["pid"], row["tid"], row["log_level"],
                     row["event_type"], row["subsystem"], row["category"],
-                    row["message"], row["matched_signatures"], row["note"],
+                    row["message"], row["matched_signatures"], row["tier"],
+                    row["format_string"], row["note"],
                 ])
         return len(rows)
 
@@ -258,6 +267,7 @@ class IdentifyResults:
         include_kb_known: bool,
         include_hidden: bool,
         search: str | None,
+        tier: str | None = None,
     ) -> tuple[str, list]:
         clauses: list[str] = []
         params: list = []
@@ -270,6 +280,9 @@ class IdentifyResults:
                 SELECT 1 FROM hidden_keys hk
                 WHERE hk.message = il.message AND hk.process = COALESCE(il.process, '')
             )""")
+        if tier is not None:
+            clauses.append("il.tier = ?")
+            params.append(tier)
         if search:
             # Literal substring match: escape LIKE metacharacters so %/_ in the
             # search text match themselves — the same escape_like the query
