@@ -11,8 +11,10 @@ activityCreateEvent → "Activity"
 signpostEvent       → "Signpost"
 lossEvent           → "Loss"
 userActionEvent     → "Log"   (conservative — counted separately)
-stateEvent          → skipped (Statedump, not parsed by our extractor)
+stateEvent          → "Statedump"
 timesyncEvent       → skipped (metadata markers, not log entries)
+(no eventType)      → the closing summary ``{"count": N, "finished": 1}``: not an
+                      entry; N is kept so the reader can check it got every line
 
 messageType → log_level
 -----------------------
@@ -36,7 +38,7 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 # eventTypes that are NOT log entries in our DB
-_SKIP_EVENT_TYPES: frozenset[str] = frozenset(["timesyncEvent", "stateEvent"])
+_SKIP_EVENT_TYPES: frozenset[str] = frozenset(["timesyncEvent"])
 
 # eventType → our event_type
 _EVENT_TYPE_MAP: dict[str, str] = {
@@ -44,6 +46,7 @@ _EVENT_TYPE_MAP: dict[str, str] = {
     "activityCreateEvent": "Activity",
     "signpostEvent":       "Signpost",
     "lossEvent":           "Loss",
+    "stateEvent":          "Statedump",
     "userActionEvent":     "Log",   # conservative
 }
 
@@ -113,6 +116,9 @@ class LoadResult:
     user_action_count: int = 0
     parse_errors: int = 0
     total_lines: int = 0
+    # The ``count`` of log show's closing summary line; None if it was absent
+    # (log show interrupted — the reference is then incomplete).
+    summary_count: int | None = None
 
     @property
     def count(self) -> int:
@@ -180,8 +186,9 @@ def load_ndjson(path: Path | str) -> LoadResult:
     """Parse an Apple ``log show --style ndjson`` file.
 
     Returns a :class:`LoadResult` containing all comparable records indexed
-    by their :class:`RefKey`.  Non-comparable eventTypes (timesyncEvent,
-    stateEvent) are counted in ``skipped_event_types`` but not stored.
+    by their :class:`RefKey`.  timesyncEvent markers are counted in
+    ``skipped_event_types`` but not stored; the closing summary line sets
+    ``summary_count``.
     """
     path = Path(path)
     result = LoadResult(records={})
@@ -205,6 +212,12 @@ def load_ndjson(path: Path | str) -> LoadResult:
 
             _consume_obj(obj, result)
 
+    # log show's summary counts the lines it printed before it (verified: 143,157
+    # for a 143,158-line file). Absent or different means a truncated reference.
+    if result.summary_count is None:
+        log.warning("ndjson_loader: no closing summary — log show did not finish; the reference is incomplete")
+    elif result.summary_count != result.total_lines - 1:
+        log.warning(f"ndjson_loader: summary says {result.summary_count} lines, read {result.total_lines - 1}")
     log.info(f"ndjson_loader: {result.count} records loaded  collisions={result.collisions}  skipped={dict(result.skipped_event_types)}  unknown={dict(result.unknown_event_types)}  errors={result.parse_errors}")
     return result
 
@@ -214,7 +227,10 @@ def build_record(obj: dict) -> RefRecord | None:
     non-entry event type (timesync/state). Pure — no counting, no dedup — so both
     the dict loader and the streaming sort-merge path share it."""
     et = obj.get("eventType", "")
-    if et in _SKIP_EVENT_TYPES:
+    # WHY the explicit check: log show ends with a summary object that has no
+    # eventType. Read as an entry it became a phantom "missing" record (mach=0,
+    # no process) in every comparison.
+    if et in _SKIP_EVENT_TYPES or "eventType" not in obj:
         return None
 
     boot_uuid_raw: str = obj.get("bootUUID", "")
@@ -254,6 +270,10 @@ def build_record(obj: dict) -> RefRecord | None:
 def _consume_obj(obj: dict, result: LoadResult) -> None:
     """Convert one parsed JSON object and record it into *result* (dict path)."""
     et = obj.get("eventType", "")
+    if "eventType" not in obj:
+        if "finished" in obj:
+            result.summary_count = _coerce_int(obj.get("count"))
+        return
     if et in _SKIP_EVENT_TYPES:
         result.skipped_event_types[et] = result.skipped_event_types.get(et, 0) + 1
         return

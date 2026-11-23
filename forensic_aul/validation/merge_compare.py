@@ -97,18 +97,6 @@ def _ordkey(rec: RefRecord | DbRecord) -> tuple[str, int, int]:
     return (k.boot_uuid, k.mach_timestamp, k.thread_id)
 
 
-def _dedup(stream: Iterator[RefRecord] | Iterator[DbRecord]):
-    """Collapse adjacent equal-key records (first wins), matching the in-RAM path's
-    dict-dedup. Safe because the stream is sorted, so duplicates are contiguous."""
-    prev: tuple[str, int, int] | None = None
-    for rec in stream:
-        key = _ordkey(rec)
-        if key == prev:
-            continue
-        prev = key
-        yield rec
-
-
 # ── sorted source streams ──────────────────────────────────────────────────────
 
 def _db_stream(db_path: Path) -> Iterator[DbRecord]:
@@ -265,8 +253,12 @@ def merge_compare(
     db_path = Path(db_path)
     ndjson_path = Path(ndjson_path)
     with tempfile.TemporaryDirectory(prefix="faul_merge_") as td:
-        left = _dedup(_ndjson_sorted_stream(ndjson_path, Path(td)))   # reference
-        right = _dedup(_db_stream(db_path))                            # our DB
+        # WHY no de-duplication: several entries can share a match key (boot,
+        # mach time, thread) — the state events of one statedump do. The walk pairs
+        # equal keys one for one, so every entry counts: two in the reference and
+        # one in the database is one missing, never zero.
+        left = _ndjson_sorted_stream(ndjson_path, Path(td))   # reference
+        right = _db_stream(db_path)                            # our DB
         return _walk(left, right, max_samples=max_samples)
 
 

@@ -182,26 +182,40 @@ def test_external_sort_spills_and_merges(tmp_path, monkeypatch, chunk_bytes, fan
     assert [r.event_message for r in spilled] == [r.event_message for r in in_ram]
 
 
-def test_duplicate_key_resolves_like_the_inram_loader(tmp_path):
-    """A duplicated match key must collapse to the record that appears FIRST in the
-    file — the one the in-RAM dict keeps — not to whatever the sort ordered first."""
+def test_duplicate_keys_are_paired_one_for_one(tmp_path):
+    """Entries sharing a match key all count: two in the reference and one in the
+    database is one missing entry (key-deduplication used to report zero)."""
     ndjson = tmp_path / "ref.ndjson"
     dup = {
-        "eventType": "logEvent", "bootUUID": _BOOT, "machTimestamp": 900,
-        "threadID": 4, "processID": 20, "userID": 0, "subsystem": "com.dup",
-        "category": "cat", "activityIdentifier": 0, "parentActivityIdentifier": 0,
-        "timestamp": _apple_ts(900), "formatString": "%s",
-        "messageType": "Default", "processImagePath": "/bin/dup",
+        "eventType": "stateEvent", "bootUUID": _BOOT, "machTimestamp": 900,
+        "threadID": 4, "processID": 20, "userID": 0, "subsystem": "", "category": "",
+        "activityIdentifier": 0, "parentActivityIdentifier": 0,
+        "timestamp": _apple_ts(900), "formatString": "", "messageType": "",
+        "processImagePath": "/bin/dup",
     }
-    # "aaa" sorts before "zzz", so a payload-ordered sort would pick the wrong one.
     ndjson.write_text(
-        json.dumps({**dup, "eventMessage": "zzz first in file"}) + "\n"
-        + json.dumps({**dup, "eventMessage": "aaa second in file"}) + "\n",
+        json.dumps({**dup, "eventMessage": "first"}) + "\n"
+        + json.dumps({**dup, "eventMessage": "second"}) + "\n",
         encoding="utf-8",
     )
+    streamed = list(merge_compare._ndjson_sorted_stream(ndjson, tmp_path))
+    assert [r.event_message for r in streamed] == ["first", "second"], "file order kept"
 
-    streamed = list(merge_compare._dedup(
-        merge_compare._ndjson_sorted_stream(ndjson, tmp_path)
-    ))
-    assert [r.event_message for r in streamed] == ["zzz first in file"]
-    assert load_ndjson(ndjson).records[streamed[0].key].event_message == "zzz first in file"
+
+def test_a_duplicate_missing_from_the_database_is_counted(tmp_path):
+    ndjson = tmp_path / "ref.ndjson"
+    entry = {"eventType": "logEvent", "bootUUID": _BOOT, "machTimestamp": 900, "threadID": 4,
+             "processID": 20, "timestamp": _apple_ts(900), "eventMessage": "same key"}
+    ndjson.write_text(json.dumps(entry) + "\n" + json.dumps(entry) + "\n", encoding="utf-8")
+    db = tmp_path / "case.db"
+    conn = sqlite3.connect(str(db))
+    conn.executescript(_SCHEMA)
+    conn.execute("INSERT INTO boots(id, boot_uuid) VALUES (1, ?)", (_BOOT,))
+    conn.execute("INSERT INTO logs(id, timestamp_mach, timestamp_unix_ns, boot_id, pid, tid, message) "
+                 "VALUES (1, 900, ?, 1, 20, 4, 'same key')", ((1_700_000_000 + 900) * 1_000_000_000,))
+    conn.commit()
+    conn.close()
+
+    report = merge_compare.merge_compare(db, ndjson)
+
+    assert (report.matched, report.missing, report.extra) == (1, 1, 0)

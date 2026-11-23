@@ -40,7 +40,25 @@ Extracts a logarchive with FAUL and compares the result to Apple's
 exhausting RAM.
 
 **Pass criterion: every reference record must be present in the database.**
-Relax it with `--allow-missing N` (a count, not a percentage).
+Relax it with `--allow-missing N` (a count, not a percentage). Entries that share
+a match key (boot, mach time, thread) are paired one for one, so every entry
+counts.
+
+**The reference covers the whole archive.** By default `log show` prints only the
+time window the archive's `Info.plist` declares, and `--start`/`--end` cannot
+widen it, while FAUL keeps every entry present in the files. The reference is
+therefore taken from a hard-linked view of the archive whose `Info.plist` window
+is widened (the evidence itself is never written to). With it, both test
+archives match exactly: iOS 18.1, 1,163,368 entries on both sides; iOS 27,
+143,053; no entry missing, none extra.
+
+What `log show` does that FAUL does not, measured:
+
+- a chunkset whose catalog cannot be read is **silently dropped** (no entry, no
+  warning, exit 0). FAUL drops it too — its entries have no message and no
+  process without the catalog — but counts it and marks the run DEGRADED;
+- loss records ("N messages dropped") are hidden unless `--loss` is passed, so
+  the reference flags include it.
 
 ### L2 — acquisition fidelity
 
@@ -82,10 +100,12 @@ unavailable modes with guidance** rather than failing obscurely:
 - a bare logarchive with no reference off macOS → error printing the exact
   `log show` command to run on a Mac.
 
-Off macOS, generate the reference once on a Mac and carry it with you:
+Off macOS, generate the reference once on a Mac and carry it with you (a
+reference made this way covers only the declared time window, so entries outside
+it are reported as extra):
 
 ```bash
-log show --style ndjson --info --debug --signpost <archive> > ref.ndjson
+log show --style ndjson --info --debug --signpost --loss <archive> > ref.ndjson
 ```
 
 ---
@@ -146,7 +166,7 @@ with a `.db`, `.sqlite` or `.sqlite3` suffix. Anything else is rejected.
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--log-show-args ARGS` | `--info --debug --signpost` | Override the flags passed to `log show`, as a single quoted string (split with `shlex`). |
+| `--log-show-args ARGS` | `--info --debug --signpost --loss` | Override the flags passed to `log show`, as a single quoted string (split with `shlex`). |
 | `--collect-last DURATION` | `None` | For `--from-device` (L3): bound **both** device collections to this window (`1h`, `30m`) — keeps the capture small and fast, and the drift minimal. |
 
 ### Artefacts
@@ -229,7 +249,7 @@ log output, which always states `PASS:` or `FAIL:` explicitly.
   L2's append-check absorbs the tail that grew between them; a *rewrite* is what
   fails.
 - **`--log-show-args` replaces the defaults entirely** — it does not append to
-  `--info --debug --signpost`. Dropping `--debug` shrinks the reference and can
+  `--info --debug --signpost --loss`. Dropping `--debug` shrinks the reference and can
   make a real gap look like a pass.
 - **`validate-tool` is not [`verify-hash`](verify-hash.md).** `validate-tool` asks
   "is the parse correct?"; `verify-hash` asks "has the evidence changed since extraction?".

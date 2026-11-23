@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import logging
 import shlex
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -65,28 +66,32 @@ class _Resources:
     """
 
     def __init__(self) -> None:
-        self._dirs: list[tempfile.TemporaryDirectory] = []
+        self._dirs: list[Path] = []
         self._tmp_paths: set[Path] = set()
 
     def tempdir(self, *, prefix: str) -> Path:
-        td = tempfile.TemporaryDirectory(prefix=prefix)
-        self._dirs.append(td)
-        return Path(td.name)
+        # mkdtemp, not TemporaryDirectory: the latter deletes itself when the
+        # program exits, so a folder holding a --keep-ref / --keep-db file vanished
+        # anyway. Resolved, so it compares with the resolved kept paths (/var is a
+        # link to /private/var on macOS).
+        path = Path(tempfile.mkdtemp(prefix=prefix)).resolve()
+        self._dirs.append(path)
+        return path
 
     def mark_temp(self, path: Path) -> None:
         self._tmp_paths.add(path)
 
     def cleanup(self, *, keep_paths: set[Path]) -> None:
-        """Clean up every temp dir whose contents are not in *keep_paths*.
+        """Remove every temp dir that does not hold a path in *keep_paths*.
 
         Tempdirs that hold a "kept" file are left on disk so the user can
         inspect them later — the file is inside the dir.
         """
-        for td in self._dirs:
-            td_path = Path(td.name)
-            if any(p == td_path or td_path in p.parents for p in keep_paths):
+        kept = {p.resolve() for p in keep_paths}
+        for path in self._dirs:
+            if any(k == path or path in k.parents for k in kept):
                 continue
-            td.cleanup()
+            shutil.rmtree(path, ignore_errors=True)
 
 
 # ── Public entry point ────────────────────────────────────────────────────────
@@ -297,7 +302,10 @@ def _make_reference(
     out_dir = resources.tempdir(prefix="forensic_aul_ref_")
     out_path = out_dir / (logarchive.name + ".ndjson")
 
-    ref = log_show.run(logarchive, out_path, flags=flags)
+    # The reference covers the whole archive, not only the window its Info.plist
+    # declares: our extractor keeps the entries outside it (see log_show module).
+    view = log_show.full_window_view(logarchive, out_dir / "view" / logarchive.name)
+    ref = log_show.run(view, out_path, flags=flags)
     if args.keep_ref:
         keep_paths.add(ref.resolve())
         log.info(f"Reference ndjson kept at: {ref}")
