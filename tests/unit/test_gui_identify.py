@@ -386,3 +386,28 @@ def test_an_abort_reports_the_abort_wording(qapp, monkeypatch):
     runner.join_and_dispatch()
 
     assert shown and shown[-1][1].startswith("Aborted")
+
+
+def test_description_reaches_the_workflow_and_warnings_show_on_done(qapp, monkeypatch):
+    """The typed description is handed to the workflow as a plain string (read on
+    the worker thread), and the run's warnings are shown next to the summary."""
+    from dataclasses import replace as dc_replace
+
+    screen = _make_screen()
+    runner = _install_fake_workflow(monkeypatch, screen, drives="none")
+
+    def fake(*_args, **kwargs):
+        return dc_replace(_fake_result(), action_description=kwargs["describe_action"](),
+                          warnings=("the device locked during the baseline",))
+
+    monkeypatch.setattr(identify_ctrl, "run_identify_workflow", fake)
+    shown: list = []
+    screen.show_result = lambda ok, msg: shown.append(msg)
+    _select_device(screen)
+    screen._out.set_path("/tmp/out")
+    screen._describe.setText("opened the camera")
+
+    screen._ctrl.start()
+    runner.join_and_dispatch()
+    assert any("Warning: the device locked during the baseline" in m for m in shown)
+    assert screen._describe_panel.isHidden(), "the field is gone once the run is done"

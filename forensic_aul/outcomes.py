@@ -181,6 +181,10 @@ class IdentifyResult:
     baseline_db: Path                   # extract of the baseline archive
     action_db: Path                     # extract of the post-action archive
     diff: DiffResult                    # the attribution outputs
+    # What the operator said the action was (may be empty).
+    action_description: str = ""
+    # Conditions that may have put noise in the diff (e.g. a lock-state change).
+    warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

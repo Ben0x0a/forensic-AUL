@@ -79,19 +79,28 @@ class DeviceInfo:
     # ── Connection metadata ────────────────────────────────────────────────────
     connection_type: str = "USB"
 
-    def display_table(self) -> str:
+    def display_table(self, *, masked: bool = False) -> str:
+        """The summary shown before a run, one ``label : value`` per line.
+
+        *masked* hides the personal and subscriber identifiers (name, phone
+        number, IMSI, ICCID, MACs) and keeps only the last four characters of
+        the device identifiers — enough to recognise the device on a projected
+        screen without disclosing it (identify is run in classrooms).
+        """
+        hide = _mask if masked else (lambda value: value)
+        name = "(hidden)" if masked and self.device_name else self.device_name
         lines = [
-            ("UDID",              self.udid),
-            ("IMEI",              self.imei or "(not available)"),
-            ("IMEI2",             self.imei2 or "(not available)"),
-            ("Serial",            self.serial_number or "(not available)"),
-            ("Name",              self.device_name),
+            ("UDID",              hide(self.udid)),
+            ("IMEI",              hide(self.imei) or "(not available)"),
+            ("IMEI2",             hide(self.imei2) or "(not available)"),
+            ("Serial",            hide(self.serial_number) or "(not available)"),
+            ("Name",              name),
             ("Model",             f"{self.product_type}  {self.hardware_model}".strip()),
             ("iOS",               f"{self.product_version} ({self.build_version})"),
             ("Baseband",          self.baseband_version or "(not available)"),
-            ("Phone number",      self.phone_number or "(not available)"),
-            ("Wi-Fi MAC",         self.wifi_mac or "(not available)"),
-            ("Bluetooth MAC",     self.bluetooth_mac or "(not available)"),
+            ("Phone number",      hide(self.phone_number) or "(not available)"),
+            ("Wi-Fi MAC",         hide(self.wifi_mac) or "(not available)"),
+            ("Bluetooth MAC",     hide(self.bluetooth_mac) or "(not available)"),
             ("Timezone",          self.timezone or "(not available)"),
             ("Locked",            "Yes" if self.password_protected else "No"),
             ("Activation",        self.activation_state or "(not available)"),
@@ -104,7 +113,7 @@ class DeviceInfo:
         for i, sim in enumerate(self.sims, 1):
             sim_type = "eSIM" if sim.is_embedded else "SIM"
             sim_lines.append(
-                f"  SIM {i} ({sim_type:<4})  ICCID={sim.iccid}  IMSI={sim.imsi}"
+                f"  SIM {i} ({sim_type:<4})  ICCID={hide(sim.iccid)}  IMSI={hide(sim.imsi)}"
                 f"  MCC={sim.mcc} MNC={sim.mnc}  carrier={sim.carrier_bundle}"
             )
         if sim_lines:
@@ -159,3 +168,10 @@ class DeviceInfo:
             "region_info":              self.region_info,
             "connection_type":          self.connection_type,
         }
+
+
+def _mask(value: str) -> str:
+    """*value* reduced to its last four characters (``""`` stays ``""``)."""
+    if not value:
+        return value
+    return "••••" + value[-4:] if len(value) > 4 else "••••"

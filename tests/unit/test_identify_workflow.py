@@ -310,3 +310,43 @@ class TestWorkflow:
         with pytest.raises(ExtractFailedError, match="baseline extract decoded nothing"):
             run_identify_workflow(patched.out, CaseInfo(case_number="CASE-1"), confirm=None, wait_for_action=None)
         assert "diff" not in patched.calls
+
+
+# ── Lock state (I1) and the action description (I5) ────────────────────────────
+
+def _lock_states(monkeypatch, states):
+    """Make each lock read return the next value of *states*."""
+    answers = iter(states)
+
+    async def fake_locked(_lockdown):
+        return next(answers)
+
+    monkeypatch.setattr(wf, "device_locked", fake_locked)
+
+
+class TestLockAndDescription:
+    def test_a_locked_device_is_refused_before_any_capture(self, patched, monkeypatch):
+        from forensic_aul import DeviceLockedError
+
+        _lock_states(monkeypatch, [True])
+        with pytest.raises(DeviceLockedError, match="Auto-Lock"):
+            run_identify_workflow(patched.out, confirm=lambda d: True, wait_for_action=lambda: None)
+        assert not [c for c in patched.calls if c.startswith("collect:")]
+        assert "close" in patched.calls, "the connection is closed on refusal"
+
+    def test_a_lock_during_the_run_is_reported_and_stored(self, patched, monkeypatch):
+        from forensic_aul.ops.identify.run_info import decode_warnings, read_run_info
+
+        _lock_states(monkeypatch, [False, True, False])   # start, after baseline, after action
+        res = run_identify_workflow(patched.out, confirm=lambda d: True, wait_for_action=lambda: None,
+                                    describe_action=lambda: "  opened the camera  ")
+        assert len(res.warnings) == 1 and "during the baseline" in res.warnings[0]
+        assert res.action_description == "opened the camera"
+        info = read_run_info(res.diff.sqlite_path)
+        assert info["action_description"] == "opened the camera"
+        assert decode_warnings(info["warnings"]) == res.warnings
+
+    def test_an_unreadable_lock_state_does_not_stop_the_run(self, patched, monkeypatch):
+        _lock_states(monkeypatch, [None, None, None])
+        res = run_identify_workflow(patched.out, confirm=lambda d: True, wait_for_action=lambda: None)
+        assert res.warnings == () and res.action_description == ""

@@ -60,6 +60,10 @@ class AcquisitionAborted(AcquisitionError):
     """The *confirm* callback declined the acquisition (not an error condition)."""
 
 
+class DeviceLockedError(AcquisitionError):
+    """The device is locked, so a run that needs it unlocked was refused."""
+
+
 # ── Public entry point ────────────────────────────────────────────────────────
 
 def acquire(

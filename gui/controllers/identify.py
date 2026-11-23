@@ -79,6 +79,9 @@ class IdentifyController:
         # Set when the knowledge base failed to load for the current run, so the
         # DONE state can tell the analyst the results are unannotated.
         self._kb_warning: str | None = None
+        # The action description field's text, mirrored here on the GUI thread
+        # so the worker reads a plain string (see set_description).
+        self._description = ""
         # Give the view a way to stop this run without knowing how it stops.
         # WHY it matters beyond the wizard's own Abort button: it is what lets the
         # application shutdown path drain a running identify instead of tearing
@@ -162,6 +165,8 @@ class IdentifyController:
             status=log.info,
             wait_still=self.wait_still,
             wait_for_action=self.wait_for_action,
+            # Read on the worker thread: a str copy, never the widget.
+            describe_action=lambda: self._description,
         )
         self._view.run_task(
             lambda: run_identify_workflow(output_dir, case, opts, **kwargs),
@@ -192,6 +197,10 @@ class IdentifyController:
 
     # ── GUI-thread control buttons ───────────────────────────────────────────────
 
+    def set_description(self, text: str) -> None:
+        """Keep the description field's text (GUI thread) for describe_action."""
+        self._description = text
+
     def skip_still(self) -> None:
         self._skip_event.set()
 
@@ -214,10 +223,12 @@ class IdentifyController:
             "identify", str(result.diff.sqlite_path), f"{result.diff.retained} retained"
         )
         self._view.set_state(self._view.DONE, result, _result_counts(result.diff.sqlite_path))
-        if self._kb_warning:
-            # After set_state: DONE clears the result host, so the warning must
-            # land afterwards to stay visible next to the summary.
-            self._view.show_result(False, self._kb_warning)
+        # After set_state: DONE clears the result host, so warnings must land
+        # afterwards to stay visible next to the summary.
+        warnings = [*(f"Warning: {w}" for w in result.warnings),
+                    *([self._kb_warning] if self._kb_warning else [])]
+        if warnings:
+            self._view.show_result(False, "<br>".join(warnings))
 
     def on_failed(self, exc: BaseException) -> None:
         self._view.set_state(self._view.SETUP)

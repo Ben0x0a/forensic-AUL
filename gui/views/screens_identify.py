@@ -19,13 +19,14 @@ that are simpler to just show/hide in place.
 
 from __future__ import annotations
 
+import html
 from enum import Enum, auto
 from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QHBoxLayout, QProgressBar, QVBoxLayout
+from PySide6.QtWidgets import QHBoxLayout, QLineEdit, QProgressBar, QVBoxLayout
 
 from gui.controllers.identify import IdentifyController
 from gui.navigation import ShowIdentifyResults
@@ -121,6 +122,7 @@ class IdentifyScreen(OperationScreen):
         self.content.addLayout(self._steps_row)
 
         self._build_setup()
+        self._build_describe()
         self._build_still()
         self._build_running()
         self._build_waiting()
@@ -181,6 +183,26 @@ class IdentifyScreen(OperationScreen):
         row.addWidget(self._start_btn)
         self._setup_panel.body.addLayout(row)
         self.content.addWidget(self._setup_panel)
+
+    # ── Action description (I5) ───────────────────────────────────────────────────
+
+    def _build_describe(self) -> None:
+        """The operator's description of the action, typed whenever it suits them.
+
+        Shown from setup until the run ends, so it can be written during the
+        still pause and corrected after the action. The controller keeps a copy
+        (the worker thread must not read a widget) and takes it once the
+        post-action capture is done.
+        """
+        self._describe_panel = Panel()
+        self._describe = QLineEdit()
+        self._describe.setPlaceholderText("e.g. opened the Camera app and took one photo")
+        self._describe.textChanged.connect(self._ctrl.set_description)
+        self._describe_panel.add(field_row("Action", self._describe))
+        self._describe_panel.add(help_label(
+            "Stored with the results; it is read when the post-action capture ends."
+        ))
+        self.content.addWidget(self._describe_panel)
 
     # ── Still section ─────────────────────────────────────────────────────────────
 
@@ -269,6 +291,7 @@ class IdentifyScreen(OperationScreen):
         self._still_panel.setVisible(state is _State.STILL)
         self._running_panel.setVisible(state in (_State.RUNNING, _State.STILL, _State.WAITING))
         self._waiting_panel.setVisible(state is _State.WAITING)
+        self._describe_panel.setVisible(state is not _State.DONE)
 
         if state is _State.SETUP:
             self._highlight_step("Setup")
@@ -297,9 +320,11 @@ class IdentifyScreen(OperationScreen):
             )
         else:
             summary = f"{diff.retained} retained · {diff.excluded} background noise"
+        action = (f"<br>Action: {html.escape(result.action_description)}"
+                  if result.action_description else "")
         panel = result_panel(
             True,
-            f"Identify complete — {summary}"
+            f"Identify complete — {summary}{action}"
             f"<br><span style='color:#545a68'>{diff.sqlite_path}</span>",
         )
         self._done_host.addWidget(panel)

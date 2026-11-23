@@ -93,6 +93,13 @@ def _add_identify(sub):  # type: ignore[type-arg,no-untyped-def]
     )
     acq.add_argument("--yes", "-y", action="store_true",
                      help="Skip device confirmation prompt before baseline acquire.")
+    acq.add_argument("--action", metavar="TEXT", default=None,
+                     help="Description of the action performed (default: asked during "
+                          "the still pause, editable after the captures).")
+    acq.add_argument("--show-identifiers", action="store_true",
+                     help="Show the device's identifiers in full (default: masked — "
+                          "name, phone number, IMSI, ICCID and MACs hidden, other "
+                          "identifiers cut to their last 4 characters).")
 
     kb = p.add_argument_group("knowledge base")
     kb.add_argument(
@@ -173,7 +180,7 @@ def _run_identify(args: argparse.Namespace) -> int:
         print("")
         print("  Connected device")
         print("  " + "─" * 50)
-        print(device.display_table())
+        print(device.display_table(masked=not args.show_identifiers))
         print("")
         if args.yes:
             return True
@@ -184,9 +191,29 @@ def _run_identify(args: argparse.Namespace) -> int:
             raise AcquisitionAborted("no interactive stdin for confirmation") from None
         return answer in ("y", "yes")
 
+    # The action description: typed during the still pause, editable after the
+    # captures (I5). --action skips both prompts.
+    description = {"text": args.action or ""}
+
     def wait_still(seconds: int) -> None:
-        print(f"  Keep the device untouched for {seconds} s (Ctrl-C aborts)…")
-        time.sleep(seconds)
+        end = time.monotonic() + seconds
+        print(f"  Keep the device untouched for {seconds} s (Ctrl-C aborts).")
+        if args.action is None:
+            description["text"] = _ask("  Meanwhile, describe the action you will perform "
+                                       "(Enter to skip): ")
+        # A countdown on one line, rewritten in place (I3).
+        while (left := end - time.monotonic()) > 0:
+            print(f"\r  Still: {left:4.0f} s left ", end="", flush=True)
+            time.sleep(min(1.0, left))
+        print("\r  Still: done.          ")
+
+    def describe_action() -> str:
+        if args.action is not None:
+            return args.action
+        current = description["text"]
+        answer = _ask(f"  Action description [{current}]: " if current
+                      else "  Action description (Enter to skip): ")
+        return answer or current
 
     def wait_for_action() -> None:
         print("")
@@ -199,7 +226,10 @@ def _run_identify(args: argparse.Namespace) -> int:
         except EOFError:
             raise AcquisitionAborted("no interactive stdin during action wait") from None
 
+    line_out = _ProgressLine()
+
     def status(line: str) -> None:
+        line_out.end_line()
         print(f"  {line}")
 
     # Knowledge base: an explicit --kb is a hard requirement (load failure is an
@@ -234,7 +264,9 @@ def _run_identify(args: argparse.Namespace) -> int:
             confirm=confirm,
             wait_still=wait_still,
             wait_for_action=wait_for_action,
+            describe_action=describe_action,
             status=status,
+            progress=line_out.sink if line_out.enabled else None,
         )
     except KeyboardInterrupt:
         print("\nAborted.")
@@ -243,6 +275,7 @@ def _run_identify(args: argparse.Namespace) -> int:
         print("Aborted.")
         return 0
     except (ImportError, ValueError, AcquisitionError) as exc:
+        # DeviceLockedError lands here too: its message says what to do.
         log.error(f"error: {exc}")
         return 1
     except Exception as exc:
@@ -252,8 +285,53 @@ def _run_identify(args: argparse.Namespace) -> int:
         return 1
 
     print("")
+    if res.action_description:
+        print(f"  Action: {res.action_description}")
     print(format_diff_result(res.diff))
     return 0
+
+
+# Phases during which the identify CLI draws a live progress line. The operator
+# phases (still, wait) have their own countdown and prompt, so nothing is drawn
+# over them. Consumed by: _progress_line.
+_DRAWN_PHASES = ("baseline", "action", "extract-baseline", "extract-action", "annotate", "diff")
+
+
+class _ProgressLine:
+    """One live progress line per drawn phase; silent off a terminal.
+
+    ``end_line`` lets the status printer start on a fresh line instead of
+    writing over an unfinished progress line.
+    """
+
+    def __init__(self) -> None:
+        import sys
+
+        self.enabled = sys.stdout.isatty()
+        self._open = False      # a progress line is drawn and not yet ended
+
+    def end_line(self) -> None:
+        if self._open:
+            print()
+            self._open = False
+
+    def sink(self, event) -> None:  # type: ignore[no-untyped-def]
+        if event.phase not in _DRAWN_PHASES:
+            self.end_line()
+            return
+        print(f"\r  {event.phase:<16} {event.overall * 100:5.1f}%  {event.detail:<28}",
+              end="", flush=True)
+        self._open = True
+        if event.overall >= 1.0:
+            self.end_line()
+
+
+def _ask(prompt: str) -> str:
+    """One line from the operator; "" when stdin is not interactive."""
+    try:
+        return input(prompt).strip()
+    except EOFError:
+        return ""
 
 
 # ── identify --diff (offline mode) ────────────────────────────────────────────────

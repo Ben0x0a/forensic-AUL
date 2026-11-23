@@ -9,7 +9,8 @@ Defines : ``run_identify_workflow`` (sync wrapper) and its async body — the fu
           optionally annotate the action DB against a knowledge base, and diff
           the two so only the lines attributable to the action remain. All
           user interaction is injected through callbacks (``confirm`` /
-          ``wait_still`` / ``wait_for_action`` / ``status``) so the CLI, the
+          ``wait_still`` / ``wait_for_action`` / ``describe_action`` /
+          ``status``) so the CLI, the
           GUI and tests each supply their own front-end — the workflow itself
           performs no I/O beyond logging. This is a research tool, not a
           chain-of-custody acquisition: by default (``integrity="off"``) it
@@ -21,6 +22,7 @@ Used by : launcher/cmds/identify_cmd.py and gui/controllers/identify.py (via
 Uses    : forensic_aul.ops.acquisition (device connection, collection, report,
           AcquisitionError/-Aborted), forensic_aul.ops.extraction.extract
           (run_extract), forensic_aul.ops.identify.diff (run_diff),
+          forensic_aul.ops.identify.run_info (run facts in the identified DB),
           forensic_aul.ops.annotation.matcher (annotate_database),
           .identify_options (IdentifyOptions), forensic_aul.engine.integrity
           (hash_logarchive), forensic_aul.engine.utils.progress.
@@ -30,8 +32,8 @@ the acquisition, extraction, annotation and diff bricks. A workflow may import
 bricks; a brick never imports another brick's operations (review finding S4),
 so each stays usable and testable on its own.
 
-Errors are raised, never turned into exit codes: ``AcquisitionAborted`` when the
-operator declines, ``OperationCancelled`` when they stop a run already under way,
+Errors are raised, never turned into exit codes: ``DeviceLockedError`` when the
+device is locked at the start, ``AcquisitionAborted`` when the operator declines, ``OperationCancelled`` when they stop a run already under way,
 ``AcquisitionError`` / ``ValueError`` for failures — the front-end maps them to
 exit status and user messages. Declining and cancelling are separate types on
 purpose: the first means the run never legitimately started, the second that the
@@ -51,14 +53,21 @@ from forensic_aul.engine.utils.progress import ProgressReporter, ProgressSink
 from forensic_aul.ops.acquisition.acquire import (
     AcquisitionAborted,
     AcquisitionError,
+    DeviceLockedError,
     collect_logarchive,
     sanitise_filename_token,
 )
 from forensic_aul.device_info import DeviceInfo
-from forensic_aul.ops.acquisition.device import close_lockdown, connect_device
+from forensic_aul.ops.acquisition.device import close_lockdown, connect_device, device_locked
 from forensic_aul.ops.acquisition.report import write_acquisition_report
 from forensic_aul.case_info import CaseInfo
 from forensic_aul.ops.identify.diff import run_diff
+from forensic_aul.ops.identify.run_info import (
+    ACTION_DESCRIPTION_KEY,
+    WARNINGS_KEY,
+    encode_warnings,
+    write_run_info,
+)
 from forensic_aul.ops.workflows.identify_options import IdentifyOptions
 from forensic_aul.errors import ExtractFailedError
 from forensic_aul.ops.annotation.matcher import annotate_database
@@ -80,6 +89,16 @@ _IDENTIFY_PHASES = [
     ("extract-action", 0.26), ("annotate", 0.04), ("diff", 0.12),
 ]
 
+# Why the device must stay unlocked, said once wherever it is refused or warned.
+# Consumed by: _run_identify_async.
+_UNLOCK_ADVICE = (
+    "keep the device unlocked for the whole run "
+    "(Settings › Display & Brightness › Auto-Lock › Never)"
+)
+
+# Seconds between "still collecting" progress updates during a capture.
+_COLLECT_TICK_S = 1.0
+
 
 def run_identify_workflow(
     output_dir: Path,
@@ -90,6 +109,7 @@ def run_identify_workflow(
     confirm: Callable[[DeviceInfo], bool] | None = None,
     wait_still: Callable[[int], None] | None = None,
     wait_for_action: Callable[[], None] | None = None,
+    describe_action: Callable[[], str] | None = None,
     status: Callable[[str], None] | None = None,
     progress: ProgressSink | None = None,
 ) -> IdentifyResult:
@@ -122,6 +142,9 @@ def run_identify_workflow(
     - *wait_for_action()* — blocks until the operator has performed the action;
       raise :class:`~forensic_aul.errors.OperationCancelled` to abort. ``None``
       proceeds immediately (useful only in tests — a real run needs the pause).
+    - *describe_action()* — asked once both captures are done for the operator's
+      description of the action (front-ends let it be typed during the still
+      pause and edited here). Stored in the identified database and the result.
     - *status(line)* — human progress lines ("[1/2] Acquiring baseline …");
       defaults to the module logger at INFO.
     - *progress* — a :class:`~forensic_aul.engine.utils.progress.ProgressSink`
@@ -161,7 +184,14 @@ def run_identify_workflow(
         paths (two archives, two databases) and the nested
         :class:`~forensic_aul.outcomes.DiffResult`.
 
+    The device must be unlocked when the run starts (``DeviceLockedError``
+    otherwise): an unlock during the action capture would land in the diff. The
+    lock state is sampled again after each capture; a locked device there is
+    reported in ``IdentifyResult.warnings`` (and the identified database), since
+    its lock/unlock lines may be among the retained rows.
+
     Raises:
+        DeviceLockedError: the device was locked when the run started.
         ValueError: ``case.case_number`` yields no usable filename characters
             after sanitising.
         ExtractFailedError: a capture's extract decoded nothing (status FAILED).
@@ -175,7 +205,8 @@ def run_identify_workflow(
         case if case is not None else CaseInfo(),
         opts if opts is not None else IdentifyOptions(),
         kb=kb, confirm=confirm, wait_still=wait_still,
-        wait_for_action=wait_for_action, status=status, progress=progress,
+        wait_for_action=wait_for_action, describe_action=describe_action,
+        status=status, progress=progress,
     ))
 
 
@@ -188,6 +219,7 @@ async def _run_identify_async(
     confirm: Callable[[DeviceInfo], bool] | None,
     wait_still: Callable[[int], None] | None,
     wait_for_action: Callable[[], None] | None,
+    describe_action: Callable[[], str] | None,
     status: Callable[[str], None] | None,
     progress: ProgressSink | None,
 ) -> IdentifyResult:
@@ -198,6 +230,7 @@ async def _run_identify_async(
     integrity = opts.extract.integrity
     say = status or (lambda line: log.info(line))
     reporter = ProgressReporter(progress, _IDENTIFY_PHASES)
+    warnings: list[str] = []
 
     # ── Connect ───────────────────────────────────────────────────────────────
     reporter.phase("connect")
@@ -209,6 +242,12 @@ async def _run_identify_async(
         # on input(), which must not stall the event loop owning the connection.
         if confirm is not None and not await asyncio.to_thread(confirm, device):
             raise AcquisitionAborted("identify declined by confirm callback")
+
+        # ── Preflight: unlocked (I1) ──────────────────────────────────────────
+        # Refused rather than waited for: unlocking during the run is exactly the
+        # noise this prevents, and the operator decides when to start again.
+        if await device_locked(lockdown):
+            raise DeviceLockedError(f"the device is locked: unlock it and {_UNLOCK_ADVICE}")
 
         # ── Chain-of-custody output paths ─────────────────────────────────────
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -255,7 +294,9 @@ async def _run_identify_async(
         # ── Optional still pause ─────────────────────────────────────────────
         if wait_still is not None and still_seconds > 0:
             reporter.phase("still")
-            say(f"Keep the device still for {still_seconds}s …")
+            # Logged, not said: the wait_still callback shows the pause itself
+            # (it was printed twice before — I3).
+            log.info(f"Still pause: {still_seconds} s")
             # Raising aborts the whole run (same contract as wait_for_action);
             # returning early is a deliberate skip — the callback owns timing.
             await asyncio.to_thread(wait_still, still_seconds)
@@ -263,7 +304,11 @@ async def _run_identify_async(
         # ── Acquire #1 — baseline (never skipped: the diff needs its cutoff) ──
         reporter.phase("baseline")
         say(f"[1/2] Acquiring baseline → {baseline_archive}")
-        await _collect(lockdown, baseline_archive, t0)
+        await _collect(lockdown, baseline_archive, t0, reporter)
+        if await device_locked(lockdown):
+            warnings.append(
+                "the device locked during the baseline: unlocking it for the action "
+                f"puts the unlock in the action capture — {_UNLOCK_ADVICE}")
 
         # Cutoff for the second acquisition: now (post-baseline). Anything after
         # this point is what the analyst is hunting for.
@@ -279,9 +324,19 @@ async def _run_identify_async(
         # ── Acquire #2 — post-action ─────────────────────────────────────────
         reporter.phase("action")
         say(f"[2/2] Acquiring post-action → {action_archive}")
-        await _collect(lockdown, action_archive, action_start_unix)
+        await _collect(lockdown, action_archive, action_start_unix, reporter)
+        if await device_locked(lockdown):
+            warnings.append(
+                "the device was locked at the end of the action capture: its lock "
+                "lines may be among the retained rows")
     finally:
         await close_lockdown(lockdown)
+
+    description = ""
+    if describe_action is not None:
+        description = (await asyncio.to_thread(describe_action) or "").strip()
+    for warning in warnings:
+        say(f"Warning: {warning}")
 
     # ── Hash + acquisition reports (skipped when integrity="off": identify is
     # a research tool, and this chain-of-custody machinery is pure latency /
@@ -346,6 +401,10 @@ async def _run_identify_async(
     sqlite_out = session_dir / f"{prefix}-identified.db"
     say(f"Diffing → {sqlite_out}")
     diff = run_diff(baseline_db, action_db, csv_out, sqlite_out)
+    write_run_info(sqlite_out, {
+        ACTION_DESCRIPTION_KEY: description,
+        WARNINGS_KEY: encode_warnings(tuple(warnings)),
+    })
     reporter.finish("complete")
 
     return IdentifyResult(
@@ -354,15 +413,35 @@ async def _run_identify_async(
         baseline_db=baseline_db,
         action_db=action_db,
         diff=diff,
+        action_description=description,
+        warnings=tuple(warnings),
     )
 
 
-async def _collect(lockdown: object, archive_path: Path, start_unix: int) -> None:
-    """One windowed collection into *archive_path* (missing output = error)."""
-    await collect_logarchive(
-        lockdown, str(archive_path),
-        size_limit=None, age_limit=None, start_unix=start_unix,
-    )
+async def _collect(
+    lockdown: object, archive_path: Path, start_unix: int, reporter: ProgressReporter,
+) -> None:
+    """One windowed collection into *archive_path* (missing output = error).
+
+    The collection reports nothing until it ends (pymobiledevice3's ``collect``
+    has no progress hook), so a ticker reports the elapsed time meanwhile — an
+    honest "still working", not an invented fraction (I3).
+    """
+    async def tick() -> None:
+        started = asyncio.get_running_loop().time()
+        while True:
+            await asyncio.sleep(_COLLECT_TICK_S)
+            elapsed = asyncio.get_running_loop().time() - started
+            reporter.update(0.0, f"collecting… {elapsed:.0f} s")
+
+    ticker = asyncio.create_task(tick())
+    try:
+        await collect_logarchive(
+            lockdown, str(archive_path),
+            size_limit=None, age_limit=None, start_unix=start_unix,
+        )
+    finally:
+        ticker.cancel()
     if not archive_path.exists():
         raise AcquisitionError(
             f"collection reported success but {archive_path} was not created"

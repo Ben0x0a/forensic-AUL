@@ -20,8 +20,8 @@ There is no separate `identify-diff` command; `--diff` replaces it.
 ```bash
 faul.py identify [--case-number CASE] [-e EXHIBIT] [--analyst NAME]
                  [--notes TEXT] [--udid UDID] [--still SECONDS]
-                 [--output-dir DIR] [--yes] [--kb PATH] [--no-csv]
-                 [--batch-size N]
+                 [--output-dir DIR] [--yes] [--action TEXT]
+                 [--show-identifiers] [--kb PATH] [--no-csv] [--batch-size N]
 ```
 
 ### What it does
@@ -29,15 +29,26 @@ faul.py identify [--case-number CASE] [-e EXHIBIT] [--analyst NAME]
 `identify` answers "which log lines does *this* action produce?" by acquiring a
 baseline, having you perform the action, acquiring again, and diffing:
 
-1. Connect to the device and show its summary for confirmation.
-2. Keep the device **untouched for `--still` seconds** so idle and connection
-   noise lands in the *baseline* rather than in the result.
-3. Acquire the **baseline** logarchive.
-4. Prompt: *"Perform the action on the device now. Press Enter when complete."*
-5. Acquire the **post-action** logarchive.
-6. Extract both to SQLite.
-7. **Diff** them, so only lines attributable to the action remain, and
+1. Connect to the device and show its summary for confirmation, **masked** by
+   default (name, phone number, IMSI, ICCID and MACs hidden; UDID, IMEI and
+   serial cut to their last 4 characters — `--show-identifiers` shows them).
+2. **Refuse a locked device** (`error: the device is locked …`, exit 1). An
+   unlock during the run would land in the action capture; set
+   *Settings › Display & Brightness › Auto-Lock › Never* for the session.
+3. Keep the device **untouched for `--still` seconds** so idle and connection
+   noise lands in the *baseline* rather than in the result. Meanwhile you are
+   asked to describe the action you will perform; a countdown follows.
+4. Acquire the **baseline** logarchive.
+5. Prompt: *"Perform the action on the device now. Press Enter when complete."*
+6. Acquire the **post-action** logarchive. You can then edit the description.
+7. Extract both to SQLite.
+8. **Diff** them, so only lines attributable to the action remain, and
    optionally annotate the action database with a knowledge base.
+
+The lock state is read again after each capture. A device found locked there is
+reported as a `Warning:` line, because its lock/unlock lines may be among the
+retained rows. The description and the warnings are stored in the identified
+database (table `identify_run`).
 
 Acquisition is iOS via **pymobiledevice3** (needs the `acquire` extra; userspace,
 no root). The diff itself is pure SQLite and cross-platform.
@@ -66,6 +77,8 @@ no root). The diff itself is pure SQLite and cross-platform.
 | `--still SECONDS` | `60` (or the `[identify]` settings) | Seconds to keep the device untouched before the baseline acquisition. `0` skips the pause. |
 | `-o, --output-dir DIR` | `.` (current directory) | Directory for the archives, databases and diff outputs. |
 | `-y, --yes` | off | Skip the device confirmation prompt before the baseline acquire. |
+| `--action TEXT` | asked | Description of the action; skips both description prompts. |
+| `--show-identifiers` | off | Show the device identifiers in full in the summary. |
 
 #### Knowledge base
 
@@ -229,6 +242,10 @@ faul.py identify --diff before.logarchive after.logarchive \
 - **`--still 0` pollutes the result.** Idle chatter and USB-connection noise then
   land in the post-action capture and look like they belong to the action. The
   60 s default exists for a reason.
+- **The lock check reads lockdown's `PasswordProtected`**, the current lock
+  state as pymobiledevice3 documents it. It is sampled (start, after each
+  capture), so a lock and unlock between two samples is not seen; Auto-Lock =
+  Never avoids the case.
 - **`identify` returns `0` when the operator aborts.** Check for the output files
   rather than the exit status if you script it.
 - **`--case-number` is optional here** (unlike [`acquire`](acquire.md)), and

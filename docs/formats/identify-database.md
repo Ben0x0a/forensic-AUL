@@ -100,6 +100,19 @@ CREATE VIEW v_identified_visible AS
   addition has no `IF NOT EXISTS` form) — reads on an older database keep working,
   with `NULL` in the two new columns for its existing rows.
 
+## `identify_run`
+
+Facts about the run, written by `run_identify_workflow` after the diff (absent
+from a database made by `run_diff` alone or `identify --diff`). Source:
+`forensic_aul/ops/identify/run_info.py`.
+
+| `key` | `value` |
+|---|---|
+| `action_description` | the operator's description of the action (may be empty) |
+| `warnings` | JSON list of strings — conditions that may have put noise in the diff, e.g. the device found locked after a capture |
+
+`read_run_info(db)` returns the table as a dict (`{}` when absent).
+
 ## Reading it: `IdentifyResults`
 
 `forensic_aul.ops.identify.results.IdentifyResults` is the path-based read/annotate
