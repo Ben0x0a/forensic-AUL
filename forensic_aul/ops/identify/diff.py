@@ -294,9 +294,9 @@ def classify_rows(action_db: Path, baseline_db: Path, cutoff_ns: int) -> Iterato
     keys live in temporary tables of this connection)."""
     # Both read-only: they are this diff's inputs and must not change. The keys
     # go to the connection's TEMP schema, which stays writable.
-    with contextlib.closing(sqlite3.connect(_read_only_uri(action_db), uri=True)) as src:
+    with contextlib.closing(sqlite3.connect(read_only_uri(action_db), uri=True)) as src:
         src.create_function("faul_has_literal_text", 1, has_literal_text, deterministic=True)
-        src.execute("ATTACH DATABASE ? AS base", (_read_only_uri(baseline_db),))
+        src.execute("ATTACH DATABASE ? AS base", (read_only_uri(baseline_db),))
         for statement in _BASELINE_KEY_SQL:
             src.execute(statement)
         for row in src.execute(_build_csv_sql(src), (cutoff_ns,)):
@@ -314,7 +314,7 @@ def classify_rows(action_db: Path, baseline_db: Path, cutoff_ns: int) -> Iterato
                           excluded, note)
 
 
-def _read_only_uri(db: Path) -> str:
+def read_only_uri(db: Path) -> str:
     """An SQLite URI opening *db* read-only (percent-encoded: any path is safe)."""
     return Path(db).resolve().as_uri() + "?mode=ro"
 

@@ -158,6 +158,7 @@ class IdentifyController:
             udid=self._view.selected_udid(),
             still_seconds=self._view.still_seconds(),
             settle_seconds=settings.identify.settle_seconds,
+            repeat=self._view.repeat_count(),
             write_csv=False,
             # [identify.extract] settings; jobs default 0 = auto.
             extract=settings.identify.extract,
@@ -195,18 +196,23 @@ class IdentifyController:
             if self._skip_event.wait(1.0):
                 break
         self._cancel.check()
+        # Re-armed after every use: a repeated run asks each pause again, and a
+        # Skip from an earlier cycle must not skip this one.
+        self._skip_event.clear()
 
     def prepare(self) -> bool:
         """Block until the operator has prepared, or said there is nothing to
         prepare (worker thread); True when they prepared."""
         self._prepare_event.wait()
         self._cancel.check()
+        self._prepare_event.clear()     # re-armed for the next repetition
         return self._prepared
 
     def wait_for_action(self) -> None:
         """Block until the operator signals the action is done (worker thread)."""
         self._continue_event.wait()
         self._cancel.check()
+        self._continue_event.clear()    # re-armed for the next repetition
 
     # ── GUI-thread control buttons ───────────────────────────────────────────────
 

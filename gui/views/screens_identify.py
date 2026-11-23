@@ -177,6 +177,14 @@ class IdentifyScreen(OperationScreen):
         style_combo(self._still)
         self._setup_panel.add(field_row("Still duration", self._still))
 
+        # Repetitions of the whole cycle; above 1 the templates every repetition
+        # produced are ranked (ops/identify/repeat.py).
+        self._repeat = ComboBox()
+        for count in (1, 2, 3, 5):
+            self._repeat.addItem("Once" if count == 1 else f"{count} times", count)
+        style_combo(self._repeat)
+        self._setup_panel.add(field_row("Repeat the action", self._repeat))
+
         self._out = PathPicker("dir", placeholder="output folder for the artefacts")
         self._setup_panel.add(field_row("Output folder", self._out, required=True))
         self._setup_panel.add(help_label(AUTO_LOCK_ADVICE))
@@ -295,6 +303,9 @@ class IdentifyScreen(OperationScreen):
     def still_seconds(self) -> int:
         return self._still.currentData()
 
+    def repeat_count(self) -> int:
+        return self._repeat.currentData()
+
     def output_path(self) -> str:
         return self._out.path()
 
@@ -351,6 +362,11 @@ class IdentifyScreen(OperationScreen):
             summary = f"{diff.retained} retained · {diff.excluded} background noise"
         action = (f"<br>Action: {html.escape(result.action_description)}"
                   if result.action_description else "")
+        ranking = result.ranking
+        if ranking is not None:
+            action += (f"<br>Repeated {ranking.cycles}×: {ranking.in_every_cycle} of "
+                       f"{ranking.templates} templates new in every repetition "
+                       f"→ {html.escape(ranking.path.name)}")
         panel = result_panel(
             True,
             f"Identify complete — {summary}{action}"

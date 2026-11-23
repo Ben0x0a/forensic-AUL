@@ -428,3 +428,16 @@ def test_prepare_pause_shows_its_panel_and_returns_the_answer(qapp, monkeypatch)
     screen._ctrl.prepared(True)            # "Done preparing"
     runner.join_and_dispatch()
     assert runner.seen_prepared == [True]
+
+
+def test_pauses_are_rearmed_for_the_next_repetition(qapp):
+    """A repeated run asks every pause again: an answer from cycle 1 must not
+    release the same pause in cycle 2."""
+    screen = _make_screen()
+    ctrl = screen._ctrl
+    ctrl.continue_action()
+    ctrl.wait_for_action()                     # cycle 1: answered, returns
+    assert not ctrl._continue_event.is_set()
+    ctrl.prepared(False)
+    assert ctrl.prepare() is False
+    assert not ctrl._prepare_event.is_set()

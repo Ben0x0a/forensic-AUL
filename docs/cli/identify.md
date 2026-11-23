@@ -20,6 +20,7 @@ There is no separate `identify-diff` command; `--diff` replaces it.
 ```bash
 faul.py identify [--case-number CASE] [-e EXHIBIT] [--analyst NAME]
                  [--notes TEXT] [--udid UDID] [--still SECONDS] [--settle SECONDS]
+                 [--repeat N]
                  [--output-dir DIR] [--yes] [--action TEXT]
                  [--show-identifiers] [--kb PATH] [--no-csv] [--batch-size N]
 ```
@@ -54,6 +55,15 @@ baseline, having you perform the action, acquiring again, and diffing:
 
 The description is stored in the identified database (table `identify_run`).
 
+**Repeating the action** (`--repeat N`) is the way to cut the result down. A
+line that belongs to the action appears in every repetition; background noise
+that slipped past one baseline rarely does it N times. Each repetition gets its
+own files (`<prefix>-<n>-baseline.logarchive`, … `<prefix>-<n>-identified.db`),
+and `<prefix>-repeat.db` ranks the retained templates by how many repetitions
+had them as *new template*. `N/N` means present in every action window and
+absent from every baseline: read those first. The ranking's top lines are
+printed at the end.
+
 Acquisition is iOS via **pymobiledevice3** (needs the `acquire` extra; userspace,
 no root). The diff itself is pure SQLite and cross-platform.
 
@@ -80,6 +90,7 @@ no root). The diff itself is pure SQLite and cross-platform.
 |---|---|---|
 | `--still SECONDS` | `60` (or the `[identify]` settings) | Seconds to keep the device untouched before the baseline acquisition. `0` skips the pause. |
 | `-o, --output-dir DIR` | `.` (current directory) | Directory for the archives, databases and diff outputs. |
+| `--repeat N` | `1` | Run the whole cycle (still, preparation, baseline, action) N times, each diffed against its own baseline, then rank the templates across repetitions into `<prefix>-repeat.db` (see below). |
 | `--settle SECONDS` | `10` (or the `[identify]` settings) | Seconds to keep the device untouched after a preparation. Not used when nothing was prepared. |
 | `-y, --yes` | off | Skip the device confirmation prompt before the baseline acquire. |
 | `--action TEXT` | asked | Description of the action; skips both description prompts. |

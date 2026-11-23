@@ -126,6 +126,17 @@ def _add_identify(sub):  # type: ignore[type-arg,no-untyped-def]
         ),
     )
 
+    acq.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        metavar="N",
+        help=(
+            "Run the whole cycle (still, preparation, baseline, action) N times and "
+            "rank the templates every repetition produced, into <prefix>-repeat.db "
+            "(default: 1)."
+        ),
+    )
     out = p.add_argument_group("output")
     out.add_argument("--no-csv", action="store_true",
                      help="Skip writing the retained-lines CSV (SQLite output only).")
@@ -285,6 +296,7 @@ def _run_identify(args: argparse.Namespace) -> int:
                 settle_seconds=(args.settle if args.settle is not None
                                 else args.settings.identify.settle_seconds),
                 write_csv=False if args.no_csv else args.settings.identify.write_csv,
+                repeat=max(1, args.repeat),
                 extract=_identify_extract(args),
             ),
             kb=kb,
@@ -314,7 +326,16 @@ def _run_identify(args: argparse.Namespace) -> int:
     print("")
     if res.action_description:
         print(f"  Action: {res.action_description}")
-    print(format_diff_result(res.diff))
+    for number, cycle in enumerate(res.cycles or (res,), 1):
+        if len(res.cycles) > 1:
+            print(f"  Repetition {number}:")
+        print(format_diff_result(cycle.diff))
+    if res.ranking is not None:
+        from forensic_aul import ranked_templates
+        from forensic_aul.reports import format_ranking
+
+        print("")
+        print(format_ranking(res.ranking, ranked_templates(res.ranking.path)))
     return 0
 
 

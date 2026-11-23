@@ -45,6 +45,10 @@ class IdentifyOptions:
     # baseline rather than leaking into the action capture.
     settle_seconds: int = 10
     write_csv: bool = True          # also write <prefix>-identified.csv
+    # Repetitions of the whole capture cycle. Above 1, each is diffed against
+    # its own baseline and the templates are ranked across them
+    # (ops/identify/repeat.py) into <prefix>-repeat.db.
+    repeat: int = 1
     # Both extracts. ``integrity != "off"`` also hashes both archives and writes
     # their acquisition reports.
     extract: ExtractOptions = IDENTIFY_EXTRACT

@@ -352,3 +352,36 @@ def test_preparation_lands_in_the_baseline_after_a_settle_pause(patched):
 def test_nothing_to_prepare_skips_the_settle_pause(patched):
     events, _ = _sequence(patched, prepared=False)
     assert events == ["still:30", "prepare", "action"]
+
+
+# ── Repetitions ───────────────────────────────────────────────────────────────
+
+def test_repeat_runs_every_cycle_and_ranks_them(patched, monkeypatch):
+    from forensic_aul import RankingResult
+
+    ranked: list = []
+
+    def fake_rank(dbs, out):
+        ranked.append((list(dbs), out))
+        return RankingResult(out, len(dbs), 5, 2)
+
+    monkeypatch.setattr(wf, "rank_repeated", fake_rank)
+    actions: list = []
+    res = run_identify_workflow(patched.out, opts=IdentifyOptions(repeat=3, still_seconds=0),
+                                confirm=lambda d: True,
+                                wait_for_action=lambda: actions.append(1))
+    collects = [c for c in patched.calls if c.startswith("collect:")]
+    assert len(collects) == 6 and len(actions) == 3
+    assert [("-1-" in c, "-2-" in c, "-3-" in c) for c in collects[::2]] == [
+        (True, False, False), (False, True, False), (False, False, True)]
+    assert len(res.cycles) == 3 and res.ranking.in_every_cycle == 2
+    dbs, out = ranked[0]
+    assert [db.name.split("-identified")[0][-1] for db in dbs] == ["1", "2", "3"]
+    assert out.name.endswith("-repeat.db")
+
+
+def test_a_single_run_keeps_its_names_and_has_no_ranking(patched):
+    res = run_identify_workflow(patched.out, confirm=lambda d: True, wait_for_action=lambda: None)
+    assert res.ranking is None and len(res.cycles) == 1
+    # <prefix>-baseline.db, the prefix ending in the UTC timestamp: no cycle number.
+    assert res.baseline_db.stem.split("-")[-2].endswith("Z")

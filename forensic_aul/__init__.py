@@ -51,6 +51,7 @@ from forensic_aul.ops.annotation.matcher import (
 # Action attribution (baseline vs action diff, plus the full interactive workflow)
 from forensic_aul.ops.identify.diff import run_diff
 from forensic_aul.ops.identify.results import IdentifyResults, ResultCounts
+from forensic_aul.ops.identify.repeat import ranked_templates
 from forensic_aul.ops.workflows.identify_options import (
     AUTO_LOCK_ADVICE,
     IDENTIFY_EXTRACT,
@@ -138,7 +139,9 @@ from forensic_aul.outcomes import (
     DiffResult,
     ExportResult,
     ExtractResult,
+    IdentifyCycle,
     IdentifyResult,
+    RankingResult,
 )
 
 # A library only names its loggers; the application decides where records go.
@@ -181,8 +184,11 @@ __all__ = [
     "IDENTIFY_EXTRACT",
     "AUTO_LOCK_ADVICE",
     "IdentifyResult",
+    "IdentifyCycle",
+    "RankingResult",
     "IdentifyResults",
     "ResultCounts",
+    "ranked_templates",
     "run_export",
     "export_formats",
     "query_logs",

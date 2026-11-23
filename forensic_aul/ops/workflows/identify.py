@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
@@ -61,12 +62,13 @@ from forensic_aul.ops.acquisition.device import close_lockdown, connect_device
 from forensic_aul.ops.acquisition.report import write_acquisition_report
 from forensic_aul.case_info import CaseInfo
 from forensic_aul.ops.identify.diff import run_diff
+from forensic_aul.ops.identify.repeat import rank_repeated
 from forensic_aul.ops.identify.run_info import ACTION_DESCRIPTION_KEY, write_run_info
 from forensic_aul.ops.workflows.identify_options import IdentifyOptions
 from forensic_aul.errors import ExtractFailedError
 from forensic_aul.ops.annotation.matcher import annotate_database
 from forensic_aul.ops.extraction.extract import run_extract
-from forensic_aul.outcomes import ExtractStatus, IdentifyResult
+from forensic_aul.outcomes import ExtractStatus, IdentifyCycle, IdentifyResult
 
 if TYPE_CHECKING:
     from forensic_aul.ops.knowledge_base.models import KnowledgeBase
@@ -82,6 +84,15 @@ _IDENTIFY_PHASES = [
     ("wait", 0.02), ("action", 0.12), ("extract-baseline", 0.26),
     ("extract-action", 0.26), ("annotate", 0.04), ("diff", 0.12),
 ]
+
+
+def _identify_phases(repeat: int) -> list[tuple[str, float]]:
+    """The phases for *repeat* repetitions: every phase but ``connect`` runs
+    once per repetition, so its weight is shared out — the reporter adds a
+    phase's weight each time it is entered, and the bar must still end at 100 %."""
+    n = max(1, repeat)
+    return [(name, weight if name == "connect" else weight / n)
+            for name, weight in _IDENTIFY_PHASES]
 
 # Seconds between "still collecting" progress updates during a capture.
 _COLLECT_TICK_S = 1.0
@@ -214,10 +225,10 @@ async def _run_identify_async(
     # Unpacked once, so the steps below read as plain names.
     case_number, exhibit_number = case.case_number, case.exhibit_number
     analyst, notes = case.analyst_name, case.notes
-    udid, still_seconds, write_csv = opts.udid, opts.still_seconds, opts.write_csv
+    udid, write_csv = opts.udid, opts.write_csv
     integrity = opts.extract.integrity
     say = status or (lambda line: log.info(line))
-    reporter = ProgressReporter(progress, _IDENTIFY_PHASES)
+    reporter = ProgressReporter(progress, _identify_phases(opts.repeat))
 
     # ── Connect ───────────────────────────────────────────────────────────────
     reporter.phase("connect")
@@ -253,66 +264,25 @@ async def _run_identify_async(
         session_dir = output_dir / prefix
         session_dir.mkdir(parents=True, exist_ok=True)
 
-        baseline_archive = session_dir / f"{prefix}-baseline.logarchive"
-        action_archive = session_dir / f"{prefix}-action.logarchive"
+        cycles = _cycle_paths(session_dir, prefix, opts.repeat)
 
         # Defence in depth: ensure resolved paths still live under output_dir.
         out_resolved = output_dir.resolve()
-        for p in (baseline_archive, action_archive):
-            try:
-                p.resolve().relative_to(out_resolved)
-            except ValueError as exc:
-                raise AcquisitionError(
-                    f"refusing to write outside output directory: {p}"
-                ) from exc
+        for cycle in cycles:
+            for p in (cycle.baseline_archive, cycle.action_archive):
+                try:
+                    p.resolve().relative_to(out_resolved)
+                except ValueError as exc:
+                    raise AcquisitionError(
+                        f"refusing to write outside output directory: {p}"
+                    ) from exc
 
-        # ── t0: captured BEFORE the still wait ──────────────────────────────
-        # The baseline window starts here, not after the pause, so the idle
-        # wait itself (and any USB/lockdown connection chatter preceding it)
-        # lands inside the baseline noise set instead of leaking into the diff.
-        t0 = int(datetime.now(tz=timezone.utc).timestamp())
-
-        # ── Optional still pause ─────────────────────────────────────────────
-        if wait_still is not None and still_seconds > 0:
-            reporter.phase("still")
-            # Logged, not said: the wait_still callback shows the pause itself
-            # (it was printed twice before — I3).
-            log.info(f"Still pause: {still_seconds} s")
-            # Raising aborts the whole run (same contract as wait_for_action);
-            # returning early is a deliberate skip — the callback owns timing.
-            await asyncio.to_thread(wait_still, still_seconds)
-
-        # ── Optional preparation, then a settle pause ───────────────────────
-        # Inside the baseline window (it started at t0): the preparation's lines
-        # become baseline keys, so the result keeps the action of interest only.
-        if prepare is not None:
-            reporter.phase("prepare")
-            prepared = await asyncio.to_thread(prepare)
-            if prepared and wait_still is not None and opts.settle_seconds > 0:
-                reporter.phase("still")
-                log.info(f"Settle pause: {opts.settle_seconds} s")
-                await asyncio.to_thread(wait_still, opts.settle_seconds)
-
-        # ── Acquire #1 — baseline (never skipped: the diff needs its cutoff) ──
-        reporter.phase("baseline")
-        say(f"[1/2] Acquiring baseline → {baseline_archive}")
-        await _collect(lockdown, baseline_archive, t0, reporter)
-
-        # Cutoff for the second acquisition: now (post-baseline). Anything after
-        # this point is what the analyst is hunting for.
-        action_start_unix = int(datetime.now(tz=timezone.utc).timestamp())
-
-        # ── Operator performs the action ─────────────────────────────────────
-        # Phase fires BEFORE wait_for_action runs — the front-end uses it to
-        # show the pause panel ahead of blocking on the callback.
-        reporter.phase("wait")
-        if wait_for_action is not None:
-            await asyncio.to_thread(wait_for_action)
-
-        # ── Acquire #2 — post-action ─────────────────────────────────────────
-        reporter.phase("action")
-        say(f"[2/2] Acquiring post-action → {action_archive}")
-        await _collect(lockdown, action_archive, action_start_unix, reporter)
+        for number, cycle in enumerate(cycles, 1):
+            label = f"[{number}/{len(cycles)}] " if len(cycles) > 1 else ""
+            await _capture_cycle(
+                lockdown, cycle, opts, reporter, say, label,
+                wait_still=wait_still, prepare=prepare, wait_for_action=wait_for_action,
+            )
     finally:
         await close_lockdown(lockdown)
 
@@ -324,76 +294,175 @@ async def _run_identify_async(
     # a research tool, and this chain-of-custody machinery is pure latency /
     # evidence paperwork that a quick attribution run does not need) ──────────
     if integrity != "off":
-        for label, archive in (("baseline", baseline_archive), ("action", action_archive)):
-            try:
-                sha, hashes = hash_logarchive(archive)
-            except Exception as exc:  # noqa: BLE001
-                log.warning(f"Could not hash {label} archive: {exc}")
-                sha, hashes = "", {}
-            try:
-                write_acquisition_report(
-                    logarchive_path=archive,
-                    device=device,
-                    case_number=case_number,
-                    exhibit_number=exhibit_number,
-                    analyst=analyst,
-                    notes=f"identify/{label}" + (f" — {notes}" if notes else ""),
-                    logarchive_sha256=sha,
-                    file_count=len(hashes),
-                )
-            except Exception as exc:  # noqa: BLE001
-                log.warning(f"Could not write {label} acquisition report: {exc}")
+        for cycle in cycles:
+            for label, archive in (("baseline", cycle.baseline_archive),
+                                   ("action", cycle.action_archive)):
+                _hash_and_report(archive, label, device, case)
 
-    # ── Extract both ──────────────────────────────────────────────────────────
-
+    # ── Per cycle: extract both, annotate the action, diff ──────────────────────
     imei = device.imei or "UNKNOWN"
-    baseline_db = session_dir / f"{prefix}-baseline.db"
-    action_db = session_dir / f"{prefix}-action.db"
+    diffs = []
+    for cycle in cycles:
+        for label, phase, archive, db in (
+            ("baseline", "extract-baseline", cycle.baseline_archive, cycle.baseline_db),
+            ("post-action", "extract-action", cycle.action_archive, cycle.action_db),
+        ):
+            reporter.phase(phase)
+            say(f"Extracting {label} → {db}")
+            capture_case = CaseInfo(
+                case_number=case_number, imei=imei,
+                exhibit_number=exhibit_number, analyst_name=analyst,
+                notes=f"identify/{label}" + (f" — {notes}" if notes else ""),
+            )
+            result = run_extract(archive, db, capture_case, opts.extract,
+                                 progress=lambda ev: reporter.update(ev.overall, ev.detail))
+            # Stop here rather than diff two empty databases (B4): a FAILED
+            # extract means this tool cannot decode the device's logs at all.
+            if getattr(result, "status", None) is ExtractStatus.FAILED:
+                raise ExtractFailedError(label, result)
 
-    for label, phase, archive, db in (
-        ("baseline", "extract-baseline", baseline_archive, baseline_db),
-        ("post-action", "extract-action", action_archive, action_db),
-    ):
-        reporter.phase(phase)
-        say(f"Extracting {label} → {db}")
-        capture_case = CaseInfo(
-            case_number=case_number, imei=imei,
-            exhibit_number=exhibit_number, analyst_name=analyst,
-            notes=f"identify/{label}" + (f" — {notes}" if notes else ""),
-        )
-        result = run_extract(archive, db, capture_case, opts.extract,
-                             progress=lambda ev: reporter.update(ev.overall, ev.detail))
-        # Stop here rather than diff two empty databases (B4): a FAILED extract
-        # means this tool cannot decode the device's logs at all.
-        if getattr(result, "status", None) is ExtractStatus.FAILED:
-            raise ExtractFailedError(label, result)
+        # Annotate: enrichment, not a requirement — never abort the run.
+        if kb is not None:
+            reporter.phase("annotate")
+            try:
+                annotate_database(cycle.action_db, kb)
+            except Exception as exc:  # noqa: BLE001 — annotation must not sink the diff
+                log.warning(f"Could not annotate action database: {exc}")
 
-    # ── Annotate (enrichment, not a requirement — never abort the run) ────────
-    if kb is not None:
-        reporter.phase("annotate")
+        reporter.phase("diff")
+        csv_out = cycle.identified_db.with_suffix(".csv") if write_csv else None
+        say(f"Diffing → {cycle.identified_db}")
+        diff = run_diff(cycle.baseline_db, cycle.action_db, csv_out, cycle.identified_db)
+        write_run_info(cycle.identified_db, {ACTION_DESCRIPTION_KEY: description})
+        diffs.append(diff)
 
-        try:
-            annotate_database(action_db, kb)
-        except Exception as exc:  # noqa: BLE001 — annotation must not sink the diff
-            log.warning(f"Could not annotate action database: {exc}")
-
-    # ── Diff ──────────────────────────────────────────────────────────────────
-    reporter.phase("diff")
-    csv_out = session_dir / f"{prefix}-identified.csv" if write_csv else None
-    sqlite_out = session_dir / f"{prefix}-identified.db"
-    say(f"Diffing → {sqlite_out}")
-    diff = run_diff(baseline_db, action_db, csv_out, sqlite_out)
-    write_run_info(sqlite_out, {ACTION_DESCRIPTION_KEY: description})
+    # ── Repeated runs: rank the templates every repetition produced ─────────────
+    ranking = None
+    if len(cycles) > 1:
+        ranking_db = session_dir / f"{prefix}-repeat.db"
+        say(f"Ranking templates across {len(cycles)} repetitions → {ranking_db}")
+        ranking = rank_repeated([c.identified_db for c in cycles], ranking_db)
+        write_run_info(ranking_db, {ACTION_DESCRIPTION_KEY: description})
     reporter.finish("complete")
 
+    first = cycles[0]
     return IdentifyResult(
-        baseline_archive=baseline_archive,
-        action_archive=action_archive,
-        baseline_db=baseline_db,
-        action_db=action_db,
-        diff=diff,
+        baseline_archive=first.baseline_archive,
+        action_archive=first.action_archive,
+        baseline_db=first.baseline_db,
+        action_db=first.action_db,
+        diff=diffs[0],
         action_description=description,
+        cycles=tuple(
+            IdentifyCycle(c.baseline_archive, c.action_archive, c.baseline_db, c.action_db, d)
+            for c, d in zip(cycles, diffs)
+        ),
+        ranking=ranking,
     )
+
+
+@dataclass(frozen=True)
+class _CyclePaths:
+    """Where one repetition's artefacts go (see _cycle_paths)."""
+
+    baseline_archive: Path
+    action_archive: Path
+    baseline_db: Path
+    action_db: Path
+    identified_db: Path
+
+
+def _cycle_paths(session_dir: Path, prefix: str, repeat: int) -> list[_CyclePaths]:
+    """One set of paths per repetition: ``<prefix>-…`` for a single run (the
+    historical names), ``<prefix>-<n>-…`` when repeated."""
+    paths = []
+    for number in range(1, max(1, repeat) + 1):
+        stem = session_dir / (prefix if repeat <= 1 else f"{prefix}-{number}")
+        paths.append(_CyclePaths(
+            Path(f"{stem}-baseline.logarchive"), Path(f"{stem}-action.logarchive"),
+            Path(f"{stem}-baseline.db"), Path(f"{stem}-action.db"),
+            Path(f"{stem}-identified.db"),
+        ))
+    return paths
+
+
+async def _capture_cycle(
+    lockdown: object, cycle: _CyclePaths, opts: IdentifyOptions,
+    reporter: ProgressReporter, say: Callable[[str], None], label: str, *,
+    wait_still: Callable[[int], None] | None,
+    prepare: Callable[[], bool] | None,
+    wait_for_action: Callable[[], None] | None,
+) -> None:
+    """One repetition's captures: still → prepare/settle → baseline → action."""
+    # ── t0: captured BEFORE the still wait ──────────────────────────────────
+    # The baseline window starts here, not after the pause, so the idle wait
+    # itself (and any USB/lockdown connection chatter preceding it) lands inside
+    # the baseline noise set instead of leaking into the diff.
+    t0 = int(datetime.now(tz=timezone.utc).timestamp())
+
+    # ── Optional still pause ─────────────────────────────────────────────────
+    if wait_still is not None and opts.still_seconds > 0:
+        reporter.phase("still")
+        # Logged, not said: the wait_still callback shows the pause itself
+        # (it was printed twice before — I3).
+        log.info(f"{label}Still pause: {opts.still_seconds} s")
+        # Raising aborts the whole run (same contract as wait_for_action);
+        # returning early is a deliberate skip — the callback owns timing.
+        await asyncio.to_thread(wait_still, opts.still_seconds)
+
+    # ── Optional preparation, then a settle pause ───────────────────────────
+    # Inside the baseline window (it started at t0): the preparation's lines
+    # become baseline keys, so the result keeps the action of interest only.
+    if prepare is not None:
+        reporter.phase("prepare")
+        prepared = await asyncio.to_thread(prepare)
+        if prepared and wait_still is not None and opts.settle_seconds > 0:
+            reporter.phase("still")
+            log.info(f"{label}Settle pause: {opts.settle_seconds} s")
+            await asyncio.to_thread(wait_still, opts.settle_seconds)
+
+    # ── Baseline (never skipped: the diff needs its cutoff) ────────────────────
+    reporter.phase("baseline")
+    say(f"{label}Acquiring baseline → {cycle.baseline_archive}")
+    await _collect(lockdown, cycle.baseline_archive, t0, reporter)
+
+    # Cutoff for the action capture: now (post-baseline). Anything after this
+    # point is what the analyst is hunting for.
+    action_start_unix = int(datetime.now(tz=timezone.utc).timestamp())
+
+    # ── Operator performs the action ─────────────────────────────────────────
+    # Phase fires BEFORE wait_for_action runs — the front-end uses it to show
+    # the pause panel ahead of blocking on the callback.
+    reporter.phase("wait")
+    if wait_for_action is not None:
+        await asyncio.to_thread(wait_for_action)
+
+    # ── Post-action ──────────────────────────────────────────────────────────
+    reporter.phase("action")
+    say(f"{label}Acquiring post-action → {cycle.action_archive}")
+    await _collect(lockdown, cycle.action_archive, action_start_unix, reporter)
+
+
+def _hash_and_report(archive: Path, label: str, device: DeviceInfo, case: CaseInfo) -> None:
+    """Hash *archive* and write its acquisition report (failures only logged)."""
+    try:
+        sha, hashes = hash_logarchive(archive)
+    except Exception as exc:  # noqa: BLE001
+        log.warning(f"Could not hash {label} archive: {exc}")
+        sha, hashes = "", {}
+    try:
+        write_acquisition_report(
+            logarchive_path=archive,
+            device=device,
+            case_number=case.case_number,
+            exhibit_number=case.exhibit_number,
+            analyst=case.analyst_name,
+            notes=f"identify/{label}" + (f" — {case.notes}" if case.notes else ""),
+            logarchive_sha256=sha,
+            file_count=len(hashes),
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning(f"Could not write {label} acquisition report: {exc}")
 
 
 async def _collect(

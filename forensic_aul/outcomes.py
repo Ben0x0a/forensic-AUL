@@ -173,6 +173,27 @@ class DiffResult:
 
 
 @dataclass(frozen=True)
+class IdentifyCycle:
+    """One repetition of an identify run: its two captures, their databases, the diff."""
+
+    baseline_archive: Path
+    action_archive: Path
+    baseline_db: Path
+    action_db: Path
+    diff: DiffResult
+
+
+@dataclass(frozen=True)
+class RankingResult:
+    """Outcome of ``rank_repeated`` (ops/identify/repeat.py)."""
+
+    path: Path            # the database holding ``repeat_ranking``
+    cycles: int           # repetitions ranked
+    templates: int        # distinct templates among the retained rows
+    in_every_cycle: int   # templates that were new_template in every cycle
+
+
+@dataclass(frozen=True)
 class IdentifyResult:
     """Outcome of ``run_identify_workflow`` — the four artefacts plus the diff.
 
@@ -187,6 +208,10 @@ class IdentifyResult:
     diff: DiffResult                    # the attribution outputs
     # What the operator said the action was (may be empty).
     action_description: str = ""
+    # Every repetition, in order (the fields above describe the first one).
+    cycles: tuple[IdentifyCycle, ...] = ()
+    # The cross-repetition ranking; None for a single run.
+    ranking: RankingResult | None = None
 
 
 @dataclass(frozen=True)

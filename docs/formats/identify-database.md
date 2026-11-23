@@ -124,6 +124,26 @@ from a database made by `run_diff` alone or `identify --diff`). Source:
 
 `read_run_info(db)` returns the table as a dict (`{}` when absent).
 
+## `repeat_ranking` (`<prefix>-repeat.db`)
+
+Written by `run_identify_workflow` when `IdentifyOptions.repeat > 1`
+(`rank_repeated`, `forensic_aul/ops/identify/repeat.py`): the retained rows of
+every repetition's `identified_logs`, grouped by template. The template is the
+format string, or the message when the format string is missing or generic (no
+literal text once its `%` specifiers are removed).
+
+| Column | Meaning |
+|---|---|
+| `rank` | 1 = read first: ordered by `new_template_cycles`, `cycles`, `rows` (descending) |
+| `template`, `process` | the group key |
+| `new_template_cycles` | repetitions where it was `new_template`. Equal to the repetition count ⇒ in every action window and in no baseline |
+| `cycles` | repetitions where it was retained at all |
+| `rows` | retained rows across all repetitions |
+| `example_message` | one composed message of the group |
+
+`ranked_templates(path, limit)` reads the top of the table. The file also holds
+an `identify_run` table with the action description.
+
 ## Reading it: `IdentifyResults`
 
 `forensic_aul.ops.identify.results.IdentifyResults` is the path-based read/annotate

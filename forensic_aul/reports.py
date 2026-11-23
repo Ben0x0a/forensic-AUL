@@ -16,7 +16,7 @@ from forensic_aul.ops.acquisition.report import format_acquire_result
 from forensic_aul.ops.annotation.report import format_annotate_result
 from forensic_aul.ops.annotation.report import format_header as format_annotate_header
 from forensic_aul.ops.export.report import format_export_result
-from forensic_aul.ops.identify.report import format_diff_result
+from forensic_aul.ops.identify.report import format_diff_result, format_ranking
 from forensic_aul.ops.knowledge_base.report import format_labels as format_kb_labels
 from forensic_aul.ops.knowledge_base.report import format_signature as format_kb_signature
 from forensic_aul.ops.knowledge_base.report import format_signature_list as format_kb_signature_list
@@ -33,6 +33,7 @@ __all__ = [
     "format_annotate_header",
     "format_annotate_result",
     "format_diff_result",
+    "format_ranking",
     "format_export_result",
     "format_kb_labels",
     "format_kb_signature",
