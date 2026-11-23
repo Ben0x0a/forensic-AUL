@@ -36,6 +36,7 @@ import gui.views.screen_identify_results as results_mod  # noqa: E402
 from forensic_aul.engine.database.schema import apply_pragmas, init_schema  # noqa: E402
 from forensic_aul.ops.annotation.matcher import init_annotation_schema  # noqa: E402
 from forensic_aul.ops.identify.diff import run_diff  # noqa: E402
+from gui.navigation import ShowIdentifyResults  # noqa: E402
 from gui.recent_store import RecentStore  # noqa: E402
 from gui.settings_store import SettingsStore  # noqa: E402
 from gui.views.screen_identify_results import IdentifyResultsScreen  # noqa: E402
@@ -151,7 +152,7 @@ def test_no_prefill_shows_open_state(qapp):
 def test_prefill_lands_in_table_state(qapp, tmp_path):
     db = _build_diff_db(tmp_path)
     screen = _make_screen()
-    screen.prefill({"db": str(db)})
+    screen.receive(ShowIdentifyResults(db))
     assert screen.is_table_state()
     assert not screen._open_panel.isVisibleTo(screen)
 
@@ -161,7 +162,7 @@ def test_prefill_lands_in_table_state(qapp, tmp_path):
 def test_model_count_matches_store_default_flags(qapp, tmp_path):
     db = _build_diff_db(tmp_path, with_kb=True)
     screen = _make_screen()
-    screen.prefill({"db": str(db)})
+    screen.receive(ShowIdentifyResults(db))
     # Default flags: noise off, kb-known off → only "background chatter".
     assert _load_all(screen._model) == 1
 
@@ -169,7 +170,7 @@ def test_model_count_matches_store_default_flags(qapp, tmp_path):
 def test_noise_toggle_adds_excluded_rows(qapp, tmp_path):
     db = _build_diff_db(tmp_path, with_kb=False)
     screen = _make_screen()
-    screen.prefill({"db": str(db)})
+    screen.receive(ShowIdentifyResults(db))
     assert _load_all(screen._model) == 2  # tapped + chatter (no KB, so both retained)
     screen._noise_check.setChecked(True)
     assert _load_all(screen._model) == 3  # + boot (baseline noise)
@@ -178,7 +179,7 @@ def test_noise_toggle_adds_excluded_rows(qapp, tmp_path):
 def test_kb_toggle_adds_kb_known_rows(qapp, tmp_path):
     db = _build_diff_db(tmp_path, with_kb=True)
     screen = _make_screen()
-    screen.prefill({"db": str(db)})
+    screen.receive(ShowIdentifyResults(db))
     assert _load_all(screen._model) == 1  # only "background chatter"
     screen._kb_check.setChecked(True)
     assert _load_all(screen._model) == 2  # + "user tapped Camera"
@@ -189,7 +190,7 @@ def test_kb_toggle_adds_kb_known_rows(qapp, tmp_path):
 def test_hide_identical_lines_prunes_and_bumps_hidden(qapp, tmp_path):
     db = _build_diff_db(tmp_path, with_kb=False)
     screen = _make_screen()
-    screen.prefill({"db": str(db)})
+    screen.receive(ShowIdentifyResults(db))
     before = _load_all(screen._model)
     screen._hide_row({"message": "background chatter", "process": "p2"})
     after = _load_all(screen._model)
@@ -201,7 +202,7 @@ def test_hide_identical_lines_prunes_and_bumps_hidden(qapp, tmp_path):
 def test_unhide_from_rules_panel_restores(qapp, tmp_path):
     db = _build_diff_db(tmp_path, with_kb=False)
     screen = _make_screen()
-    screen.prefill({"db": str(db)})
+    screen.receive(ShowIdentifyResults(db))
     screen._hide_row({"message": "background chatter", "process": "p2"})
     assert _load_all(screen._model) == 1
     screen._unhide("background chatter", "p2")
@@ -214,7 +215,7 @@ def test_unhide_from_rules_panel_restores(qapp, tmp_path):
 def test_export_button_writes_csv(qapp, tmp_path, monkeypatch):
     db = _build_diff_db(tmp_path, with_kb=True)
     screen = _make_screen()
-    screen.prefill({"db": str(db)})
+    screen.receive(ShowIdentifyResults(db))
     out = tmp_path / "export.csv"
     monkeypatch.setattr(
         results_mod.QFileDialog, "getSaveFileName",

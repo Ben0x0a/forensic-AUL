@@ -116,7 +116,6 @@ class ExportScreen(OperationScreen):
         super().__init__(max_width=940)
         self._settings = settings
         self._recents = recents
-        self.navigate = None
         self._ctrl = ExportController(self)
 
         self.content.addWidget(eyebrow("Export"))

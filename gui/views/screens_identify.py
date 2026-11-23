@@ -20,6 +20,7 @@ that are simpler to just show/hide in place.
 from __future__ import annotations
 
 from enum import Enum, auto
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QUrl
@@ -27,6 +28,7 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QHBoxLayout, QProgressBar, QVBoxLayout
 
 from gui.controllers.identify import IdentifyController
+from gui.navigation import ShowIdentifyResults
 from gui.recent_store import RecentStore
 from gui.settings_store import SettingsStore
 from gui.views.screen_base import OperationScreen
@@ -105,7 +107,6 @@ class IdentifyScreen(OperationScreen):
         super().__init__()
         self._settings = settings
         self._recents = recents
-        self.navigate = None  # set by the shell
         self._ctrl = IdentifyController(self, recents, settings)
         self.progressChanged.connect(self._on_progress)
 
@@ -316,8 +317,7 @@ class IdentifyScreen(OperationScreen):
         self._done_host.addLayout(row)
 
     def _open_results(self, db_path: Any) -> None:
-        if self.navigate:
-            self.navigate("identify", prefill={"tab": "results", "db": str(db_path)})
+        self.go(ShowIdentifyResults(Path(db_path)))
 
     def _reveal_output(self) -> None:
         out = self.output_path()

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -29,6 +30,7 @@ import gui.recent_store as recent_store  # noqa: E402
 import gui.settings_store as settings_store  # noqa: E402
 from forensic_aul import OperationCancelled  # noqa: E402
 from forensic_aul.outcomes import DiffResult, IdentifyResult  # noqa: E402
+from gui.navigation import ShowIdentifyResults  # noqa: E402
 from gui.recent_store import RecentStore  # noqa: E402
 from gui.settings_store import SettingsStore  # noqa: E402
 from gui.views.screens_identify import IdentifyScreen  # noqa: E402
@@ -246,19 +248,17 @@ def test_done_shows_counts_and_view_results_navigates(qapp, monkeypatch):
     _select_device(screen)
     screen._out.set_path("/tmp/out")
 
-    navigated: list[tuple] = []
-    screen.navigate = lambda screen_id, **kw: navigated.append((screen_id, kw))
+    navigated: list = []
+    screen.bind_navigator(navigated.append)
 
     screen._ctrl.start()
     runner.join_and_dispatch()
     assert screen._done_host.count() >= 1, "DONE renders a summary + actions"
 
     # Click "View results" — it navigates to the Identify hub's Results tab
-    # with the db prefill (single sidebar entry; the hub routes to the viewer).
+    # with the db (single sidebar entry; the hub routes to the viewer).
     screen._open_results("/tmp/case-identified.db")
-    assert navigated == [
-        ("identify", {"prefill": {"tab": "results", "db": "/tmp/case-identified.db"}})
-    ]
+    assert navigated == [ShowIdentifyResults(Path("/tmp/case-identified.db"))]
 
 
 # ── DevicePicker ────────────────────────────────────────────────────────────────
@@ -289,22 +289,27 @@ def _wait_for(predicate, *, qapp=None, timeout=5.0) -> None:
 
 # ── IdentifyHub (single sidebar entry, Run/Results tabs) ───────────────────────
 
-def test_hub_prefill_routes_to_results_tab(qapp, monkeypatch):
+def test_hub_receive_routes_to_results_tab(qapp, monkeypatch):
     from gui.views.screen_identify_hub import IdentifyHub
 
     hub = IdentifyHub(SettingsStore(), RecentStore())
     assert hub.current_tab() == "run"
 
-    # Prefill with a results payload switches the tab and forwards the db.
-    forwarded: list[dict] = []
-    monkeypatch.setattr(hub._results, "prefill", forwarded.append)
-    hub.prefill({"tab": "results", "db": "/tmp/x-identified.db"})
+    # A results payload switches the tab and forwards the payload.
+    forwarded: list = []
+    monkeypatch.setattr(hub._results, "receive", forwarded.append)
+    payload = ShowIdentifyResults(Path("/tmp/x-identified.db"))
+    hub.receive(payload)
     assert hub.current_tab() == "results"
-    assert forwarded == [{"tab": "results", "db": "/tmp/x-identified.db"}]
+    assert forwarded == [payload]
 
-    # And back to the wizard.
-    hub.prefill({"tab": "run"})
-    assert hub.current_tab() == "run"
+
+def test_screen_refuses_a_payload_addressed_elsewhere(qapp):
+    # A payload names its target; one arriving at the wrong screen is a routing
+    # bug and must fail loudly, not be dropped like the old dict prefill.
+    screen = _make_screen()
+    with pytest.raises(TypeError):
+        screen.receive(ShowIdentifyResults(Path("/tmp/x.db")))
 
 
 def test_hub_relays_wizard_progress(qapp):

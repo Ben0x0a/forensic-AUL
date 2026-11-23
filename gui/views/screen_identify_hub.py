@@ -6,9 +6,9 @@ Defines : IdentifyHub — a thin container that stacks the existing IdentifyScre
           so the two formerly-separate sidebar entries collapse into a single
           "Identify" one. The hub owns no logic of its own: it relays the
           wizard's busy/progress signals to the shell and forwards navigation
-          prefill to the right child.
+          payloads to the right child.
 Used by : gui.views.shell (registered as the single "identify" screen).
-Uses    : PySide6 (QTabWidget), gui.views.screens_identify (IdentifyScreen),
+Uses    : PySide6 (QTabWidget), gui.navigation, gui.views.screens_identify (IdentifyScreen),
           gui.views.screen_identify_results (IdentifyResultsScreen),
           gui.recent_store, gui.settings_store.
 
@@ -23,11 +23,11 @@ there.
 
 from __future__ import annotations
 
-from typing import Any
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QTabWidget, QVBoxLayout, QWidget
 
+from gui.navigation import Navigate, Payload
 from gui.recent_store import RecentStore
 from gui.settings_store import SettingsStore
 from gui.views.screen_identify_results import IdentifyResultsScreen
@@ -74,17 +74,17 @@ class IdentifyHub(QWidget):
         layout.setSpacing(0)
         layout.addWidget(self._tabs)
 
-    # ── Navigation glue (the shell sets .navigate on each child) ──────────────────
+    # ── Navigation (the gui.navigation.Screen protocol) ───────────────────────────
 
-    def set_navigate(self, navigate: Any) -> None:
+    def bind_navigator(self, navigate: Navigate) -> None:
         """Give both child screens the shell's navigate callback.
 
-        The shell's ``_add_screen`` only sets ``.navigate`` on the hub, so the hub
-        propagates it to the children that actually navigate (the wizard's
-        "View results" and the viewer's export). Called by the shell.
+        The shell binds only what its stack holds — the hub — so the hub forwards
+        the callback to the children that actually navigate (the wizard's "View
+        results" and the viewer's export). Called by the shell.
         """
-        self._run.navigate = navigate
-        self._results.navigate = navigate
+        self._run.bind_navigator(navigate)
+        self._results.bind_navigator(navigate)
 
     # ── Busy / cancellation relay ─────────────────────────────────────────────────
 
@@ -112,16 +112,14 @@ class IdentifyHub(QWidget):
     def current_tab(self) -> str:
         return _TAB_IDS[self._tabs.currentIndex()]
 
-    # ── Prefill (shell navigation) ────────────────────────────────────────────────
+    # ── Receive (shell navigation) ────────────────────────────────────────────────
 
-    def prefill(self, data: dict[str, Any]) -> None:
-        """Switch to the tab named in *data* and forward any payload to it.
+    def receive(self, payload: Payload) -> None:
+        """Route a payload addressed to "identify" to the child that takes it.
 
-        ``{"tab": "results", "db": …}`` lands on the results viewer with the DB
-        opened; ``{"tab": "run"}`` (or an absent tab) shows the wizard. Mirrors the
-        shell's other prefill hooks (see shell.set_current).
+        :class:`ShowIdentifyResults` lands on the Results tab with the database
+        opened; anything else is a routing bug and is refused (the results
+        viewer's own ``receive`` raises).
         """
-        tab = data.get("tab", "run")
-        self.set_tab(tab if tab in _TAB_IDS else "run")
-        if tab == "results":
-            self._results.prefill(data)
+        self.set_tab("results")
+        self._results.receive(payload)

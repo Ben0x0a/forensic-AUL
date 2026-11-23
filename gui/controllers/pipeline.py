@@ -13,7 +13,7 @@ Uses    : PySide6 (asyncio bridge only), forensic_aul.ops.acquisition / .extract
           screen).
 
 WHY controllers only for the pipeline: Acquire and Extract run real asynchronous
-core ops with validation, progress, prefill and acquisition-sidecar logic worth
+core ops with validation, progress, the Acquire→Extract hand-off and acquisition-sidecar logic worth
 isolating from the widgets. The lighter data/preferences screens keep the thin
 view-only convention documented in gui.views.screen_base — adding controllers
 there would be indirection without payoff.
@@ -41,6 +41,7 @@ from forensic_aul import CaseInfo
 from forensic_aul import ExtractStatus
 from gui.controllers import phrase_failure
 from app.settings import SettingsError, load_settings
+from gui.navigation import ExtractFrom
 from gui.recent_store import RecentStore
 from gui.tokens import DARK_TOKENS
 
@@ -61,7 +62,7 @@ class AcquireController:
         self._view = view
         self._recents = recents
         # Payload handed to the Extract view by the post-run "Continue" shortcut.
-        self._prefill_payload: dict[str, Any] | None = None
+        self._handoff: ExtractFrom | None = None
         # The controller owns the cancellation token (as IdentifyController owns
         # its abort events): a fresh one per run, so a previous run's cancelled
         # token can never stop the next one before it starts.
@@ -140,13 +141,15 @@ class AcquireController:
         # Capture everything Extract needs so the operator does not retype it: the
         # collected archive path, the device IMEI, and the case fields entered here.
         device = getattr(result, "device", None)
-        self._prefill_payload = {
-            "logarchive": path or None,
-            "imei": getattr(device, "imei", None) if device is not None else None,
-            "case": self._view.case_text() or None,
-            "exhibit_number": self._view.exhibit_text() or None,
-            "analyst": self._view.analyst_text() or None,
-        }
+        self._handoff = ExtractFrom(
+            source=Path(path) if path else None,
+            case=CaseInfo(
+                case_number=self._view.case_text() or None,
+                imei=getattr(device, "imei", None) if device is not None else None,
+                exhibit_number=self._view.exhibit_text() or None,
+                analyst_name=self._view.analyst_text() or None,
+            ),
+        )
         self._recents.add("acquire", self._view.output_path(), Path(path).name if path else "")
         self._view.show_result(
             True,
@@ -169,11 +172,11 @@ class AcquireController:
 
     def continue_to_extract(self) -> None:
         """Open Extract pre-filled with this acquisition's path and case metadata."""
-        if self._view.navigate and self._prefill_payload:
-            self._view.navigate("extract", prefill=self._prefill_payload)
+        if self._handoff is not None:
+            self._view.go(self._handoff)
 
     def reset(self) -> None:
-        self._prefill_payload = None
+        self._handoff = None
         self._view.set_continue_visible(False)
         self._view.clear_form()
         self._view.clear_result()

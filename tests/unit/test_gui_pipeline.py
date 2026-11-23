@@ -30,6 +30,8 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 import gui.recent_store as recent_store  # noqa: E402
 import gui.settings_store as settings_store  # noqa: E402
+from forensic_aul import CaseInfo  # noqa: E402
+from gui.navigation import ExtractFrom  # noqa: E402
 from gui.recent_store import RecentStore  # noqa: E402
 from gui.settings_store import SettingsStore  # noqa: E402
 from gui.views import screens_pipeline  # noqa: E402
@@ -120,10 +122,10 @@ def test_extract_dispatches_when_complete(qapp, tmp_path):
 
 def test_extract_prefill_populates_fields(qapp):
     ext = _make_extract()
-    ext.prefill({
-        "logarchive": "/tmp/x.logarchive", "case": "C-9",
-        "imei": "42", "exhibit_number": "E", "analyst": "Bob",
-    })
+    ext.receive(ExtractFrom(
+        source=Path("/tmp/x.logarchive"),
+        case=CaseInfo(case_number="C-9", imei="42", exhibit_number="E", analyst_name="Bob"),
+    ))
     assert (ext.case_text(), ext.imei_text(), ext.exhibit_text(),
             ext.analyst_text(), ext.source_path()) == (
         "C-9", "42", "E", "Bob", "/tmp/x.logarchive")
@@ -272,20 +274,17 @@ def test_acquire_on_done_builds_payload_and_navigates(qapp):
     acq._analyst.setText("Ana")
 
     acq._ctrl.on_done(_FakeAcquireResult())
-    payload = acq._ctrl._prefill_payload
-    assert payload == {
-        "logarchive": "/tmp/c.logarchive",
-        "imei": "356000000000001",
-        "case": "CASE-A",
-        "exhibit_number": None,
-        "analyst": "Ana",
-    }
+    payload = acq._ctrl._handoff
+    assert payload == ExtractFrom(
+        source=Path("/tmp/c.logarchive"),
+        case=CaseInfo(case_number="CASE-A", imei="356000000000001", analyst_name="Ana"),
+    )
     assert not acq._continue_btn.isHidden(), "Continue shortcut should appear after a run"
 
-    navigated: list[tuple] = []
-    acq.navigate = lambda screen_id, **kw: navigated.append((screen_id, kw))
+    navigated: list = []
+    acq.bind_navigator(navigated.append)
     acq._ctrl.continue_to_extract()
-    assert navigated == [("extract", {"prefill": payload})]
+    assert navigated == [payload]
 
 
 # ── Button language: one primary (violet) button per action row ─────────────────

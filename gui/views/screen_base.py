@@ -10,7 +10,8 @@ Defines : ScrollScreen (a left-aligned, max-width, vertically-scrolling content
 Used by : gui.views.screens_pipeline / screens_data / screens_prefs /
           screen_exploit / screen_identify_results.
 Uses    : PySide6, gui.workers (Worker/start_worker), gui.widgets.components,
-          gui.widgets.path_picker, gui.recent_store.
+          gui.widgets.path_picker, gui.recent_store, gui.navigation (the Screen
+          protocol ScrollScreen implements).
 
 WHY this base hosts the worker plumbing: it is shared by both the controller-backed
 pipeline views and the thin data/preferences views. The heavy pipeline screens
@@ -36,6 +37,7 @@ from PySide6.QtWidgets import (
 )
 
 from gui.icons import make_icon
+from gui.navigation import Destination, Navigate, Payload
 from gui.recent_store import RecentStore
 from gui.widgets.components import (
     Divider,
@@ -105,6 +107,30 @@ class ScrollScreen(QWidget):
         scroll.setWidget(host)
 
         self._result_host: QVBoxLayout | None = None
+        # The shell's navigate callback, bound once the screen is stacked. None
+        # for a screen built on its own (tests, a detached window): navigation
+        # from it is then a no-op rather than a crash.
+        self.navigate: Navigate | None = None
+
+    # ── Navigation (the gui.navigation.Screen protocol) ───────────────────────────
+
+    def bind_navigator(self, navigate: Navigate) -> None:
+        """Hand this screen the shell's navigate callback (called by the shell)."""
+        self.navigate = navigate
+
+    def go(self, destination: Destination) -> None:
+        """Navigate to *destination* if this screen is bound to a shell."""
+        if self.navigate is not None:
+            self.navigate(destination)
+
+    def receive(self, payload: Payload) -> None:
+        """Accept a payload addressed to this screen.
+
+        The default refuses: a payload names its target screen, so one arriving
+        here is a routing bug, and dropping it silently is how the old dict
+        prefill lost fields. Screens that take a payload override this.
+        """
+        raise TypeError(f"{type(self).__name__} cannot receive {type(payload).__name__}")
 
     # ── Result line ───────────────────────────────────────────────────────────────
 

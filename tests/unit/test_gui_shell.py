@@ -130,3 +130,23 @@ def test_recents_limit_is_applied_live(qapp, tmp_path, monkeypatch):
 
     store.set_limit(2)
     assert len(store.get("database")) == 2
+
+
+def test_navigate_switches_screen_and_delivers_the_payload(qapp, tmp_path, monkeypatch):
+    """A payload lands on the screen it names, which receives it; a bare id
+    only switches."""
+    from gui.navigation import OpenDatabase
+
+    w = MainWindow()
+    exploit = w._stack.widget(w._screen_index["exploit"])
+    received: list = []
+    monkeypatch.setattr(exploit, "receive", received.append)
+
+    payload = OpenDatabase(tmp_path / "case.db")
+    w.navigate(payload)
+    assert w._stack.currentWidget() is exploit
+    assert received == [payload]
+
+    w.navigate("export")
+    assert w._stack.currentWidget().screen_id == "export"
+    assert received == [payload], "a bare screen id delivers nothing"

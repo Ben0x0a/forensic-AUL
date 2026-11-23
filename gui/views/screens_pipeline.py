@@ -19,6 +19,7 @@ price of keeping each step independently runnable.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtWidgets import (
@@ -32,6 +33,7 @@ from PySide6.QtWidgets import (
 
 from forensic_aul import physical_cpu_count
 from gui.controllers.pipeline import AcquireController, ExtractController
+from gui.navigation import ExtractFrom, OpenDatabase, Payload
 from gui.recent_store import RecentStore
 from gui.settings_store import SettingsStore
 from gui.views.screen_base import OperationScreen, RecentList
@@ -88,7 +90,6 @@ class AcquireScreen(OperationScreen):
         super().__init__()
         self._settings = settings
         self._recents = recents
-        self.navigate = None  # set by the shell
         self._ctrl = AcquireController(self, recents)
 
         self.content.addWidget(eyebrow("Acquire"))
@@ -236,7 +237,6 @@ class ExtractScreen(OperationScreen):
         # Output section below. It reads *settings* for the default parser-job
         # count only.
         self._settings = settings
-        self.navigate = None
         # Live only while the RUNNING action row exists (see show_running_actions);
         # cleared by the idle/done rows so set_cancelling can never touch a button
         # Qt has already deleted.
@@ -442,34 +442,34 @@ class ExtractScreen(OperationScreen):
         new = ghost_button("Extract new", "plus")
         new.clicked.connect(self._reset)
         export = ghost_button("Export", "export")
-        export.clicked.connect(lambda: self.navigate and self.navigate("export"))
+        export.clicked.connect(lambda: self.go("export"))
         # The row's forward action — the natural next step after a successful
         # extract — is primary; "Extract new" and "Export" stay ghost.
         exploit = primary_button("Open in Exploit", "right")
-        exploit.clicked.connect(
-            lambda: self.navigate and self.navigate(
-                "exploit", prefill={"db": self.output_path()}
-            )
-        )
+        exploit.clicked.connect(lambda: self.go(OpenDatabase(Path(self.output_path()))))
         for btn in (new, export, exploit):
             self._actions.addWidget(btn)
 
     # ── Display methods ───────────────────────────────────────────────────────────
 
-    def prefill(self, data: dict[str, Any]) -> None:
+    def receive(self, payload: Payload) -> None:
         """Populate the form from an upstream step (e.g. a finished acquisition).
 
-        Called by the shell when navigating in with a payload. Existing values are
-        overwritten because the caller is the authoritative source for this run.
-        Setting the source path also triggers the controller's sidecar scan, which
-        is harmless here (it would only re-confirm the same values).
+        Called by the shell when navigating in with :class:`ExtractFrom`. Existing
+        values are overwritten because the caller is the authoritative source for
+        this run. Setting the source path also triggers the controller's sidecar
+        scan, which is harmless here (it would only re-confirm the same values).
         """
+        if not isinstance(payload, ExtractFrom):
+            super().receive(payload)
+            return
+        case = payload.case
         self.fill_fields(
-            source=data.get("logarchive"),
-            case=data.get("case"),
-            imei=data.get("imei"),
-            exhibit=data.get("exhibit_number"),
-            analyst=data.get("analyst"),
+            source=str(payload.source) if payload.source else None,
+            case=case.case_number,
+            imei=case.imei,
+            exhibit=case.exhibit_number,
+            analyst=case.analyst_name,
             only_empty=False,
         )
 

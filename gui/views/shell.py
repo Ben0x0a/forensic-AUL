@@ -8,6 +8,7 @@ Defines : MainWindow — a window using the OS's own titlebar (its title carries
 Used by : gui.app.build_main_window().
 Uses    : PySide6, the v1 screens (gui.views.screens_*), gui.widgets.components,
           gui.widgets.log_panel, gui.settings_store, gui.recent_store, gui.theme,
+          gui.navigation (typed destinations + the Screen protocol),
           gui.shutdown (the non-blocking close/drain sequence).
 
 WHY the native titlebar: a custom macOS-style bar looked foreign on Windows and
@@ -31,6 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from gui.navigation import Destination, Screen, target_of
 from gui.recent_store import RecentStore
 from gui.settings_store import SettingsStore
 from gui.shutdown import ShutdownCoordinator
@@ -371,15 +373,13 @@ class MainWindow(QWidget):
             self._main_splitter.setSizes(self._log_open_sizes)
 
     def _add_screen(self, screen: QWidget) -> None:
+        # Every stacked screen satisfies the Screen protocol — checked here, once,
+        # so a screen missing it fails at start-up instead of navigation from it
+        # silently doing nothing (the old hasattr probe's failure mode).
+        assert isinstance(screen, Screen), f"{type(screen).__name__} is not a Screen"
         index = self._stack.addWidget(screen)
         self._screen_index[screen.screen_id] = index
-        if hasattr(screen, "navigate"):
-            screen.navigate = self.set_current
-        # The Identify hub holds child screens that navigate; it exposes
-        # set_navigate to forward the shell's callback to them (it has no
-        # navigate attribute of its own).
-        if hasattr(screen, "set_navigate"):
-            screen.set_navigate(self.set_current)
+        screen.bind_navigator(self.navigate)
 
     @property
     def log_panel(self) -> LogPanel:
@@ -392,22 +392,28 @@ class MainWindow(QWidget):
 
     # ── Navigation ──────────────────────────────────────────────────────────────
 
-    def set_current(self, screen_id: str, *, prefill: dict | None = None) -> None:
+    def navigate(self, destination: Destination) -> None:
+        """Switch to *destination*'s screen and deliver its payload, if any.
+
+        The callback every screen is bound to. A payload names its own target
+        (see gui.navigation), so a sender cannot route it to the wrong screen.
+        """
+        screen_id = target_of(destination)
+        self.set_current(screen_id)
+        if not isinstance(destination, str):
+            self._stack.widget(self._screen_index[screen_id]).receive(destination)
+
+    def set_current(self, screen_id: str) -> None:
         index = self._screen_index.get(screen_id)
-        if index is None:
-            return
+        # Every id comes from this file's sidebar tables or a payload's
+        # screen_id; an unknown one is a typo that would otherwise leave the
+        # analyst on the wrong screen without a word.
+        assert index is not None, f"Invariant violated: no screen {screen_id!r}"
         self._apply_log_panel_preference(self._stack.widget(index))
         self._stack.setCurrentIndex(index)
         button = self._nav_buttons.get(screen_id)
         if button is not None:
             button.setChecked(True)
-        # Forward an optional payload to a target screen that knows how to consume
-        # it (e.g. Acquire → Extract hand-off pre-filling the case metadata).
-        if prefill:
-            target = self._stack.widget(index)
-            prefiller = getattr(target, "prefill", None)
-            if callable(prefiller):
-                prefiller(prefill)
         # Reveal the Preferences submenu when navigating into it.
         if screen_id == "settings" and not self._prefs_submenu.isVisible():
             self._prefs_submenu.setVisible(True)

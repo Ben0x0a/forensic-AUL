@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from gui.controllers.identify_results import IdentifyResultsController
+from gui.navigation import Payload, ShowIdentifyResults
 from gui.recent_store import RecentStore
 from gui.settings_store import SettingsStore
 from gui.tokens import DARK_TOKENS
@@ -110,15 +111,16 @@ class IdentifyResultsScreen(ScrollScreen):
 
     # ── Prefill hook (shell navigation from the wizard) ───────────────────────────
 
-    def prefill(self, data: dict[str, Any]) -> None:
-        """Open the DB named in ``data['db']`` and land directly in TABLE state.
+    def receive(self, payload: Payload) -> None:
+        """Open the database a :class:`ShowIdentifyResults` names, in TABLE state.
 
-        Mirrors the Acquire→Extract prefill hook the shell uses (see
-        shell.set_current): navigating in from the wizard opens the results at once.
+        Forwarded by the Identify hub: navigating in from the wizard opens the
+        results at once.
         """
-        db = data.get("db")
-        if db:
-            self._open_path(str(db))
+        if not isinstance(payload, ShowIdentifyResults):
+            super().receive(payload)
+            return
+        self._open_path(str(payload.db))
 
     # ── Open / state ──────────────────────────────────────────────────────────────
 
