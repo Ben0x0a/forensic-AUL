@@ -5,9 +5,9 @@ Defines : SignatureDialog — a modal form that turns one log row into a validat
           against the rows on screen" check.
 Used by : gui.views.screen_identify_results (a context-menu action on the diff
           table).
-Uses    : PySide6, forensic_aul.ops.knowledge_base (SignatureDraft, Match,
-          render_signature, write_signature, load_kb), gui.widgets.components,
-          forensic_aul.default_kb_dir.
+Uses    : PySide6, forensic_aul (SignatureDraft, Match — the data the form
+          builds), gui.controllers.signature (preview, rules, test, write),
+          gui.widgets.components.
 
 WHY a dialog rather than an inline panel: authoring a rule is a bounded, modal
 act with a commit point (a file is written), unlike the browsing the rest of the
@@ -43,10 +43,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from forensic_aul import KnowledgeBaseError
 from forensic_aul import Match, SignatureDraft
-from forensic_aul import render_signature, write_signature
-from forensic_aul import default_kb_dir
+from gui.controllers.signature import SignatureController, suggest_id
 from gui.widgets.components import (
     ComboBox,
     Divider,
@@ -57,10 +55,6 @@ from gui.widgets.components import (
     primary_button,
     style_combo,
 )
-
-# The loader's own id rule, mirrored so the field can reject a bad id as it is
-# typed instead of at save time. Kept identical to loader._ID_RE.
-_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
 _CONFIDENCE = ("low", "medium", "high")
 
@@ -94,7 +88,7 @@ class SignatureDialog(QDialog):
         super().__init__(parent)
         self._row = row
         self._sample_rows = sample_rows or []
-        self._kb_dir = kb_dir or default_kb_dir()
+        self._ctrl = SignatureController(kb_dir)
         self._written: Path | None = None
 
         self.setWindowTitle("New signature")
@@ -128,7 +122,7 @@ class SignatureDialog(QDialog):
         form.setSpacing(6)
 
         self._id = mono_input("net.wifi_join")
-        self._id.setText(_suggest_id(self._row))
+        self._id.setText(suggest_id(self._row))
         self._action = QLineEdit()
         self._action.setPlaceholderText("Device joined a Wi-Fi network")
         self._description = QLineEdit()
@@ -251,31 +245,15 @@ class SignatureDialog(QDialog):
         )
 
     def _refresh_preview(self, *_args: Any) -> None:
-        try:
-            self._preview.setPlainText(render_signature(self.draft()))
-        except Exception as exc:  # noqa: BLE001 — a half-typed draft must still preview
-            self._preview.setPlainText(f"# incomplete: {exc}")
+        self._preview.setPlainText(self._ctrl.preview(self.draft()))
         self._validate()
 
     def _validate(self) -> None:
         """Report the first problem that would stop a save, before it is attempted."""
-        sig_id = self._id.text().strip()
-        problems: list[str] = []
-        if not sig_id:
-            problems.append("an id is required")
-        elif not _ID_RE.fullmatch(sig_id):
-            problems.append("id must be lowercase letters, digits, dot, dash or underscore")
-        elif (self._kb_dir / "signatures" / f"{sig_id}.yaml").exists():
-            problems.append(f"signatures/{sig_id}.yaml already exists")
-        if not self._action.text().strip():
-            problems.append("an action is required")
-        if not self._regex.text().strip():
-            problems.append("a message pattern is required")
-        else:
-            try:
-                re.compile(self._regex.text())
-            except re.error as exc:
-                problems.append(f"pattern does not compile: {exc}")
+        problems = self._ctrl.problems(
+            sig_id=self._id.text().strip(), action=self._action.text().strip(),
+            regex=self._regex.text().strip() and self._regex.text(),
+        )
         self._status.setText(problems[0] if problems else "Ready to save.")
         self._save_enabled(not problems)
 
@@ -287,39 +265,17 @@ class SignatureDialog(QDialog):
     # ── Actions ───────────────────────────────────────────────────────────────────
 
     def _on_test(self) -> None:
-        """Count matches among the rows currently on screen.
-
-        Deliberately only the loaded rows: this is a sanity check the analyst can
-        reason about ("does it still match the line I picked, and how many of its
-        neighbours?"), not a claim about the whole database — which would need a
-        scan and would be misleading anyway, since the KB is applied at annotate
-        time against different candidate sets.
-        """
-        try:
-            pattern = re.compile(self._regex.text())
-        except re.error as exc:
-            self._status.setText(f"Pattern does not compile: {exc}")
-            return
-        if not self._sample_rows:
-            self._status.setText("No rows loaded to test against.")
-            return
-        hits = sum(
-            1 for row in self._sample_rows
-            if pattern.search(str(row.get("message") or ""))
-        )
-        self._status.setText(
-            f"Matches {hits:,} of the {len(self._sample_rows):,} rows on screen "
-            "(not the whole database)."
-        )
+        """Count matches among the rows currently on screen (see the controller)."""
+        self._status.setText(self._ctrl.test(self._regex.text(), self._sample_rows))
 
     def _on_save(self) -> None:
-        try:
-            self._written = write_signature(self._kb_dir, self.draft())
-        except (KnowledgeBaseError, OSError) as exc:
+        written, why = self._ctrl.save(self.draft())
+        if written is None:
             # Keep the dialog open: the draft is still in the form and the message
-            # names what to change. write_signature has already rolled back.
-            self._status.setText(str(exc))
+            # names what to change.
+            self._status.setText(why)
             return
+        self._written = written
         self.accept()
 
     def written_path(self) -> Path | None:
@@ -331,19 +287,6 @@ class SignatureDialog(QDialog):
 # identify database names the column `log_level`; the exploit row dict uses
 # `level`. Consumed by: _build_form, draft.
 _ALIASES = {"log_level": "level"}
-
-
-def _suggest_id(row: Mapping[str, Any]) -> str:
-    """A plausible starting id derived from the row's process, e.g. "wifid.event".
-
-    Only a suggestion — the analyst renames it. An empty process yields an empty
-    field rather than a misleading default.
-    """
-    process = str(row.get("process") or "").strip()
-    if not process:
-        return ""
-    slug = re.sub(r"[^a-z0-9]+", "_", process.lower()).strip("_")
-    return f"{slug}.event" if slug else ""
 
 
 def _split(text: str, *, sep: str = ",") -> tuple[str, ...]:

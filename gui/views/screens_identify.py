@@ -261,8 +261,9 @@ class IdentifyScreen(OperationScreen):
 
     # ── State machine (driven by the controller) ──────────────────────────────────
 
-    def set_state(self, state: _State, result: Any = None) -> None:
-        """Show only the section for *state*; on DONE, render the result summary."""
+    def set_state(self, state: _State, result: Any = None, counts: Any = None) -> None:
+        """Show only the section for *state*; on DONE, render the result summary
+        (*counts*: the diff database's ResultCounts, or None to use the diff's own)."""
         self._setup_panel.setVisible(state is _State.SETUP)
         self._still_panel.setVisible(state is _State.STILL)
         self._running_panel.setVisible(state in (_State.RUNNING, _State.STILL, _State.WAITING))
@@ -277,7 +278,7 @@ class IdentifyScreen(OperationScreen):
         elif state is _State.DONE:
             self._highlight_step("Results")
             self.clear_result()
-            self._show_done(result)
+            self._show_done(result, counts)
 
     def set_countdown(self, text: str) -> None:
         self._countdown.setText(text)
@@ -285,17 +286,9 @@ class IdentifyScreen(OperationScreen):
 
     # ── DONE rendering ────────────────────────────────────────────────────────────
 
-    def _show_done(self, result: Any) -> None:
+    def _show_done(self, result: Any, counts: Any) -> None:
         clear_layout(self._done_host)
         diff = result.diff
-        counts = None
-        try:
-            from forensic_aul import IdentifyResults
-
-            with IdentifyResults(diff.sqlite_path) as res:
-                counts = res.counts()
-        except Exception:  # noqa: BLE001 — the summary falls back to diff counts
-            counts = None
         if counts is not None:
             summary = (
                 f"{counts.retained} retained · {counts.noise} background noise · "

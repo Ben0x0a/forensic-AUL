@@ -13,6 +13,8 @@ Rules (see tasks/review_2026-11.md, Phase 0 / S2–S5, S10):
   5. An ops brick (forensic_aul.ops.<brick>) imports another brick only for its
      data (``models`` / ``options`` modules); chaining bricks is the job of
      forensic_aul.ops.workflows (S4).
+  6. A GUI view or widget takes only data types and pure helpers from the library;
+     every operation goes through the screen's controller (S6, G6).
 
 WHY a ratchet: today's known violations are listed explicitly. A NEW violation
 fails the test; so does a FIXED one still listed — remove it from the list in
@@ -210,3 +212,24 @@ def test_ops_bricks_do_not_chain_each_other():
     fixed = sorted(_KNOWN_BRICK_TO_BRICK - actual)
     assert not new, f"a brick chains another brick — move it to ops/workflows: {new}"
     assert not fixed, f"fixed — remove from _KNOWN_BRICK_TO_BRICK: {fixed}"
+
+
+# Rule 6 — what a GUI view or widget may take from the library: data types and
+# pure helpers. Operations (open, extract, annotate, export, write…) belong to the
+# screen's controller in gui/controllers (S6, G6).
+_VIEW_MAY_IMPORT = frozenset({
+    "LogFilter", "Match", "SignatureDraft",            # data the forms build
+    "__version__", "default_kb_dir", "physical_cpu_count",  # pure helpers
+})
+
+
+def test_gui_views_call_no_library_operation():
+    offending = []
+    for path in sorted((_ROOT / "gui").rglob("*.py")):
+        rel = path.relative_to(_ROOT).as_posix()
+        if not rel.startswith(("gui/views/", "gui/widgets/")):
+            continue
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.ImportFrom) and node.module == "forensic_aul":
+                offending += [(rel, a.name) for a in node.names if a.name not in _VIEW_MAY_IMPORT]
+    assert not offending, f"a view calls the library — move it to its controller: {offending}"

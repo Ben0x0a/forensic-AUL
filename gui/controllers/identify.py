@@ -38,11 +38,19 @@ back on the same failure signal. Both of those are gone.
 from __future__ import annotations
 
 import logging
+import sqlite3
 import threading
 from pathlib import Path
 from typing import Any
 
-from forensic_aul import CaseInfo, IdentifyOptions, load_kb, run_identify_workflow
+from forensic_aul import (
+    CaseInfo,
+    ForensicAULError,
+    IdentifyOptions,
+    IdentifyResults,
+    load_kb,
+    run_identify_workflow,
+)
 from forensic_aul import CancelToken
 from gui.controllers import phrase_failure
 from forensic_aul import default_kb_dir
@@ -207,7 +215,7 @@ class IdentifyController:
         self._recents.add(
             "identify", str(result.diff.sqlite_path), f"{result.diff.retained} retained"
         )
-        self._view.set_state(self._view.DONE, result)
+        self._view.set_state(self._view.DONE, result, _result_counts(result.diff.sqlite_path))
         if self._kb_warning:
             # After set_state: DONE clears the result host, so the warning must
             # land afterwards to stay visible next to the summary.
@@ -225,3 +233,13 @@ class IdentifyController:
         self._view.show_result(
             False, "Aborted — nothing was written beyond the collected archives."
         )
+
+
+def _result_counts(sqlite_path: Any) -> Any:
+    """The diff database's retained / noise / KB-known counts for the summary, or
+    None — the summary then falls back to the diff's own counts."""
+    try:
+        with IdentifyResults(sqlite_path) as res:
+            return res.counts()
+    except (OSError, ForensicAULError, ValueError, sqlite3.Error):
+        return None
