@@ -6,7 +6,8 @@ Defines : ExportScreen — export filtered rows to CSV / JSON / JSONL (through
           value, keeping a session table of results.
 Used by : gui.views.shell (stacked screens).
 Uses    : PySide6, gui.views.screen_base, gui.widgets.components,
-          gui.widgets.path_picker, gui.controllers.data (every library call).
+          gui.widgets.path_picker, gui.controllers.data (every library call),
+          gui.navigation (the ExportFrom hand-off).
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from gui.controllers.data import ExportController, VerifyHashController
+from gui.navigation import ExportFrom, Payload
 from gui.recent_store import RecentStore
 from gui.settings_store import SettingsStore
 from gui.views.screen_base import OperationScreen, RecentList
@@ -43,6 +45,7 @@ from gui.widgets.components import (
     field_row,
     h1,
     h2,
+    help_label,
     style_combo,
     subtitle,
 )
@@ -186,6 +189,19 @@ class ExportScreen(OperationScreen):
         filters.add(field_row("Level", self._level))
         filters.add(field_row("Message", self._like))
         filters.add(field_row("Last", self._last))
+        # Filters handed over from another screen that this form has no input
+        # for (see ExportController.receive): shown, with a way to drop them.
+        self._carried_row = QWidget()
+        carried_layout = QHBoxLayout(self._carried_row)
+        carried_layout.setContentsMargins(0, 0, 0, 0)
+        self._carried_label = help_label("")
+        self._carried_label.setWordWrap(True)
+        carried_layout.addWidget(self._carried_label, 1)
+        clear_carried = ghost_button("Clear", "x")
+        clear_carried.clicked.connect(self._ctrl.clear_carried)
+        carried_layout.addWidget(clear_carried)
+        self._carried_row.setVisible(False)
+        filters.add(self._carried_row)
         self.content.addWidget(filters)
 
         self.content.addLayout(self.make_result_host())
@@ -207,6 +223,26 @@ class ExportScreen(OperationScreen):
 
     def _pick_db(self, path: str) -> None:
         self._db.set_path(path)
+
+    def receive(self, payload: Payload) -> None:
+        """Take a hand-off (:class:`ExportFrom`): database and filters."""
+        if not isinstance(payload, ExportFrom):
+            super().receive(payload)
+            return
+        self._ctrl.receive(payload)
+
+    def fill_form(self, *, db: str, process: str, subsystem: str, level: str,
+                  like: str, last: str) -> None:
+        """Replace the database and the filter inputs (a hand-off is authoritative)."""
+        self._db.set_path(db)
+        for widget, value in ((self._process, process), (self._subsystem, subsystem),
+                              (self._level, level), (self._like, like), (self._last, last)):
+            widget.setText(value)
+
+    def show_carried(self, description: str) -> None:
+        """Show the handed-over filters the form cannot display (hidden when none)."""
+        self._carried_label.setText(f"Also applied, from Exploit: {description}" if description else "")
+        self._carried_row.setVisible(bool(description))
 
     def _start(self) -> None:
         self._ctrl.start(

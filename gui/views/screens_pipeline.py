@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
 
 from forensic_aul import physical_cpu_count
 from gui.controllers.pipeline import AcquireController, ExtractController
-from gui.navigation import ExtractFrom, OpenDatabase, Payload
+from gui.navigation import ExportFrom, ExtractFrom, OpenDatabase, Payload
 from gui.recent_store import RecentStore
 from gui.settings_store import SettingsStore
 from gui.views.screen_base import OperationScreen, RecentList
@@ -442,7 +442,7 @@ class ExtractScreen(OperationScreen):
         new = ghost_button("Extract new", "plus")
         new.clicked.connect(self._reset)
         export = ghost_button("Export", "export")
-        export.clicked.connect(lambda: self.go("export"))
+        export.clicked.connect(lambda: self.go(ExportFrom(Path(self.output_path()))))
         # The row's forward action — the natural next step after a successful
         # extract — is primary; "Extract new" and "Export" stay ghost.
         exploit = primary_button("Open in Exploit", "right")

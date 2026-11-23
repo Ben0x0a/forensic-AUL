@@ -6,7 +6,7 @@ Defines : ExportController (validate the form, build the LogFilter, run the
           verdict).
 Used by : gui.views.screens_data (each screen builds its controller).
 Uses    : forensic_aul (run_export, LogFilter, load_sidecar_for),
-          gui.controllers (phrase_failure), hashlib.
+          gui.controllers (phrase_failure), gui.navigation (ExportFrom), hashlib.
 
 WHY controllers here too (G6): the screens used to run the export and the hash
 from their widget code; every screen now follows one pattern — the view holds
@@ -17,21 +17,48 @@ library.
 from __future__ import annotations
 
 import hashlib
+from dataclasses import fields, replace
 from pathlib import Path
 from typing import Any
 
 from forensic_aul import LogFilter, load_sidecar_for, run_export
 from gui.controllers import phrase_failure
+from gui.navigation import ExportFrom
 
 # Read files in chunks so hashing a multi-GB image never loads it whole.
 _HASH_CHUNK = 1 << 20  # 1 MiB
 
 
+# The LogFilter fields the Export form shows as its own inputs. Consumed by:
+# ExportController.receive (fills them) and start (the form wins for them).
+_FORM_FIELDS = ("process", "subsystem", "level", "like", "last")
+
+
 class ExportController:
-    """Logic for the Export view (``run_task``, ``show_result``, ``set_exporting``)."""
+    """Logic for the Export view (``run_task``, ``show_result``, ``set_exporting``,
+    ``fill_form``, ``show_carried``)."""
 
     def __init__(self, view: Any) -> None:
         self._view = view
+        # Filters handed over by another screen that the form has no input for
+        # (time bounds, keyword, category…). Applied on export and always shown
+        # to the analyst (show_carried), never applied invisibly.
+        self._carried = LogFilter()
+
+    def receive(self, payload: ExportFrom) -> None:
+        """Take a hand-off: the database, the form's filters, and the rest."""
+        f = payload.filters
+        self._view.fill_form(
+            db=str(payload.db),
+            process=", ".join(f.process or ()), subsystem=", ".join(f.subsystem or ()),
+            level=", ".join(f.level or ()), like=f.like or "", last=f.last or "",
+        )
+        self._carried = replace(f, **{name: None for name in _FORM_FIELDS})
+        self._view.show_carried(describe_filters(self._carried))
+
+    def clear_carried(self) -> None:
+        self._carried = LogFilter()
+        self._view.show_carried("")
 
     def start(self, *, db: str, out: str, fmt: str, process: str, subsystem: str,
               level: str, like: str, last: str) -> None:
@@ -41,7 +68,8 @@ class ExportController:
         if not out:
             self._view.show_result(False, "Choose an output file.")
             return
-        filters = LogFilter(
+        filters = replace(
+            self._carried,
             process=_csv_list(process), subsystem=_csv_list(subsystem),
             level=_csv_list(level), like=like.strip() or None, last=last.strip() or None,
         )
@@ -130,3 +158,19 @@ def normalise_hash(text: str) -> str:
 def _csv_list(text: str) -> list[str] | None:
     items = [token.strip() for token in text.split(",") if token.strip()]
     return items or None
+
+
+def describe_filters(filters: LogFilter) -> str:
+    """*filters* as ``name: value`` pairs, set fields only ("" when none is set).
+
+    Generic over the dataclass fields so a filter added to LogFilter later is
+    shown here too, rather than silently applied without being displayed.
+    """
+    parts = []
+    for spec in fields(filters):
+        value = getattr(filters, spec.name)
+        if value in (None, False, [], ""):
+            continue
+        shown = ", ".join(value) if isinstance(value, list) else ("yes" if value is True else value)
+        parts.append(f"{spec.name.replace('_', ' ')}: {shown}")
+    return " · ".join(parts)

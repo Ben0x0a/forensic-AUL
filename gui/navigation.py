@@ -1,12 +1,14 @@
 """Typed navigation between screens: where to go, and what to carry there.
 
-Defines : the navigation payloads (OpenDatabase, ExtractFrom, ShowIdentifyResults),
+Defines : the navigation payloads (OpenDatabase, ExtractFrom, ExportFrom,
+          ShowIdentifyResults),
           Destination (a bare screen id or one payload), Navigate (the callback a
           screen is given), target_of (the screen a destination lands on), and
           the Screen protocol every stacked screen satisfies.
 Used by : gui.views.shell (dispatch), gui.views.* (screens that navigate or
           receive), gui.controllers.pipeline / identify (build payloads).
-Uses    : forensic_aul (CaseInfo — the case metadata Acquire hands to Extract).
+Uses    : forensic_aul (CaseInfo — the case metadata Acquire hands to Extract;
+          LogFilter — the rows Exploit hands to Export).
 
 WHY typed payloads instead of ``navigate(screen_id, prefill={...})``: the dict
 was a contract only by convention — a renamed key ("exhibit" vs
@@ -29,7 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar, Protocol, runtime_checkable
 
-from forensic_aul import CaseInfo
+from forensic_aul import CaseInfo, LogFilter
 
 
 @dataclass(frozen=True)
@@ -54,6 +56,20 @@ class ExtractFrom:
 
 
 @dataclass(frozen=True)
+class ExportFrom:
+    """Open Export on *db*, narrowed by *filters* (e.g. Exploit's current view).
+
+    WHY a payload rather than a shared "current database / filters" object that
+    Export observes: Export then changes only when the analyst asks for it, never
+    behind their back because another screen opened a database.
+    """
+
+    screen_id: ClassVar[str] = "export"
+    db: Path
+    filters: LogFilter = field(default_factory=LogFilter)
+
+
+@dataclass(frozen=True)
 class ShowIdentifyResults:
     """Open *db* (an identify database) on the Identify hub's Results tab."""
 
@@ -63,7 +79,7 @@ class ShowIdentifyResults:
 
 # A payload: something a screen can receive. Consumed by: Screen.receive and
 # the receiving screens' isinstance dispatch.
-Payload = OpenDatabase | ExtractFrom | ShowIdentifyResults
+Payload = OpenDatabase | ExtractFrom | ExportFrom | ShowIdentifyResults
 
 # Where to go: a bare screen id switches screens; a payload switches AND
 # delivers. Consumed by: MainWindow.navigate.
@@ -95,6 +111,7 @@ class Screen(Protocol):
 
 __all__ = [
     "Destination",
+    "ExportFrom",
     "ExtractFrom",
     "Navigate",
     "OpenDatabase",

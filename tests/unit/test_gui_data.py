@@ -172,3 +172,51 @@ def test_combo_popup_aligns_under_field(qapp):
     assert popup.width() == vh._algo.width(), "popup width should match the field"
     assert popup.x() == vh._algo.mapToGlobal(QPoint(0, vh._algo.height())).x(), \
         "popup left edge should align with the field"
+
+
+# ── Export hand-off (G3): the database and filters arrive with the analyst ─────
+
+def _handoff(tmp_path):
+    from forensic_aul import LogFilter
+    from gui.navigation import ExportFrom
+
+    return ExportFrom(tmp_path / "case.db", LogFilter(
+        process=["locationd"], last="1h",
+        time_to="2026-04-13T10:00:00", message_match="wifi",
+    ))
+
+
+def test_export_handoff_fills_the_form_and_shows_the_rest(qapp, tmp_path):
+    exp = ExportScreen(SettingsStore(), RecentStore())
+    exp.receive(_handoff(tmp_path))
+
+    assert exp._db.path() == str(tmp_path / "case.db")
+    assert (exp._process.text(), exp._last.text()) == ("locationd", "1h")
+    # What the form cannot show is shown here, never applied invisibly.
+    assert not exp._carried_row.isHidden()
+    text = exp._carried_label.text()
+    assert "time to: 2026-04-13T10:00:00" in text and "message match: wifi" in text
+    assert "locationd" not in text, "a filter shown in the form is not repeated"
+
+
+def test_export_applies_carried_filters_until_cleared(qapp, tmp_path, monkeypatch):
+    import gui.controllers.data as data_ctrl
+
+    seen: list = []
+    monkeypatch.setattr(data_ctrl, "run_export", lambda db, out, f, fmt: seen.append(f))
+    exp = ExportScreen(SettingsStore(), RecentStore())
+    exp.receive(_handoff(tmp_path))
+    exp._out.set_path(str(tmp_path / "out.csv"))
+    calls = _stub_run_task(exp)
+
+    exp._start()
+    calls[0][0]()
+    assert (seen[0].process, seen[0].message_match, seen[0].time_to) == (
+        ["locationd"], "wifi", "2026-04-13T10:00:00")
+
+    exp._ctrl.clear_carried()
+    assert exp._carried_row.isHidden()
+    exp._start()
+    calls[1][0]()
+    assert (seen[1].process, seen[1].message_match, seen[1].time_to) == (
+        ["locationd"], None, None), "the form's own filters stay; the carried ones go"
