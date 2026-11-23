@@ -18,7 +18,8 @@ import pytest
 
 from forensic_aul.engine.database.schema import EVENT_TYPE_NAMES, LOG_LEVEL_NAMES
 from forensic_aul.ops.extraction.extract import run_extract
-from forensic_aul.ops.extraction.options import CaseInfo, ExtractOptions
+from forensic_aul.case_info import CaseInfo
+from forensic_aul.ops.extraction.options import ExtractOptions
 from forensic_aul.ops.summary.cache import load_summary
 
 # ── Test data paths ────────────────────────────────────────────────────────────

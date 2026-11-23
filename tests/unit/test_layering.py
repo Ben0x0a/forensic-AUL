@@ -9,6 +9,9 @@ Rules (see tasks/review_2026-11.md, Phase 0 / S2–S5, S10):
      forensic_aul.errors.
   3. Frontends do not reach into forensic_aul.engine (they use the public API).
   4. No import cycles between bricks.
+  5. An ops brick (forensic_aul.ops.<brick>) imports another brick only for its
+     data (``models`` / ``options`` modules); chaining bricks is the job of
+     forensic_aul.ops.workflows (S4).
 
 WHY a ratchet: today's known violations are listed explicitly. A NEW violation
 fails the test; so does a FIXED one still listed — remove it from the list in
@@ -42,6 +45,17 @@ _KNOWN_FRONTEND_ENGINE = {
 }
 # Rule 4 — cycles between bricks, each as the set of bricks in one cycle.
 _KNOWN_CYCLES: set[frozenset[str]] = set()  # none left — keep it that way
+
+# Rule 5 — (importing module, imported module). Both are the logs-schema SQL spread
+# over bricks; one data-access module removes them (Phase 4, S7).
+_KNOWN_BRICK_TO_BRICK = {
+    ("forensic_aul.ops.annotation.matcher", "forensic_aul.ops.summary.cache"),
+    ("forensic_aul.ops.extraction.extract", "forensic_aul.ops.summary.cache"),
+    ("forensic_aul.ops.export.exporter", "forensic_aul.ops.query.reader"),
+    ("forensic_aul.ops.identify.diff", "forensic_aul.ops.query.reader"),
+    ("forensic_aul.ops.identify.results", "forensic_aul.ops.query.reader"),
+}
+_DATA_MODULES = ("models", "options")
 
 
 # ── Import graph ───────────────────────────────────────────────────────────────
@@ -182,3 +196,29 @@ def test_no_new_import_cycles():
     fixed = [sorted(c) for c in _KNOWN_CYCLES - actual]
     assert not new, f"new import cycle between bricks: {new}"
     assert not fixed, f"cycle changed or fixed — update _KNOWN_CYCLES: {fixed}"
+
+
+def _ops_brick(module: str) -> str | None:
+    parts = module.split(".")
+    if parts[:2] == ["forensic_aul", "ops"] and len(parts) > 2:
+        return parts[2]
+    return None
+
+
+def test_ops_bricks_do_not_chain_each_other():
+    graph = _graph()
+    actual = set()
+    for path, deps in graph.items():
+        mod = path.removesuffix(".py").replace("/", ".")
+        src = _ops_brick(mod)
+        if src is None or src == "workflows":
+            continue
+        for dep in deps:
+            dst = _ops_brick(dep)
+            if dst is None or dst == src or dep.rsplit(".", 1)[-1] in _DATA_MODULES:
+                continue
+            actual.add((mod, dep))
+    new = sorted(actual - _KNOWN_BRICK_TO_BRICK)
+    fixed = sorted(_KNOWN_BRICK_TO_BRICK - actual)
+    assert not new, f"a brick chains another brick — move it to ops/workflows: {new}"
+    assert not fixed, f"fixed — remove from _KNOWN_BRICK_TO_BRICK: {fixed}"

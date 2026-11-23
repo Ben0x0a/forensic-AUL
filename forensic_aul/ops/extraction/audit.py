@@ -35,7 +35,8 @@ from pathlib import Path
 
 from forensic_aul._version import __version__
 from forensic_aul.engine.integrity import seal_log_file
-from forensic_aul.ops.extraction.options import CaseInfo, ExtractOptions
+from forensic_aul.case_info import CaseInfo
+from forensic_aul.ops.extraction.options import ExtractOptions
 
 log = logging.getLogger(__name__)
 

@@ -9,7 +9,7 @@ Defines : ``run_diff`` — given two extracted SQLite databases (baseline +
           knowledge-base annotations). Also creates ``hidden_keys`` +
           ``v_identified_visible`` — a reversible, analyst-driven prune layer
           on top of the engine's mechanical ``excluded`` classification.
-Used by : forensic_aul.ops.identify.workflow (run_identify_workflow),
+Used by : forensic_aul.ops.workflows.identify (run_identify_workflow),
           forensic_aul.ops.identify.results (IdentifyResults — reopens the
           same hidden_keys/view objects and the source_order/source_file
           backfill), launcher/cmds/identify_cmd.py.

@@ -3,7 +3,7 @@
 Defines : ``IdentifyOptions`` (device, still pause, outputs, and how the two
           captures are extracted) and ``IDENTIFY_EXTRACT`` (identify's extract
           defaults). Built once by a frontend and passed through untouched.
-Used by : forensic_aul.ops.identify.workflow (``run_identify_workflow``), the CLI
+Used by : forensic_aul.ops.workflows.identify (``run_identify_workflow``), the CLI
           ``identify`` command and the GUI Identify screen (re-exported from
           forensic_aul).
 Uses    : forensic_aul.ops.extraction.options (ExtractOptions).

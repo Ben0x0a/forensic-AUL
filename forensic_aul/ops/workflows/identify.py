@@ -16,13 +16,19 @@ Defines : ``run_identify_workflow`` (sync wrapper) and its async body — the fu
           skips the hashing / acquisition-report machinery to keep the
           interactive loop fast; pass ``integrity="full"``/``"fingerprint"``
           to restore the evidentiary paperwork.
-Used by : launcher/cmds/identify_cmd.py (CLI front-end) and any GUI controller.
+Used by : launcher/cmds/identify_cmd.py and gui/controllers/identify.py (via
+          forensic_aul.run_identify_workflow).
 Uses    : forensic_aul.ops.acquisition (device connection, collection, report,
           AcquisitionError/-Aborted), forensic_aul.ops.extraction.extract
           (run_extract), forensic_aul.ops.identify.diff (run_diff),
           forensic_aul.ops.annotation.matcher (annotate_database),
-          forensic_aul.engine.integrity (hash_logarchive),
-          forensic_aul.engine.utils.progress (ProgressReporter/ProgressSink).
+          .identify_options (IdentifyOptions), forensic_aul.engine.integrity
+          (hash_logarchive), forensic_aul.engine.utils.progress.
+
+WHY in ops/workflows and not in ops/identify: this is orchestration — it chains
+the acquisition, extraction, annotation and diff bricks. A workflow may import
+bricks; a brick never imports another brick's operations (review finding S4),
+so each stays usable and testable on its own.
 
 Errors are raised, never turned into exit codes: ``AcquisitionAborted`` when the
 operator declines, ``OperationCancelled`` when they stop a run already under way,
@@ -51,10 +57,13 @@ from forensic_aul.ops.acquisition.acquire import (
 from forensic_aul.device_info import DeviceInfo
 from forensic_aul.ops.acquisition.device import close_lockdown, connect_device
 from forensic_aul.ops.acquisition.report import write_acquisition_report
-from forensic_aul.ops.extraction.options import CaseInfo
+from forensic_aul.case_info import CaseInfo
 from forensic_aul.ops.identify.diff import run_diff
-from forensic_aul.ops.identify.options import IdentifyOptions
-from forensic_aul.outcomes import IdentifyResult
+from forensic_aul.ops.workflows.identify_options import IdentifyOptions
+from forensic_aul.errors import ExtractFailedError
+from forensic_aul.ops.annotation.matcher import annotate_database
+from forensic_aul.ops.extraction.extract import run_extract
+from forensic_aul.outcomes import ExtractStatus, IdentifyResult
 
 if TYPE_CHECKING:
     from forensic_aul.ops.knowledge_base.models import KnowledgeBase
@@ -299,9 +308,6 @@ async def _run_identify_async(
                 log.warning(f"Could not write {label} acquisition report: {exc}")
 
     # ── Extract both ──────────────────────────────────────────────────────────
-    from forensic_aul.ops.extraction.extract import run_extract
-    from forensic_aul.errors import ExtractFailedError
-    from forensic_aul.outcomes import ExtractStatus
 
     imei = device.imei or "UNKNOWN"
     baseline_db = session_dir / f"{prefix}-baseline.db"
@@ -328,7 +334,6 @@ async def _run_identify_async(
     # ── Annotate (enrichment, not a requirement — never abort the run) ────────
     if kb is not None:
         reporter.phase("annotate")
-        from forensic_aul.ops.annotation.matcher import annotate_database
 
         try:
             annotate_database(action_db, kb)

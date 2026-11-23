@@ -21,7 +21,8 @@ from pathlib import Path
 import pytest
 
 from forensic_aul.ops.extraction.extract import run_extract
-from forensic_aul.ops.extraction.options import CaseInfo, ExtractOptions
+from forensic_aul.case_info import CaseInfo
+from forensic_aul.ops.extraction.options import ExtractOptions
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 

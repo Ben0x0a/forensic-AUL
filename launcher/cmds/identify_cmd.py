@@ -6,10 +6,10 @@ Defines : the argparse wiring for ``identify`` and its thin ``run`` handler. The
           on captures the analyst already has. The actual action-attribution
           workflow (acquire baseline → operator acts →
           acquire again → extract ×2 → diff) lives in
-          ``forensic_aul.ops.identify.workflow``; this module only supplies the
+          ``forensic_aul.ops.workflows.identify``; this module only supplies the
           terminal front-end (prompts, banners, exception → exit code).
 Used by : launcher/cli.py (subcommand registration + dispatch).
-Uses    : forensic_aul.ops.identify.workflow / .diff / .report,
+Uses    : forensic_aul.ops.workflows.identify / .diff / .report,
           forensic_aul.ops.extraction.extract (open_or_extract).
 """
 
@@ -23,7 +23,7 @@ from pathlib import Path
 from dataclasses import replace
 
 from forensic_aul import ExtractOptions, IdentifyOptions
-from forensic_aul.ops.identify.options import IDENTIFY_EXTRACT
+from forensic_aul.ops.workflows.identify_options import IDENTIFY_EXTRACT
 
 log = logging.getLogger(__name__)
 
@@ -165,11 +165,11 @@ def _run_identify(args: argparse.Namespace) -> int:
     from forensic_aul.ops.identify.report import format_diff_result
 
     from forensic_aul import CaseInfo
-    from forensic_aul.ops.identify.workflow import run_identify_workflow
+    from forensic_aul.ops.workflows.identify import run_identify_workflow
     from forensic_aul.ops.knowledge_base.loader import KnowledgeBaseError, load_kb
 
     # Terminal callbacks for the library workflow: the CLI owns every prompt and
-    # print; the workflow owns the sequence (see ops/identify/workflow.py).
+    # print; the workflow owns the sequence (see ops/workflows/identify.py).
     def confirm(device) -> bool:
         print("")
         print("  Connected device")

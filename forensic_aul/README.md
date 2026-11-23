@@ -296,7 +296,8 @@ The map below is a summary; the full picture — including how the CLI, GUI and
 | `ops/acquisition/` | device acquisition (`acquire`) + device metadata + the `.acquisition.json` report writer |
 | `ops/annotation/` | apply a knowledge base to a DB (`matcher`) |
 | `ops/knowledge_base/` | load / lint / model the YAML KB (the KB *data* lives in the repo-root `knowledge_base/`) |
-| `ops/identify/` | baseline-vs-action diff (`run_diff`), the interactive workflow (`run_identify_workflow`), and the diff-DB read/annotate layer (`IdentifyResults`) |
+| `ops/identify/` | baseline-vs-action diff (`run_diff`) and the diff-DB read/annotate layer (`IdentifyResults`) |
+| `ops/workflows/` | orchestration that chains bricks: the interactive identify workflow (`run_identify_workflow`, `IdentifyOptions`). Bricks never import each other's operations |
 | `ops/query/` | the in-memory read layer (`query_logs`, `LogRow`, the shared filter→SQL machinery the exporter also uses) |
 | `ops/export/` | filtered CSV/JSON/JSONL export (`run_export`; formats live in a writer registry) |
 | `ops/summary/` | read-only summary of an analysis DB |

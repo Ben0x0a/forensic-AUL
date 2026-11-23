@@ -76,7 +76,8 @@ from forensic_aul.errors import (
 from forensic_aul.ops.extraction.discovery import find_tracev3_files
 from forensic_aul.engine.utils.system import resolve_auto_jobs
 from forensic_aul.ops.extraction.audit import AuditLog
-from forensic_aul.ops.extraction.options import CaseInfo, ExtractOptions, RunContext
+from forensic_aul.case_info import CaseInfo
+from forensic_aul.ops.extraction.options import ExtractOptions, RunContext
 from forensic_aul.ops.extraction.oversize_pass import OversizeCache, collect_oversize
 from forensic_aul.ops.extraction.source import PreparedSource, prepare_source
 from forensic_aul.ops.extraction.timesync_setup import setup_timesync

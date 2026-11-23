@@ -40,7 +40,7 @@ from forensic_aul.device_info import DeviceInfo
 from forensic_aul.ops.acquisition.device import close_lockdown, connect_device
 from forensic_aul.engine.integrity import hash_logarchive
 from forensic_aul.ops.acquisition.options import AcquireOptions
-from forensic_aul.ops.extraction.options import CaseInfo
+from forensic_aul.case_info import CaseInfo
 from forensic_aul.outcomes import AcquireResult
 
 log = logging.getLogger(__name__)

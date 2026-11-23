@@ -32,7 +32,8 @@ from forensic_aul.errors import (
 
 # Core pipeline
 from forensic_aul.ops.extraction.extract import open_or_extract, run_extract
-from forensic_aul.ops.extraction.options import CaseInfo, ExtractOptions
+from forensic_aul.case_info import CaseInfo
+from forensic_aul.ops.extraction.options import ExtractOptions
 
 # Annotation engine (load a knowledge base + annotate an extracted database)
 from forensic_aul.ops.knowledge_base.loader import KnowledgeBaseError, default_kb_dir, load_kb
@@ -41,8 +42,8 @@ from forensic_aul.ops.annotation.matcher import annotate_connection, annotate_da
 # Action attribution (baseline vs action diff, plus the full interactive workflow)
 from forensic_aul.ops.identify.diff import run_diff
 from forensic_aul.ops.identify.results import IdentifyResults, ResultCounts
-from forensic_aul.ops.identify.options import IdentifyOptions
-from forensic_aul.ops.identify.workflow import run_identify_workflow
+from forensic_aul.ops.workflows.identify_options import IdentifyOptions
+from forensic_aul.ops.workflows.identify import run_identify_workflow
 
 # Filtered export to CSV / JSON / JSONL (knowledge-base aware)
 from forensic_aul.ops.export.exporter import run_export

@@ -166,7 +166,8 @@ same shape: a main module (pure — data in, data out) plus a `report` module of
 | `ops/annotation/` | Run a loaded knowledge base against `logs`, writing `log_annotations` and `extracted_values`. Every signature pre-filters on indexed columns before any regex runs. |
 | `ops/query/` | The stable read surface — `query_logs` (streamed), `LogStore` (held-open store for paging UIs), `count_logs`/`fetch_logs`, `fetch_context`, plus the one row filter `LogFilter` and `LogRow` model. `reader.py` turns filters into SQL and is shared with the exporter. |
 | `ops/export/` | Filtered export to CSV / JSON / JSONL through a writer registry; knowledge-base aware (extracted values become columns or nested objects). |
-| `ops/identify/` | Action attribution: `diff.py` (`run_diff`), `results.py` (read/annotate a diff DB), `workflow.py` (the full interactive baseline → action → diff sequence, with all operator interaction injected as callbacks). |
+| `ops/identify/` | Action attribution: `diff.py` (`run_diff`), `results.py` (read/annotate a diff DB). |
+| `ops/workflows/` | Orchestration — the only ops modules that chain other bricks: `identify.py` (the full interactive baseline → action → diff sequence, operator interaction injected as callbacks) and `identify_options.py`. A brick imports another brick only for its data (`models`/`options`), enforced by `tests/unit/test_layering.py`. |
 | `ops/summary/` | Read-only overview of an analysis database (counts, top-N, annotation rollup, temporal histogram). |
 | `ops/verify/` | Chain-of-custody re-verification: re-hash the logarchive (global + per file) and the operational log, compare against the digests stored at extract time. |
 
@@ -219,8 +220,8 @@ them. This is what lets both frontends share one rendering.
 **All prompting and pacing is frontend-bound.** Operations never ask questions
 and never wait. Where a flow is interactive, the interaction is injected as
 callbacks: `acquire` takes a *confirm* callback; `run_identify_workflow` takes
-`confirm` / `wait_still` / `wait_for_action` / `status`. `ops/identify/__init__`
-documents the call sequence a frontend composes instead of embedding the pacing.
+`confirm` / `wait_still` / `wait_for_action` / `status` — the workflow owns the
+sequence, the frontend owns the pacing.
 
 **Progress is a sink, not a UI.** `ProgressReporter` declares weighted phases and
 forwards a `ProgressEvent` to a `Callable[[ProgressEvent], None]`. `None` means

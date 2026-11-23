@@ -1,4 +1,4 @@
-"""Unit tests for forensic_aul.ops.identify.workflow — the identify orchestration.
+"""Unit tests for forensic_aul.ops.workflows.identify — the identify orchestration.
 
 Device collection is hardware-bound (optional pymobiledevice3), and the extract /
 diff steps are covered by their own suites, so every external step is
@@ -16,14 +16,14 @@ from types import SimpleNamespace
 
 import pytest
 
-import forensic_aul.ops.identify.workflow as wf
+import forensic_aul.ops.workflows.identify as wf
 from forensic_aul.engine.utils.progress import ProgressEvent
 from forensic_aul.ops.acquisition.acquire import AcquisitionAborted
-from forensic_aul.ops.identify.workflow import _IDENTIFY_PHASES, run_identify_workflow
+from forensic_aul.ops.workflows.identify import _IDENTIFY_PHASES, run_identify_workflow
 from forensic_aul.errors import ExtractFailedError
 from forensic_aul.outcomes import DiffResult, ExtractStatus
 from forensic_aul import CaseInfo, IdentifyOptions
-from forensic_aul.ops.identify.options import IDENTIFY_EXTRACT
+from forensic_aul.ops.workflows.identify_options import IDENTIFY_EXTRACT
 
 _PHASE_ORDER = [name for name, _ in _IDENTIFY_PHASES]
 
@@ -92,12 +92,8 @@ def patched(monkeypatch, tmp_path):
     monkeypatch.setattr(wf, "hash_logarchive", fake_hash)
     monkeypatch.setattr(wf, "write_acquisition_report",
                         lambda **kw: fake_report(**kw))
-    # run_extract / annotate_database are imported inside the function body —
-    # patch their home modules (same approach the original fixture already used).
-    import forensic_aul.ops.extraction.extract as extract_mod
-    import forensic_aul.ops.annotation.matcher as matcher_mod
-    monkeypatch.setattr(extract_mod, "run_extract", fake_run_extract)
-    monkeypatch.setattr(matcher_mod, "annotate_database", fake_annotate_database)
+    monkeypatch.setattr(wf, "run_extract", fake_run_extract)
+    monkeypatch.setattr(wf, "annotate_database", fake_annotate_database)
     monkeypatch.setattr(wf, "run_diff", fake_run_diff)
 
     return SimpleNamespace(
@@ -237,12 +233,11 @@ class TestWorkflow:
         assert "action" in Path(annotated_db).name
 
     def test_kb_annotate_raising_still_completes_run(self, patched, monkeypatch):
-        import forensic_aul.ops.annotation.matcher as matcher_mod
 
         def boom(db, kb):
             raise RuntimeError("annotation blew up")
 
-        monkeypatch.setattr(matcher_mod, "annotate_database", boom)
+        monkeypatch.setattr(wf, "annotate_database", boom)
         res = run_identify_workflow(patched.out, CaseInfo(case_number="CASE-1"), kb=object(), confirm=None, wait_for_action=None)
         assert res.diff.retained == 3  # the run still completed through diff
 
@@ -305,14 +300,13 @@ class TestWorkflow:
     def test_a_failed_extract_stops_before_the_diff(self, patched, monkeypatch):
         """B4: an extract that decoded nothing must stop identify — not run a diff
         of two empty databases and fail later with a confusing message."""
-        import forensic_aul.ops.extraction.extract as extract_mod
 
         def failed_run_extract(archive, db, case, opts, **kwargs):
             Path(db).write_bytes(b"")
             return SimpleNamespace(db_path=Path(db), status=ExtractStatus.FAILED,
                                    status_reasons=("none of the 240 chunkset(s) could be decoded",))
 
-        monkeypatch.setattr(extract_mod, "run_extract", failed_run_extract)
+        monkeypatch.setattr(wf, "run_extract", failed_run_extract)
         with pytest.raises(ExtractFailedError, match="baseline extract decoded nothing"):
             run_identify_workflow(patched.out, CaseInfo(case_number="CASE-1"), confirm=None, wait_for_action=None)
         assert "diff" not in patched.calls

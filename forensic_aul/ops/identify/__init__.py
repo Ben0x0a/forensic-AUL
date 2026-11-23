@@ -6,8 +6,10 @@ the flagged-everything SQLite, returning a ``DiffResult``. ``report`` renders
 that result; neither prints.
 
 The full interactive identify (baseline → the operator performs an action →
-post-action capture → extract both → diff) is ``run_identify_workflow``
-(workflow.py), configured by ``IdentifyOptions`` (options.py). The pacing ("wait
+post-action capture → extract both → diff) is ``run_identify_workflow`` in
+ops/workflows/identify.py, configured by ``IdentifyOptions``
+(ops/workflows/identify_options.py) — orchestration lives in ops/workflows, this
+brick only diffs and reads results. The pacing ("wait
 until the operator has done the action") stays frontend policy: it is injected as
 callbacks (``wait_still``, ``wait_for_action``, ``confirm``), so the CLI
 (launcher/cmds/identify_cmd.py) and the GUI (gui/controllers/identify.py) drive the

@@ -1,8 +1,7 @@
 """Option and run-state containers for the extract pipeline.
 
-Defines : ``ExtractOptions`` (the user-tunable knobs of ``run_extract``),
-          ``CaseInfo`` (the operator-supplied case identifiers) — both public,
-          built ONCE by a frontend and passed through untouched — and
+Defines : ``ExtractOptions`` (the user-tunable knobs of ``run_extract``) —
+          public, built ONCE by a frontend and passed through untouched — and
           ``RunContext`` (the per-run state threaded through the pipeline
           stages instead of ~20 individual parameters).
 Used by : forensic_aul.ops.extraction.extract (run_extract and its stages), and
@@ -25,6 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from forensic_aul.config import BATCH_SIZE
+from forensic_aul.case_info import CaseInfo
 from forensic_aul.engine.utils.cancellation import NEVER_CANCELLED, CancelToken
 
 if TYPE_CHECKING:
@@ -67,33 +67,6 @@ class ExtractOptions:
     # off by default, so a library caller and identify's scratch extracts need no
     # case identifiers. When on, CaseInfo.missing_for_evidence() must be empty.
     audit_log: bool = False
-
-
-# The CaseInfo fields an evidence extract cannot run without: they name the audit
-# log and identify the exhibit. Only PRESENCE is checked — never the IMEI's format:
-# a Wi-Fi-only iPad has no IMEI, and the examiner must still be able to record one.
-EVIDENCE_REQUIRED_FIELDS: tuple[str, ...] = ("case_number", "imei")
-
-
-@dataclass(frozen=True)
-class CaseInfo:
-    """Operator-supplied case identifiers recorded in ``case_metadata``."""
-
-    case_number: str | None = None
-    imei: str | None = None
-    exhibit_number: str | None = None
-    analyst_name: str | None = None
-    notes: str | None = None
-
-    def missing_for_evidence(self) -> tuple[str, ...]:
-        """The required field names that are empty — ``()`` when complete.
-
-        The one definition of the rule; the CLI and the GUI only phrase the result.
-        """
-        return tuple(
-            name for name in EVIDENCE_REQUIRED_FIELDS
-            if not (getattr(self, name) or "").strip()
-        )
 
 
 @dataclass

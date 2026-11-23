@@ -37,7 +37,7 @@ from forensic_aul.ops.acquisition.options import AcquireOptions
 from forensic_aul.ops.acquisition.device import list_connected_devices
 from forensic_aul.ops.acquisition.report import load_sidecar_for
 from forensic_aul.ops.extraction.extract import run_extract
-from forensic_aul.ops.extraction.options import CaseInfo
+from forensic_aul.case_info import CaseInfo
 from forensic_aul.outcomes import ExtractStatus
 from gui.controllers import phrase_failure
 from app.settings import SettingsError, load_settings

@@ -38,7 +38,8 @@ from forensic_aul.errors import (
     OperationCancelled,
     OutputExistsError,
 )
-from forensic_aul.ops.extraction.options import CaseInfo, ExtractOptions
+from forensic_aul.case_info import CaseInfo
+from forensic_aul.ops.extraction.options import ExtractOptions
 from tests.synthetic import synthetic_sysdiagnose as _synthetic_sysdiagnose
 
 # The case and options every synthetic run here uses (hashing off: speed).
@@ -276,7 +277,8 @@ def test_a_sqlite_abort_is_reported_as_a_cancellation(tmp_path):
         _arm_sqlite_cancel,
         _handle_interruption,
     )
-    from forensic_aul.ops.extraction.options import CaseInfo, ExtractOptions, RunContext
+    from forensic_aul.case_info import CaseInfo
+    from forensic_aul.ops.extraction.options import ExtractOptions, RunContext
     from forensic_aul.engine.utils.progress import ProgressReporter
 
     db = tmp_path / "aborted.sqlite.partial"
@@ -316,7 +318,8 @@ def test_a_genuine_failure_is_not_reported_as_a_cancellation(tmp_path):
     from forensic_aul.engine.database.writer import BatchWriter
     from forensic_aul.engine.utils.progress import ProgressReporter
     from forensic_aul.ops.extraction.extract import _handle_interruption
-    from forensic_aul.ops.extraction.options import CaseInfo, ExtractOptions, RunContext
+    from forensic_aul.case_info import CaseInfo
+    from forensic_aul.ops.extraction.options import ExtractOptions, RunContext
 
     db = tmp_path / "broken.sqlite.partial"
     conn = sqlite3.connect(str(db))

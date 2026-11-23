@@ -224,7 +224,7 @@ loggers named after the module:
 
 ```python
 logging.getLogger("forensic_aul.ops.extraction.extract")
-logging.getLogger("forensic_aul.ops.identify.workflow")
+logging.getLogger("forensic_aul.ops.workflows.identify")
 ```
 
 So the host application is in full control:

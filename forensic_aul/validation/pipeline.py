@@ -225,7 +225,7 @@ def _acquire_pymobiledevice3(udid: str, args: argparse.Namespace, resources: _Re
     """Acquire a loose logarchive from *udid* via pymobiledevice3 (userspace)."""
     from forensic_aul.ops.acquisition.acquire import acquire
     from forensic_aul.ops.acquisition.options import AcquireOptions
-    from forensic_aul.ops.extraction.options import CaseInfo
+    from forensic_aul.case_info import CaseInfo
 
     out_dir = resources.tempdir(prefix="forensic_aul_pmd3_")
     result = acquire(
@@ -370,7 +370,8 @@ def _extract_logarchive(
 ) -> Path:
     """Run our parser on the logarchive and return the DB path."""
     from forensic_aul.ops.extraction.extract import run_extract
-    from forensic_aul.ops.extraction.options import CaseInfo, ExtractOptions
+    from forensic_aul.case_info import CaseInfo
+    from forensic_aul.ops.extraction.options import ExtractOptions
 
     if args.db_output:
         db_path = args.db_output

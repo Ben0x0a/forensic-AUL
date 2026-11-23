@@ -2,7 +2,7 @@
 
 Defines : SimInfo, DeviceInfo (with display_table / to_dict).
 Used by : forensic_aul.ops.acquisition (device discovery fills them; acquire and
-          report consume them), forensic_aul.ops.identify.workflow,
+          report consume them), forensic_aul.ops.workflows.identify,
           forensic_aul.outcomes (AcquireResult), forensic_aul.__init__ (public API).
 Uses    : dataclasses only — a leaf module, so result types can reference it
           without importing the acquisition layer (no import cycle).
