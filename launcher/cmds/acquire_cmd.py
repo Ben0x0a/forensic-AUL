@@ -176,6 +176,7 @@ def run(args) -> int:  # type: ignore[type-arg]
         log.error("error: -o/--output-dir is required for acquisition")
         return 1
 
+    from forensic_aul import AcquireOptions, CaseInfo
     from forensic_aul.ops.acquisition.acquire import (
         AcquisitionAborted,
         AcquisitionError,
@@ -184,20 +185,17 @@ def run(args) -> int:  # type: ignore[type-arg]
 
     log.info(f'Connecting to device{f" {args.udid}" if args.udid else ""}…')
     try:
-        # extract=False: the CLI runs its own extract below (via _run_extract →
-        # run_extract_session) so that step gets a sealed operational log.
+        # The optional extract runs below (via _run_extract → run_extract_session),
+        # as its own audited step with a sealed operational log.
         result = acquire(
-            case_number=args.case_number,
-            output_dir=args.output_dir,
-            udid=args.udid,
-            start_time=args.start_time,
-            size_limit=args.size_limit,
-            age_limit=args.age_limit,
-            exhibit_number=args.exhibit_number,
-            analyst=args.analyst,
-            notes=args.notes,
-            extract=False,
-            pack=not args.raw,   # --raw → legacy loose .logarchive + sidecar
+            args.output_dir,
+            CaseInfo(case_number=args.case_number, exhibit_number=args.exhibit_number,
+                     analyst_name=args.analyst, notes=args.notes),
+            AcquireOptions(
+                udid=args.udid, start_time=args.start_time,
+                size_limit=args.size_limit, age_limit=args.age_limit,
+                pack=not args.raw,   # --raw → legacy loose .logarchive + sidecar
+            ),
             confirm=_make_confirm(args.yes),
         )
     except AcquisitionAborted:

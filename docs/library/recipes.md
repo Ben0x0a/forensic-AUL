@@ -318,7 +318,7 @@ console I/O: pass `confirm` to show the operator what is connected and let them
 approve before collection.
 
 ```python
-from forensic_aul import AcquisitionAborted, DeviceInfo, acquire
+from forensic_aul import AcquireOptions, AcquisitionAborted, CaseInfo, DeviceInfo, acquire, run_extract
 
 def confirm(device: DeviceInfo) -> bool:
     print(f"{device.device_name} — {device.product_type} "
@@ -326,12 +326,11 @@ def confirm(device: DeviceInfo) -> bool:
     return input("collect? [y/N] ").strip().lower() == "y"
 
 try:
+    case = CaseInfo(case_number="CASE-2024-001", analyst_name="A. Analyst")
     res = acquire(
-        "CASE-2024-001",
-        output_dir=Path("evidence"),
-        start_time="24h",     # ISO datetime, "1h"/"24h"/"7d", a unix int, or None
-        analyst="A. Analyst",
-        extract=True,         # chain straight into run_extract
+        Path("evidence"),
+        case,
+        AcquireOptions(start_time="24h"),   # ISO datetime, "1h"/"24h"/"7d", a unix int, or None
         confirm=confirm,
     )
 except AcquisitionAborted:
@@ -339,13 +338,14 @@ except AcquisitionAborted:
 else:
     print(res.logarchive_path, res.logarchive_sha256, res.file_count)
     print(res.device.udid, res.device.imei, res.device.product_version)
-    print(res.extract_result.entry_count)      # set only because extract=True
+    # Acquisition and extraction are separate steps:
+    db = run_extract(res.logarchive_path, Path("evidence/case.db"), case)
 ```
 
 **Returns** an `AcquireResult`. By default (`pack=True`) the output is a single
 portable `.faul` container carrying the logarchive **and** its acquisition sidecar,
 named `<case>-<imei|udid>-<UTC>.faul`; `report_path` is then `None`. Pass
-`pack=False` for the legacy loose layout (a `.logarchive` directory plus a separate
+`AcquireOptions(pack=False)` for the legacy loose layout (a `.logarchive` directory plus a separate
 `.acquisition.json`, whose path lands in `report_path`).
 
 Raises `ImportError` when `pymobiledevice3` is missing, `AcquisitionAborted` when
@@ -361,7 +361,7 @@ annotation → diff). Every interaction point is a callback, so a CLI, a GUI or 
 test can drive it identically.
 
 ```python
-from forensic_aul import load_kb, run_identify_workflow, tty_bar_sink
+from forensic_aul import CaseInfo, IdentifyOptions, load_kb, run_identify_workflow, tty_bar_sink
 
 def confirm(device):
     print(f"connected: {device.device_name} ({device.product_type})")
@@ -375,9 +375,9 @@ def wait_for_action() -> None:
     input("perform the action on the device, then press Enter …")
 
 res = run_identify_workflow(
-    "CASE-2024-001",
-    output_dir=Path("identify-run"),
-    still_seconds=60,
+    Path("identify-run"),
+    CaseInfo(case_number="CASE-2024-001"),
+    IdentifyOptions(still_seconds=60),
     kb=load_kb(),                         # annotates the ACTION database only
     confirm=confirm,
     wait_still=wait_still,
@@ -392,11 +392,13 @@ print(res.diff.sqlite_path, res.diff.csv_path, res.diff.retained, res.diff.exclu
 ```
 
 **Returns** an `IdentifyResult` with the four artefact paths and the nested
-`DiffResult`. Defaults worth knowing: `integrity="off"` and `fts=False` (identify
-is a research tool — the chain-of-custody hashing is pure latency here; pass
-`"full"` or `"fingerprint"` to keep it), `write_csv=True`, `jobs=1`,
-`batch_size=1000`. A falsy `case_number` prefixes artefacts
-`identify-<UTC timestamp>` instead.
+`DiffResult`. Defaults worth knowing: `IdentifyOptions.extract` is
+`IDENTIFY_EXTRACT` — `integrity="off"`, `fts=False`, `batch_size=1000`, `jobs=1`
+(identify is a research tool — the chain-of-custody hashing is pure latency here;
+pass `extract=replace(IDENTIFY_EXTRACT, integrity="full")` to keep it) — and
+`write_csv=True`. Without a `case.case_number`, artefacts are prefixed
+`identify-<UTC timestamp>` instead. A capture whose extract decodes nothing
+raises `ExtractFailedError` before the diff.
 
 Raises `ImportError` (no `pymobiledevice3`), `ValueError` (unusable case number),
 `AcquisitionAborted`, `AcquisitionError`. Any callback may raise

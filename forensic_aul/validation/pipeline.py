@@ -219,14 +219,17 @@ def _collect_from_device(
 def _acquire_pymobiledevice3(udid: str, args: argparse.Namespace, resources: _Resources) -> Path:
     """Acquire a loose logarchive from *udid* via pymobiledevice3 (userspace)."""
     from forensic_aul.ops.acquisition.acquire import acquire
+    from forensic_aul.ops.acquisition.options import AcquireOptions
+    from forensic_aul.ops.extraction.options import CaseInfo
 
     out_dir = resources.tempdir(prefix="forensic_aul_pmd3_")
     result = acquire(
-        case_number="VALIDATE-L3",
-        output_dir=out_dir,
-        udid=udid,
-        start_time=getattr(args, "collect_last", None),
-        pack=False,   # loose .logarchive (no .faul wrapper)
+        out_dir,
+        CaseInfo(case_number="VALIDATE-L3"),
+        AcquireOptions(
+            udid=udid, start_time=getattr(args, "collect_last", None),
+            pack=False,   # loose .logarchive (no .faul wrapper)
+        ),
     )
     return result.logarchive_path
 

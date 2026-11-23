@@ -15,6 +15,7 @@ from types import SimpleNamespace
 import pytest
 
 import forensic_aul.ops.acquisition.acquire as acq
+from forensic_aul import AcquireOptions, CaseInfo
 from forensic_aul.ops.acquisition.acquire import (
     AcquisitionAborted,
     AcquisitionError,
@@ -119,7 +120,7 @@ def test_acquire_exported():
 
 class TestAcquire:
     def test_happy_path(self, tmp_path, patched):
-        res = acquire("CASE-1", output_dir=tmp_path)
+        res = acquire(tmp_path, CaseInfo(case_number="CASE-1"))
         assert res.logarchive_path.parent == tmp_path
         assert res.logarchive_path.suffix == ".faul"   # the portable container
         assert res.logarchive_path.exists()
@@ -130,7 +131,6 @@ class TestAcquire:
         assert res.device is patched
         # The sidecar is embedded in the .faul — no separate report file on disk.
         assert res.report_path is None
-        assert res.extract_result is None        # extract not requested
         # The per-file hash map is forwarded into the embedded sidecar for
         # independent integrity checks (not just the aggregate hash + count).
         assert patched._captured["file_hashes"] == {
@@ -156,7 +156,7 @@ class TestAcquire:
         monkeypatch.setattr(acq, "write_acquisition_report", fake_report)
         monkeypatch.setattr(acq, "pack_faul", boom_pack)
 
-        res = acquire("CASE-1", output_dir=tmp_path, pack=False)
+        res = acquire(tmp_path, CaseInfo(case_number="CASE-1"), AcquireOptions(pack=False))
         assert res.logarchive_path.suffix == ".logarchive"
         assert res.logarchive_path.parent == tmp_path
         assert res.report_path is not None and res.report_path.exists()
@@ -166,21 +166,21 @@ class TestAcquire:
         def confirm(device):
             seen["imei"] = device.imei
             return True
-        res = acquire("CASE-1", output_dir=tmp_path, confirm=confirm)
+        res = acquire(tmp_path, CaseInfo(case_number="CASE-1"), confirm=confirm)
         assert seen["imei"] == patched.imei
         assert res.logarchive_path.exists()
 
     def test_confirm_abort_raises(self, tmp_path, patched):
         with pytest.raises(AcquisitionAborted):
-            acquire("CASE-1", output_dir=tmp_path, confirm=lambda _device: False)
+            acquire(tmp_path, CaseInfo(case_number="CASE-1"), confirm=lambda _device: False)
 
     def test_empty_case_number_rejected(self, tmp_path, patched):
         with pytest.raises(AcquisitionError):
-            acquire("", output_dir=tmp_path)
+            acquire(tmp_path, CaseInfo(case_number=""))
 
     def test_missing_imei_uses_udid_fragment(self, tmp_path, patched, monkeypatch):
         patched.imei = ""   # Wi-Fi-only device
-        res = acquire("CASE-1", output_dir=tmp_path)
+        res = acquire(tmp_path, CaseInfo(case_number="CASE-1"))
         # Falls back to the first 8 chars of the UDID in the filename.
         assert "-00008030-" in res.logarchive_path.name
 
@@ -189,4 +189,4 @@ class TestAcquire:
             raise ImportError("pymobiledevice3 is not installed")
         monkeypatch.setattr(acq, "connect_device", boom)
         with pytest.raises(ImportError):
-            acquire("CASE-1", output_dir=tmp_path)
+            acquire(tmp_path, CaseInfo(case_number="CASE-1"))

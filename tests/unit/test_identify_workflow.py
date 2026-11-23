@@ -10,7 +10,7 @@ and the IdentifyResult assembly.
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,6 +22,8 @@ from forensic_aul.ops.acquisition.acquire import AcquisitionAborted
 from forensic_aul.ops.identify.workflow import _IDENTIFY_PHASES, run_identify_workflow
 from forensic_aul.errors import ExtractFailedError
 from forensic_aul.outcomes import DiffResult, ExtractStatus
+from forensic_aul import CaseInfo, IdentifyOptions
+from forensic_aul.ops.identify.options import IDENTIFY_EXTRACT
 
 _PHASE_ORDER = [name for name, _ in _IDENTIFY_PHASES]
 
@@ -108,13 +110,7 @@ def patched(monkeypatch, tmp_path):
 class TestWorkflow:
     def test_full_sequence_and_result(self, patched):
         seen: list[str] = []
-        res = run_identify_workflow(
-            "CASE-1",
-            output_dir=patched.out,
-            confirm=lambda device: True,
-            wait_for_action=lambda: seen.append("action"),
-            status=seen.append,
-        )
+        res = run_identify_workflow(patched.out, CaseInfo(case_number="CASE-1"), confirm=lambda device: True, wait_for_action=lambda: seen.append("action"), status=seen.append)
         # Both acquisitions happened, in order, with the action wait between them.
         collects = [c for c in patched.calls if c.startswith("collect:")]
         assert len(collects) == 2
@@ -133,12 +129,7 @@ class TestWorkflow:
 
     def test_artefacts_share_one_session_directory(self, patched):
         """Every artefact of a run lands in output_dir/<prefix>/, not loose in cwd."""
-        res = run_identify_workflow(
-            "CASE-1",
-            output_dir=patched.out,
-            confirm=lambda device: True,
-            wait_for_action=lambda: None,
-        )
+        res = run_identify_workflow(patched.out, CaseInfo(case_number="CASE-1"), confirm=lambda device: True, wait_for_action=lambda: None)
         artefacts = [
             res.baseline_archive, res.action_archive,
             res.baseline_db, res.action_db,
@@ -159,12 +150,7 @@ class TestWorkflow:
 
     def test_confirm_decline_aborts_before_collection(self, patched):
         with pytest.raises(AcquisitionAborted):
-            run_identify_workflow(
-                "CASE-1",
-                output_dir=patched.out,
-                confirm=lambda device: False,
-                wait_for_action=lambda: None,
-            )
+            run_identify_workflow(patched.out, CaseInfo(case_number="CASE-1"), confirm=lambda device: False, wait_for_action=lambda: None)
         assert not any(c.startswith("collect:") for c in patched.calls)
         assert "close" in patched.calls  # connection released on the abort path
 
@@ -173,10 +159,7 @@ class TestWorkflow:
             raise AcquisitionAborted("operator interrupted")
 
         with pytest.raises(AcquisitionAborted):
-            run_identify_workflow(
-                "CASE-1", output_dir=patched.out,
-                confirm=None, wait_for_action=bail,
-            )
+            run_identify_workflow(patched.out, CaseInfo(case_number="CASE-1"), confirm=None, wait_for_action=bail)
         # The baseline was collected, the post-action acquisition never ran.
         collects = [c for c in patched.calls if c.startswith("collect:")]
         assert len(collects) == 1 and "baseline" in collects[0]
@@ -192,13 +175,10 @@ class TestWorkflow:
         monkeypatch.setattr(wf, "sanitise_filename_token",
                             lambda value: "" if value == "UNSANITISABLE" else value)
         with pytest.raises(ValueError, match="filename characters"):
-            run_identify_workflow("UNSANITISABLE", output_dir=patched.out)
+            run_identify_workflow(patched.out, CaseInfo(case_number="UNSANITISABLE"))
 
     def test_no_case_number_uses_identify_prefix(self, patched):
-        res = run_identify_workflow(
-            None, output_dir=patched.out,
-            confirm=None, wait_for_action=None,
-        )
+        res = run_identify_workflow(patched.out, None, confirm=None, wait_for_action=None)
         assert res.baseline_db.name.startswith("identify-")
         assert res.action_db.name.startswith("identify-")
 
@@ -209,10 +189,7 @@ class TestWorkflow:
             seen.append(f"still:{seconds}")
             assert not any(c.startswith("collect:") for c in patched.calls)
 
-        run_identify_workflow(
-            "CASE-1", output_dir=patched.out, still_seconds=42,
-            confirm=None, wait_still=still, wait_for_action=None,
-        )
+        run_identify_workflow(patched.out, CaseInfo(case_number="CASE-1"), IdentifyOptions(still_seconds=42), confirm=None, wait_still=still, wait_for_action=None)
         assert seen == ["still:42"]
         # Baseline start_unix is t0 — captured before the still wait, so it must
         # be at or before "now" at the time collect ran (never in the future).
@@ -222,19 +199,13 @@ class TestWorkflow:
 
     def test_still_seconds_zero_skips_wait_still(self, patched):
         seen: list[str] = []
-        run_identify_workflow(
-            "CASE-1", output_dir=patched.out, still_seconds=0,
-            confirm=None, wait_still=lambda s: seen.append(s), wait_for_action=None,
-        )
+        run_identify_workflow(patched.out, CaseInfo(case_number="CASE-1"), IdentifyOptions(still_seconds=0), confirm=None, wait_still=lambda s: seen.append(s), wait_for_action=None)
         assert seen == []
         collects = [c for c in patched.calls if c.startswith("collect:")]
         assert len(collects) == 2
 
     def test_wait_still_none_skips_wait_still(self, patched):
-        run_identify_workflow(
-            "CASE-1", output_dir=patched.out, still_seconds=60,
-            confirm=None, wait_still=None, wait_for_action=None,
-        )
+        run_identify_workflow(patched.out, CaseInfo(case_number="CASE-1"), IdentifyOptions(still_seconds=60), confirm=None, wait_still=None, wait_for_action=None)
         collects = [c for c in patched.calls if c.startswith("collect:")]
         assert len(collects) == 2
 
@@ -243,35 +214,23 @@ class TestWorkflow:
             raise AcquisitionAborted("operator refused the still pause")
 
         with pytest.raises(AcquisitionAborted):
-            run_identify_workflow(
-                "CASE-1", output_dir=patched.out, still_seconds=10,
-                confirm=None, wait_still=bail, wait_for_action=None,
-            )
+            run_identify_workflow(patched.out, CaseInfo(case_number="CASE-1"), IdentifyOptions(still_seconds=10), confirm=None, wait_still=bail, wait_for_action=None)
         assert not any(c.startswith("collect:") for c in patched.calls)
         assert "close" in patched.calls
 
     def test_integrity_off_by_default_skips_hash_and_report(self, patched):
-        run_identify_workflow(
-            "CASE-1", output_dir=patched.out,
-            confirm=None, wait_for_action=None,
-        )
+        run_identify_workflow(patched.out, CaseInfo(case_number="CASE-1"), confirm=None, wait_for_action=None)
         assert not any(c.startswith("hash:") for c in patched.calls)
         assert "report" not in patched.calls
 
     def test_integrity_full_runs_hash_and_report(self, patched):
-        run_identify_workflow(
-            "CASE-1", output_dir=patched.out, integrity="full",
-            confirm=None, wait_for_action=None,
-        )
+        run_identify_workflow(patched.out, CaseInfo(case_number="CASE-1"), IdentifyOptions(extract=replace(IDENTIFY_EXTRACT, integrity="full")), confirm=None, wait_for_action=None)
         assert any(c.startswith("hash:") for c in patched.calls)
         assert "report" in patched.calls
 
     def test_kb_given_annotates_action_db_only(self, patched):
         sentinel_kb = object()
-        run_identify_workflow(
-            "CASE-1", output_dir=patched.out, kb=sentinel_kb,
-            confirm=None, wait_for_action=None,
-        )
+        run_identify_workflow(patched.out, CaseInfo(case_number="CASE-1"), kb=sentinel_kb, confirm=None, wait_for_action=None)
         assert len(patched.annotate_calls) == 1
         annotated_db, used_kb = patched.annotate_calls[0]
         assert used_kb is sentinel_kb
@@ -284,18 +243,11 @@ class TestWorkflow:
             raise RuntimeError("annotation blew up")
 
         monkeypatch.setattr(matcher_mod, "annotate_database", boom)
-        res = run_identify_workflow(
-            "CASE-1", output_dir=patched.out, kb=object(),
-            confirm=None, wait_for_action=None,
-        )
+        res = run_identify_workflow(patched.out, CaseInfo(case_number="CASE-1"), kb=object(), confirm=None, wait_for_action=None)
         assert res.diff.retained == 3  # the run still completed through diff
 
     def test_run_extract_kwargs_carry_through(self, patched):
-        run_identify_workflow(
-            "CASE-1", output_dir=patched.out,
-            jobs=4, fts=True, integrity="fingerprint", batch_size=500,
-            confirm=None, wait_for_action=None,
-        )
+        run_identify_workflow(patched.out, CaseInfo(case_number="CASE-1"), IdentifyOptions(extract=replace(IDENTIFY_EXTRACT, jobs=4, fts=True, integrity="fingerprint", batch_size=500)), confirm=None, wait_for_action=None)
         assert len(patched.extract_calls) == 2
         for kwargs in patched.extract_calls:
             assert kwargs["jobs"] == 4
@@ -306,13 +258,7 @@ class TestWorkflow:
 
     def test_progress_phases_in_order_and_reach_1_0(self, patched):
         events: list[ProgressEvent] = []
-        run_identify_workflow(
-            "CASE-1", output_dir=patched.out, kb=object(),
-            confirm=None,
-            wait_still=lambda s: None, still_seconds=1,
-            wait_for_action=lambda: None,
-            progress=events.append,
-        )
+        run_identify_workflow(patched.out, CaseInfo(case_number="CASE-1"), IdentifyOptions(still_seconds=1), kb=object(), confirm=None, wait_still=lambda s: None, wait_for_action=lambda: None, progress=events.append)
         assert events, "progress sink received no events"
         seen_phases = []
         for ev in events:
@@ -340,11 +286,7 @@ class TestWorkflow:
             if ev.phase == "wait":
                 order.append("progress:wait")
 
-        run_identify_workflow(
-            "CASE-1", output_dir=patched.out,
-            confirm=None, wait_for_action=wait_for_action,
-            progress=sink,
-        )
+        run_identify_workflow(patched.out, CaseInfo(case_number="CASE-1"), confirm=None, wait_for_action=wait_for_action, progress=sink)
         assert order[0] == "progress:wait"
         assert "wait_for_action" in order
         assert order.index("progress:wait") < order.index("wait_for_action")
@@ -357,10 +299,7 @@ class TestWorkflow:
             return DiffResult(csv_path=csv_out, sqlite_path=sqlite_out, retained=0, excluded=0)
 
         monkeypatch.setattr(wf, "run_diff", fake_run_diff)
-        run_identify_workflow(
-            "CASE-1", output_dir=patched.out, write_csv=False,
-            confirm=None, wait_for_action=None,
-        )
+        run_identify_workflow(patched.out, CaseInfo(case_number="CASE-1"), IdentifyOptions(write_csv=False), confirm=None, wait_for_action=None)
         assert captured["csv_out"] is None
 
     def test_a_failed_extract_stops_before_the_diff(self, patched, monkeypatch):
@@ -375,6 +314,5 @@ class TestWorkflow:
 
         monkeypatch.setattr(extract_mod, "run_extract", failed_run_extract)
         with pytest.raises(ExtractFailedError, match="baseline extract decoded nothing"):
-            run_identify_workflow("CASE-1", output_dir=patched.out,
-                                  confirm=None, wait_for_action=None)
+            run_identify_workflow(patched.out, CaseInfo(case_number="CASE-1"), confirm=None, wait_for_action=None)
         assert "diff" not in patched.calls

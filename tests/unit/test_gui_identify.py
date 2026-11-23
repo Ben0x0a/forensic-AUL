@@ -141,7 +141,7 @@ def _install_fake_workflow(monkeypatch, screen, *, drives="still", result=None):
     runner = _ThreadRunner()
     screen.run_task = runner.run_task  # type: ignore[method-assign]
 
-    def _fake(**kwargs):
+    def _fake(*_args, **kwargs):
         progress = kwargs["progress"]
 
         class _Ev:
@@ -345,7 +345,7 @@ def test_a_crash_is_never_reported_as_an_abort(qapp, monkeypatch):
     runner = _install_fake_workflow(monkeypatch, screen, drives="none")
     monkeypatch.setattr(
         identify_ctrl, "run_identify_workflow",
-        lambda **_kwargs: (_ for _ in ()).throw(
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
             RuntimeError("wrapped an AcquisitionAborted somewhere")
         ),
     )

@@ -41,6 +41,7 @@ from forensic_aul.ops.annotation.matcher import annotate_connection, annotate_da
 # Action attribution (baseline vs action diff, plus the full interactive workflow)
 from forensic_aul.ops.identify.diff import run_diff
 from forensic_aul.ops.identify.results import IdentifyResults, ResultCounts
+from forensic_aul.ops.identify.options import IdentifyOptions
 from forensic_aul.ops.identify.workflow import run_identify_workflow
 
 # Filtered export to CSV / JSON / JSONL (knowledge-base aware)
@@ -70,6 +71,7 @@ from forensic_aul.ops.acquisition.acquire import (
     AcquisitionError,
     acquire,
 )
+from forensic_aul.ops.acquisition.options import AcquireOptions
 from forensic_aul.device_info import DeviceInfo
 
 # Forensic hashing / chain of custody
@@ -143,6 +145,7 @@ __all__ = [
     "annotate_connection",
     "run_diff",
     "run_identify_workflow",
+    "IdentifyOptions",
     "IdentifyResult",
     "IdentifyResults",
     "ResultCounts",
@@ -177,6 +180,7 @@ __all__ = [
     "ExportResult",
     "AnnotateResult",
     "acquire",
+    "AcquireOptions",
     "AcquireResult",
     "AcquisitionError",
     "AcquisitionAborted",

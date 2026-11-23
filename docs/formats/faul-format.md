@@ -145,7 +145,7 @@ directory directly.
 `acquire --raw` (CLI-only) writes the old layout instead of a `.faul`: a
 `<name>.logarchive` directory plus a separate `<name>.logarchive.acquisition.json`
 sidecar file. The GUI always produces a `.faul`. In the library this is
-`acquire(..., pack=False)`, and `AcquireResult.report_path` then points at the
+`acquire(..., AcquireOptions(pack=False))`, and `AcquireResult.report_path` then points at the
 loose sidecar (it is `None` when the sidecar is embedded).
 
 ## See also

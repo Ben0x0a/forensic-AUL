@@ -121,12 +121,12 @@ sequence. See [../library/recipes.md](../library/recipes.md#run-the-identify-wor
 for the full snippet.
 
 ```python
-from forensic_aul import load_kb, run_identify_workflow, tty_bar_sink
+from forensic_aul import CaseInfo, IdentifyOptions, load_kb, run_identify_workflow, tty_bar_sink
 
 res = run_identify_workflow(
-    "CASE-2024-001",
-    output_dir=Path("identify-run"),
-    still_seconds=60,
+    Path("identify-run"),
+    CaseInfo(case_number="CASE-2024-001"),
+    IdentifyOptions(still_seconds=60),
     kb=load_kb(),                         # the shipped KB; or load_kb(path)
     confirm=lambda device: True,          # or prompt
     wait_still=lambda s: time.sleep(s),

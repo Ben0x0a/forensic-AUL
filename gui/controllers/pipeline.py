@@ -33,6 +33,7 @@ from typing import Any
 from forensic_aul.engine.utils.cancellation import CancelToken
 from forensic_aul.engine.utils.system import resolve_auto_jobs
 from forensic_aul.ops.acquisition.acquire import acquire
+from forensic_aul.ops.acquisition.options import AcquireOptions
 from forensic_aul.ops.acquisition.device import list_connected_devices
 from forensic_aul.ops.acquisition.report import load_sidecar_for
 from forensic_aul.ops.extraction.extract import run_extract
@@ -113,20 +114,22 @@ class AcquireController:
             self._view.show_result(False, "Choose an output folder.")
             return
         self._cancel = CancelToken()   # fresh token per run
-        kwargs = dict(
+        output_dir = Path(self._view.output_path())
+        case_info = CaseInfo(
             case_number=case,
-            output_dir=Path(self._view.output_path()),
-            udid=self._view.device_udid(),
             exhibit_number=self._view.exhibit_text() or None,
-            analyst=self._view.analyst_text() or None,
+            analyst_name=self._view.analyst_text() or None,
             notes=self._view.notes_text() or None,
-            confirm=lambda _device: True,  # the GUI already chose to start
-            cancel=self._cancel,
         )
+        opts = AcquireOptions(udid=self._view.device_udid())
+        cancel = self._cancel
         self._view.set_continue_visible(False)  # hide any stale shortcut
         self._view.set_running(True)
         self._view.run_task(
-            lambda: acquire(**kwargs), self.on_done, self.on_failed, self.on_cancelled,
+            lambda: acquire(output_dir, case_info, opts,
+                            confirm=lambda _device: True,  # the GUI already chose to start
+                            cancel=cancel),
+            self.on_done, self.on_failed, self.on_cancelled,
         )
 
     def on_done(self, result: Any) -> None:

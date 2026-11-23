@@ -39,10 +39,12 @@ from __future__ import annotations
 
 import logging
 import threading
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from forensic_aul import load_kb, run_identify_workflow
+from forensic_aul import CaseInfo, IdentifyOptions, load_kb, run_identify_workflow
+from forensic_aul.ops.identify.options import IDENTIFY_EXTRACT
 from forensic_aul.engine.utils.cancellation import CancelToken
 from forensic_aul.engine.utils.system import resolve_auto_jobs
 from gui.controllers import phrase_failure
@@ -134,16 +136,16 @@ class IdentifyController:
         self._cancel = CancelToken()
 
         self._view.set_state(self._view.RUNNING)
-        kwargs = dict(
+        output_dir = Path(self._view.output_path())
+        case = CaseInfo(case_number=self._view.session_label() or None)
+        opts = IdentifyOptions(
             udid=self._view.selected_udid(),
-            output_dir=Path(self._view.output_path()),
             still_seconds=self._view.still_seconds(),
-            case_number=self._view.session_label() or None,
-            integrity="off",
-            fts=False,
-            jobs=resolve_auto_jobs(),
-            kb=kb,
             write_csv=False,
+            extract=replace(IDENTIFY_EXTRACT, jobs=resolve_auto_jobs()),
+        )
+        kwargs = dict(
+            kb=kb,
             # The GUI already chose the device in the setup form, so auto-confirm.
             confirm=lambda _device: True,
             progress=lambda ev: self._view.emit_progress(ev.overall, ev.phase),
@@ -152,7 +154,7 @@ class IdentifyController:
             wait_for_action=self.wait_for_action,
         )
         self._view.run_task(
-            lambda: run_identify_workflow(**kwargs),
+            lambda: run_identify_workflow(output_dir, case, opts, **kwargs),
             self.on_done, self.on_failed, self.on_cancelled,
         )
 

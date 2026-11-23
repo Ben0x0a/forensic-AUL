@@ -145,9 +145,8 @@ class AcquireResult:
     """Outcome of ``acquire`` — the collected logarchive plus provenance.
 
     Bundles the collected ``.logarchive`` path with its hash, the device metadata
-    read from the device, the traceability report path, and (when ``extract=True``)
-    the embedded :class:`ExtractResult`, so a caller can chain straight into
-    annotation/export without re-deriving anything.
+    read from the device and the traceability report path, so a caller can chain
+    straight into ``run_extract(result.logarchive_path, …)``.
     """
 
     logarchive_path: Path               # the written .faul container (logarchive + sidecar)
@@ -155,8 +154,6 @@ class AcquireResult:
     file_count: int                     # number of files hashed inside it
     device: "DeviceInfo"                # metadata read from the device (IMEI, serial, …)
     report_path: Path | None = None     # legacy loose .acquisition.json; None when embedded in the .faul
-    # Present only when acquire(extract=True): the result of the follow-on extract.
-    extract_result: ExtractResult | None = None
 
 
 @dataclass(frozen=True)

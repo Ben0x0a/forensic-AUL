@@ -51,7 +51,9 @@ from forensic_aul.ops.acquisition.acquire import (
 from forensic_aul.device_info import DeviceInfo
 from forensic_aul.ops.acquisition.device import close_lockdown, connect_device
 from forensic_aul.ops.acquisition.report import write_acquisition_report
+from forensic_aul.ops.extraction.options import CaseInfo
 from forensic_aul.ops.identify.diff import run_diff
+from forensic_aul.ops.identify.options import IdentifyOptions
 from forensic_aul.outcomes import IdentifyResult
 
 if TYPE_CHECKING:
@@ -71,20 +73,11 @@ _IDENTIFY_PHASES = [
 
 
 def run_identify_workflow(
-    case_number: str | None = None,
+    output_dir: Path,
+    case: CaseInfo | None = None,
+    opts: IdentifyOptions | None = None,
     *,
-    output_dir: Path = Path("."),
-    udid: str | None = None,
-    still_seconds: int = 60,
-    exhibit_number: str | None = None,
-    analyst: str | None = None,
-    notes: str | None = None,
-    batch_size: int = 1_000,
-    jobs: int = 1,
-    fts: bool = False,
-    integrity: str = "off",
     kb: "KnowledgeBase | None" = None,
-    write_csv: bool = True,
     confirm: Callable[[DeviceInfo], bool] | None = None,
     wait_still: Callable[[int], None] | None = None,
     wait_for_action: Callable[[], None] | None = None,
@@ -139,18 +132,20 @@ def run_identify_workflow(
             <prefix>-identified.csv        <prefix>-identified.db
 
     Args:
-        case_number: Investigation/case reference. When falsy, the session
-            directory and its artefacts are named
-            ``identify-<YYYY_MM_DD_HH_MM_SSZ>`` (UTC) instead.
-        integrity: Forwarded to both ``run_extract`` calls. When ``"off"``
-            (the default), the post-acquisition hashing + acquisition-report
-            writing is skipped entirely — identify is a research tool, and
-            that chain-of-custody machinery is pure latency/paperwork here.
+        output_dir: Where the session directory is created (required: evidence
+            never lands in an implicit current directory).
+        case: The case identifiers (none required: identify is not an evidence
+            extract). When ``case.case_number`` is falsy, the session directory
+            and its artefacts are named ``identify-<YYYY_MM_DD_HH_MM_SSZ>`` (UTC).
+        opts: See :class:`IdentifyOptions`. ``opts.extract`` is forwarded to both
+            ``run_extract`` calls; when its ``integrity`` is ``"off"`` (the
+            default) the post-acquisition hashing + acquisition-report writing is
+            skipped entirely — identify is a research tool, and that
+            chain-of-custody machinery is pure latency/paperwork here.
         kb: When given, ``annotate_database`` runs on the ACTION db only
             (the baseline is diffed away and never needs annotations). A
             failure is logged and swallowed — annotation is an enrichment,
             not a requirement for the diff to succeed.
-        write_csv: When False, the diff writes no CSV (SQLite output only).
 
     Returns:
         An :class:`~forensic_aul.outcomes.IdentifyResult` with the four artefact
@@ -158,56 +153,40 @@ def run_identify_workflow(
         :class:`~forensic_aul.outcomes.DiffResult`.
 
     Raises:
-        ValueError: *case_number* yields no usable filename characters after
-            sanitising.
+        ValueError: ``case.case_number`` yields no usable filename characters
+            after sanitising.
+        ExtractFailedError: a capture's extract decoded nothing (status FAILED).
         ImportError: ``pymobiledevice3`` is not installed.
         AcquisitionAborted: the operator declined before the run started.
         OperationCancelled: a front-end callback stopped a run under way.
         AcquisitionError: connection, collection, or output-path safety failed.
     """
     return asyncio.run(_run_identify_async(
-        case_number=case_number,
-        output_dir=output_dir,
-        udid=udid,
-        still_seconds=still_seconds,
-        exhibit_number=exhibit_number,
-        analyst=analyst,
-        notes=notes,
-        batch_size=batch_size,
-        jobs=jobs,
-        fts=fts,
-        integrity=integrity,
-        kb=kb,
-        write_csv=write_csv,
-        confirm=confirm,
-        wait_still=wait_still,
-        wait_for_action=wait_for_action,
-        status=status,
-        progress=progress,
+        output_dir,
+        case if case is not None else CaseInfo(),
+        opts if opts is not None else IdentifyOptions(),
+        kb=kb, confirm=confirm, wait_still=wait_still,
+        wait_for_action=wait_for_action, status=status, progress=progress,
     ))
 
 
 async def _run_identify_async(
-    *,
-    case_number: str | None,
     output_dir: Path,
-    udid: str | None,
-    still_seconds: int,
-    exhibit_number: str | None,
-    analyst: str | None,
-    notes: str | None,
-    batch_size: int,
-    jobs: int,
-    fts: bool,
-    integrity: str,
+    case: CaseInfo,
+    opts: IdentifyOptions,
+    *,
     kb: "KnowledgeBase | None",
-    write_csv: bool,
     confirm: Callable[[DeviceInfo], bool] | None,
     wait_still: Callable[[int], None] | None,
     wait_for_action: Callable[[], None] | None,
     status: Callable[[str], None] | None,
     progress: ProgressSink | None,
 ) -> IdentifyResult:
+    # Unpacked once, so the steps below read as plain names.
+    case_number, exhibit_number = case.case_number, case.exhibit_number
+    analyst, notes = case.analyst_name, case.notes
+    udid, still_seconds, write_csv = opts.udid, opts.still_seconds, opts.write_csv
+    integrity = opts.extract.integrity
     say = status or (lambda line: log.info(line))
     reporter = ProgressReporter(progress, _IDENTIFY_PHASES)
 
@@ -322,11 +301,9 @@ async def _run_identify_async(
     # ── Extract both ──────────────────────────────────────────────────────────
     from forensic_aul.ops.extraction.extract import run_extract
     from forensic_aul.errors import ExtractFailedError
-    from forensic_aul.ops.extraction.options import CaseInfo, ExtractOptions
     from forensic_aul.outcomes import ExtractStatus
 
     imei = device.imei or "UNKNOWN"
-    opts = ExtractOptions(batch_size=batch_size, jobs=jobs, fts=fts, integrity=integrity)
     baseline_db = session_dir / f"{prefix}-baseline.db"
     action_db = session_dir / f"{prefix}-action.db"
 
@@ -336,12 +313,12 @@ async def _run_identify_async(
     ):
         reporter.phase(phase)
         say(f"Extracting {label} → {db}")
-        case = CaseInfo(
+        capture_case = CaseInfo(
             case_number=case_number, imei=imei,
             exhibit_number=exhibit_number, analyst_name=analyst,
             notes=f"identify/{label}" + (f" — {notes}" if notes else ""),
         )
-        result = run_extract(archive, db, case, opts,
+        result = run_extract(archive, db, capture_case, opts.extract,
                              progress=lambda ev: reporter.update(ev.overall, ev.detail))
         # Stop here rather than diff two empty databases (B4): a FAILED extract
         # means this tool cannot decode the device's logs at all.

@@ -2,12 +2,14 @@
 
 Defines : the library-level ``acquire`` operation. It connects to an iOS device
           over USB (via the optional ``pymobiledevice3`` dependency), collects a
-          ``.logarchive``, hashes it, writes a traceability report, and optionally
-          runs ``run_extract`` — returning an :class:`~forensic_aul.outcomes.AcquireResult`.
+          ``.logarchive``, hashes it and writes a traceability report — returning
+          an :class:`~forensic_aul.outcomes.AcquireResult`. It does not extract:
+          a caller chains ``run_extract`` on the result (acquisition and
+          extraction are separate bricks).
 Used by : launcher/cmds/acquire_cmd.py (CLI glue) and external callers.
 Uses    : forensic_aul.ops.acquisition.device (connect/list), forensic_aul.engine.integrity (hashing),
-          .acquisition_report (report), forensic_aul.ops.extraction.extract (optional
-          follow-on extract), forensic_aul.outcomes.
+          .acquisition.report (report), .acquisition.options (AcquireOptions),
+          forensic_aul.ops.extraction.options (CaseInfo), forensic_aul.outcomes.
 
 ``pymobiledevice3`` is imported lazily; if it is missing the relevant call raises
 ``ImportError`` with installation guidance (surfaced from acquisition.device).
@@ -37,6 +39,8 @@ from forensic_aul.ops.acquisition.report import build_report_dict, write_acquisi
 from forensic_aul.device_info import DeviceInfo
 from forensic_aul.ops.acquisition.device import close_lockdown, connect_device
 from forensic_aul.engine.integrity import hash_logarchive
+from forensic_aul.ops.acquisition.options import AcquireOptions
+from forensic_aul.ops.extraction.options import CaseInfo
 from forensic_aul.outcomes import AcquireResult
 
 log = logging.getLogger(__name__)
@@ -59,43 +63,34 @@ class AcquisitionAborted(AcquisitionError):
 # ── Public entry point ────────────────────────────────────────────────────────
 
 def acquire(
-    case_number: str,
-    *,
     output_dir: Path,
-    udid: str | None = None,
-    start_time: str | int | None = None,
-    size_limit: int | None = None,
-    age_limit: int | None = None,
-    exhibit_number: str | None = None,
-    analyst: str | None = None,
-    notes: str | None = None,
-    extract: bool = False,
-    db_path: Path | None = None,
-    batch_size: int = 1_000,
-    pack: bool = True,
+    case: CaseInfo,
+    opts: AcquireOptions | None = None,
+    *,
     confirm: Callable[[DeviceInfo], bool] | None = None,
     cancel: CancelToken = NEVER_CANCELLED,
 ) -> AcquireResult:
     """Collect a ``.logarchive`` from a connected iOS device into a ``.faul``.
 
-    Connects to the device (the first one, or *udid*), collects a logarchive to a
-    temp dir, hashes it, and packs it together with its acquisition sidecar into a
-    single portable ``.faul`` container written to *output_dir* under a
-    chain-of-custody filename (``<case>-<imei|udid>-<UTC>.faul``). When *extract*
-    is True it then runs ``run_extract`` on that container into *db_path* (default:
-    the output path with a ``.db`` suffix).
+    Connects to the device (the only one, or ``opts.udid``), collects a logarchive
+    to a temp dir, hashes it, and packs it together with its acquisition sidecar
+    into a single portable ``.faul`` container written to *output_dir* under a
+    chain-of-custody filename (``<case>-<imei|udid>-<UTC>.faul``). *case* supplies
+    the case identifiers (``case_number`` is required); the IMEI is read from the
+    device. To parse the result, pass ``result.logarchive_path`` to ``run_extract``
+    — acquisition and extraction are separate steps.
 
     The sidecar (case + device provenance) travels **inside** the ``.faul``, so it
     can never be separated from the evidence and is auto-loaded by ``extract``.
 
-    *pack* (default True) selects the output layout. With ``pack=False`` the legacy
+    ``opts.pack`` (default True) selects the output layout. With ``pack=False`` the legacy
     **loose** layout is produced instead: the ``<name>.logarchive`` directory is
     written directly into *output_dir* alongside a separate
     ``<name>.logarchive.acquisition.json`` sidecar file (``AcquireResult.
     report_path`` then points at it). Use it when a downstream tool needs a plain
     logarchive rather than the ``.faul`` bundle.
 
-    *start_time* selects how far back to collect: an ISO 8601 datetime, a relative
+    ``opts.start_time`` selects how far back to collect: an ISO 8601 datetime, a relative
     offset (``"1h"`` / ``"24h"`` / ``"7d"``), a Unix timestamp (int), or None for
     everything available.
 
@@ -120,7 +115,7 @@ def acquire(
 
     Returns:
         An :class:`~forensic_aul.outcomes.AcquireResult` (logarchive path, SHA-256,
-        device metadata, report path, and the optional ``extract_result``).
+        device metadata, report path).
 
     Raises:
         ImportError: ``pymobiledevice3`` is not installed.
@@ -128,45 +123,25 @@ def acquire(
         AcquisitionError: connection, collection, or output failed.
         OperationCancelled: *cancel* was cancelled during the acquisition.
     """
-    return asyncio.run(_acquire_async(
-        case_number=case_number,
-        output_dir=output_dir,
-        udid=udid,
-        start_time=start_time,
-        size_limit=size_limit,
-        age_limit=age_limit,
-        exhibit_number=exhibit_number,
-        analyst=analyst,
-        notes=notes,
-        extract=extract,
-        db_path=db_path,
-        batch_size=batch_size,
-        pack=pack,
-        confirm=confirm,
-        cancel=cancel,
-    ))
+    opts = opts if opts is not None else AcquireOptions()
+    return asyncio.run(_acquire_async(output_dir, case, opts, confirm, cancel))
 
 
 # ── Async implementation ──────────────────────────────────────────────────────
 
 async def _acquire_async(
-    *,
-    case_number: str,
     output_dir: Path,
-    udid: str | None,
-    start_time: str | int | None,
-    size_limit: int | None,
-    age_limit: int | None,
-    exhibit_number: str | None,
-    analyst: str | None,
-    notes: str | None,
-    extract: bool,
-    db_path: Path | None,
-    batch_size: int,
-    pack: bool,
+    case: CaseInfo,
+    opts: AcquireOptions,
     confirm: Callable[[DeviceInfo], bool] | None,
-    cancel: CancelToken = NEVER_CANCELLED,
+    cancel: CancelToken,
 ) -> AcquireResult:
+    # Unpacked once, so the steps below read as plain names.
+    case_number, exhibit_number = case.case_number, case.exhibit_number
+    analyst, notes = case.analyst_name, case.notes
+    udid, start_time, pack = opts.udid, opts.start_time, opts.pack
+    size_limit, age_limit = opts.size_limit, opts.age_limit
+
     if not case_number:
         raise AcquisitionError("case_number is required")
 
@@ -286,33 +261,12 @@ async def _acquire_async(
                 )
             except Exception as exc:  # noqa: BLE001 — a report failure must not lose the archive
                 log.warning(f"Could not write acquisition report: {exc}")
-    # (a temp logarchive, if any, is freed here — the follow-on extract reads
-    #  the packed .faul / the loose logarchive left in output_dir)
-
-    # ── Optional follow-on extract (reads the output we just wrote) ───────────
-    extract_result = None
-    if extract:
-        from forensic_aul.ops.extraction.extract import run_extract
-        from forensic_aul.ops.extraction.options import CaseInfo, ExtractOptions
-        target_db = db_path or output.with_suffix(".db")
-        log.info(f"Running extract → {target_db}")
-        extract_result = run_extract(
-            output, target_db,
-            CaseInfo(case_number=case_number, imei=device.imei or "UNKNOWN",
-                     exhibit_number=exhibit_number, analyst_name=analyst, notes=notes),
-            ExtractOptions(batch_size=batch_size, overwrite=True),
-            # Same token: cancelling an `acquire --extract` must stop the whole
-            # thing, not collect the archive and then quietly parse it anyway.
-            cancel=cancel,
-        )
-
     return AcquireResult(
         logarchive_path=output,
         logarchive_sha256=logarchive_sha256,
         file_count=file_count,
         device=device,
         report_path=report_path,   # None when the sidecar is embedded in the .faul
-        extract_result=extract_result,
     )
 
 

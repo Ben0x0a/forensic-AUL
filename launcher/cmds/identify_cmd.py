@@ -158,6 +158,10 @@ def run(args: argparse.Namespace) -> int:
 def _run_identify(args: argparse.Namespace) -> int:
     from forensic_aul.ops.acquisition.acquire import AcquisitionAborted, AcquisitionError
     from forensic_aul.ops.identify.report import format_diff_result
+    from dataclasses import replace
+
+    from forensic_aul import CaseInfo, IdentifyOptions
+    from forensic_aul.ops.identify.options import IDENTIFY_EXTRACT
     from forensic_aul.ops.identify.workflow import run_identify_workflow
     from forensic_aul.ops.knowledge_base.loader import KnowledgeBaseError, load_kb
 
@@ -214,16 +218,14 @@ def _run_identify(args: argparse.Namespace) -> int:
 
     try:
         res = run_identify_workflow(
-            args.case_number,
-            output_dir=args.output_dir,
-            udid=args.udid,
-            still_seconds=args.still,
-            exhibit_number=args.exhibit_number,
-            analyst=args.analyst,
-            notes=args.notes,
-            batch_size=args.batch_size,
+            args.output_dir,
+            CaseInfo(case_number=args.case_number, exhibit_number=args.exhibit_number,
+                     analyst_name=args.analyst, notes=args.notes),
+            IdentifyOptions(
+                udid=args.udid, still_seconds=args.still, write_csv=not args.no_csv,
+                extract=replace(IDENTIFY_EXTRACT, batch_size=args.batch_size),
+            ),
             kb=kb,
-            write_csv=not args.no_csv,
             confirm=confirm,
             wait_still=wait_still,
             wait_for_action=wait_for_action,
