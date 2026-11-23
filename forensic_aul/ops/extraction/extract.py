@@ -505,6 +505,53 @@ def _extract(
     return result
 
 
+# Rows the parallel writer inserts between two progress updates. Consumed by:
+# _run_parse (_handle_result).
+_WRITE_SLICE = 20_000
+
+
+class _ByteProgress:
+    """Parse-phase progress from bytes parsed and bytes written, at most every 0.5 %.
+
+    The fraction is the mean of the two, each counted in tracev3 bytes: in a
+    parallel run the workers parse ahead and the single writer catches up, and
+    either alone would leave the bar still for seconds (parsed bytes stop moving
+    once the workers are done, written bytes do not move before the first file
+    returns). Both are exact and only rise, so their mean is too; serially they
+    are equal.
+
+    WHY bytes and not files: files vary ~1000x in entry count and an archive may
+    hold only a handful of them, so a per-file bar jumps by tens of percent.
+    Updates that would not move the bar visibly are dropped, so a sink is not
+    flooded with thousands of identical events.
+    """
+
+    _MIN_STEP = 0.005
+
+    def __init__(self, reporter: ProgressReporter, total_bytes: int) -> None:
+        self._reporter, self._total = reporter, max(1, total_bytes)
+        self._parsed = 0.0
+        self._written = 0.0
+        self._last = 0.0
+
+    def advance(self, parsed: float, written: float, detail: str) -> None:
+        """Add *parsed* and *written* bytes."""
+        self._parsed += parsed
+        self._written += written
+        self._report(detail)
+
+    def set_parsed(self, parsed: float, detail: str) -> None:
+        """Set the parsed total (the parallel workers' shared counter)."""
+        self._parsed = parsed
+        self._report(detail)
+
+    def _report(self, detail: str) -> None:
+        fraction = min(1.0, (self._parsed + self._written) / (2 * self._total))
+        if fraction - self._last >= self._MIN_STEP or (fraction >= 1.0 > self._last):
+            self._last = fraction
+            self._reporter.update(fraction, detail)
+
+
 # ── Phase ledger (extract_phases) ─────────────────────────────────────────────
 
 def _enter_phase(ctx: RunContext, name: str, detail: str = "") -> None:
@@ -772,9 +819,8 @@ def _run_parse(ctx: RunContext) -> _ParseStats:
     # Progress: weight the parse by tracev3 byte size (files vary ~1000x in entry
     # count, so byte size advances the bar far more smoothly than file count).
     _enter_phase(ctx, "parse")
-    _sizes = {rel: max(1, p.stat().st_size) for p, rel in zip(tracev3_files, rels)}
-    _total_bytes = sum(_sizes.values()) or 1
-    _done_bytes = 0
+    _sizes = {rel: p.stat().st_size for p, rel in zip(tracev3_files, rels)}
+    byte_progress = _ByteProgress(ctx.reporter, sum(_sizes.values()))
 
     if opts.jobs <= 1:
         # Serial in-process path: parse → writer.add directly.
@@ -785,6 +831,8 @@ def _run_parse(ctx: RunContext) -> _ParseStats:
                 ts.timesync_data, ts.boot_uuid_to_timesync_file_id,
                 tracev3_file_ids[rel], ts.anchor_id_map, writer.add,
                 keep_raw=opts.keep_raw, cancel=ctx.cancel,
+                # Serial: each chunk is parsed and written before the next.
+                on_bytes=lambda n, i=i: byte_progress.advance(n, n, f"{i}/{len(tracev3_files)}"),
             )
             stats.absorb(rel, file_stats)
             # Flush BEFORE marking: parse_completed_at asserts that every row of
@@ -793,24 +841,26 @@ def _run_parse(ctx: RunContext) -> _ParseStats:
             writer.flush()
             writer.add_format_observations(tracev3_file_ids[rel], file_stats.observations)
             writer.mark_file_parsed(tracev3_file_ids[rel])
-            _done_bytes += _sizes[rel]
-            ctx.reporter.update(_done_bytes / _total_bytes, f"{i}/{len(tracev3_files)}")
     else:
         n_workers = max(1, opts.jobs - 1)
         log.info(f"Parsing in parallel : {n_workers} worker process(es) + 1 writer (jobs={opts.jobs})")
         done = 0
 
         def _handle_result(rel: str, file_stats: FileParseStats, entries: list) -> None:
-            nonlocal done, _done_bytes
+            nonlocal done
             # Single writer (this process) — one DB connection, no contention.
-            writer.add_batch(entries)
+            # Written in slices so progress keeps moving while a large file's
+            # rows go in: the writer, not the workers, is the slow side.
+            per_entry = _sizes[rel] / len(entries) if entries else 0.0
+            for start in range(0, len(entries), _WRITE_SLICE):
+                part = entries[start:start + _WRITE_SLICE]
+                writer.add_batch(part)
+                byte_progress.advance(0, len(part) * per_entry, f"{done}/{len(rels)}")
             writer.flush()                              # see the serial path
             writer.add_format_observations(tracev3_file_ids[rel], file_stats.observations)
             writer.mark_file_parsed(tracev3_file_ids[rel])
             stats.absorb(rel, file_stats)
             done += 1
-            _done_bytes += _sizes[rel]
-            ctx.reporter.update(_done_bytes / _total_bytes, f"{done}/{len(rels)}")
             log.info(f"[{done}/{len(rels)}] {rel}  ({file_stats.entries} entries)")
 
         parallel_parse(
@@ -823,6 +873,7 @@ def _run_parse(ctx: RunContext) -> _ParseStats:
             ),
             handle_result=_handle_result,
             cancel=ctx.cancel,
+            on_progress=lambda parsed: byte_progress.set_parsed(parsed, f"{done}/{len(rels)}"),
         )
 
     writer.flush()
@@ -878,7 +929,8 @@ def _finalise(ctx: RunContext, stats: _ParseStats) -> ExtractResult:
     _enter_phase(ctx, "index", "building indexes")
     log.info("Building secondary indexes…")
     _t_idx = time.monotonic()
-    finalize_indexes(conn)
+    finalize_indexes(conn, on_index=lambda done, total: ctx.reporter.update(
+        done / total, f"{done}/{total} indexes"))
     conn.commit()
     log.info(f"Secondary indexes built in {time.monotonic() - _t_idx:.1f} s")
 

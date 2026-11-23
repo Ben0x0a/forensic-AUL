@@ -40,6 +40,14 @@ module owns the bridge — which is what keeps ``cancellation.py`` free of any
 3. each worker wraps the inherited event in an ordinary :class:`CancelToken`
    (both expose ``set`` / ``is_set`` / ``wait``) and hands it to
    ``process_tracev3``, which checks it per chunk.
+
+Progress across the process boundary
+------------------------------------
+A worker returns a file's result only when the whole file is parsed, so an
+archive of a few large files used to advance the bar in jumps of several
+seconds. Each worker therefore adds the bytes it parses to one shared
+``multiprocessing.Value`` (passed through ``initargs``, like the event above),
+and the writer loop wakes at least every ``_PROGRESS_TICK_S`` to read it.
 """
 
 from __future__ import annotations
@@ -59,6 +67,10 @@ from forensic_aul.errors import OperationCancelled
 from forensic_aul.ops.extraction.oversize_pass import OversizeCache
 from forensic_aul.ops.extraction.tracev3_parse import FileParseStats, process_tracev3
 
+# How often the writer loop reads the shared byte counter while it waits for a
+# file to finish. Fine enough for a smooth bar, coarse enough to cost nothing.
+_PROGRESS_TICK_S = 0.25
+
 # ── Bounded-window scheduler (runs in the main / writer process) ──────────────
 
 def parallel_parse(
@@ -68,8 +80,13 @@ def parallel_parse(
     handle_result: Callable[[str, tuple[str, str, str, int, int], list[LogEntry]], None],
     *,
     cancel: CancelToken = NEVER_CANCELLED,
+    on_progress: Callable[[int], None] | None = None,
 ) -> None:
     """Parse *rels* across *n_workers* processes, streaming results to one writer.
+
+    *on_progress(bytes_parsed)* is called in this process at least every
+    ``_PROGRESS_TICK_S`` while files are in flight, and after each result, with
+    the bytes parsed so far across all workers (see the module docstring).
 
     *handle_result(rel, stats, entries)* is called in this (the sole writer)
     process for each completed file — it writes the entries, aggregates the
@@ -100,6 +117,7 @@ def parallel_parse(
     # module has always used.
     ctx = multiprocessing.get_context()
     cancel_event = ctx.Event()
+    bytes_parsed = ctx.Value("q", 0)
     mirror_stop = threading.Event()
     mirror = threading.Thread(
         target=mirror_cancel,
@@ -113,7 +131,7 @@ def parallel_parse(
             max_workers=n_workers,
             mp_context=ctx,
             initializer=worker_init,
-            initargs=(*init_args, cancel_event),
+            initargs=(*init_args, cancel_event, bytes_parsed),
         ) as ex:
             max_in_flight = max(2, n_workers * 2)
             rel_iter = iter(rels)
@@ -123,7 +141,11 @@ def parallel_parse(
             }
             try:
                 while in_flight:
-                    finished, _ = wait(in_flight, return_when=FIRST_COMPLETED)
+                    finished, _ = wait(
+                        in_flight, timeout=_PROGRESS_TICK_S, return_when=FIRST_COMPLETED,
+                    )
+                    if on_progress is not None:
+                        on_progress(bytes_parsed.value)
                     for fut in finished:
                         rel = in_flight.pop(fut)
                         stats, entries = fut.result()
@@ -160,6 +182,7 @@ def worker_init(
     uuid_file_ids: dict[str, int],
     keep_raw: bool,
     cancel_event,
+    bytes_parsed,
 ) -> None:
     """Initialise one worker: load the read-only string cache from disk once.
 
@@ -181,6 +204,7 @@ def worker_init(
         tracev3_file_ids=tracev3_file_ids,
         keep_raw=keep_raw,
         cancel=CancelToken(cancel_event),
+        bytes_parsed=bytes_parsed,
     )
 
 
@@ -200,5 +224,13 @@ def worker_parse(rel_path: str) -> tuple[FileParseStats, list[LogEntry]]:
         entries.append,
         keep_raw=bool(_WORKER["keep_raw"]),
         cancel=_WORKER["cancel"],                  # type: ignore[arg-type]
+        on_bytes=_add_parsed_bytes,
     )
     return stats, entries
+
+
+def _add_parsed_bytes(n: int) -> None:
+    """Add *n* to the shared counter the writer reads for progress."""
+    counter = _WORKER["bytes_parsed"]
+    with counter.get_lock():                       # type: ignore[union-attr]
+        counter.value += n                         # type: ignore[union-attr]

@@ -134,3 +134,21 @@ def test_unknown_chunk_tags_are_recorded_by_the_format_watch(tmp_path, monkeypat
         emit=lambda _entry: None, keep_raw=False,
     )
     assert stats.observations == (("chunk_tag", "0x7777", 1),)
+
+
+def test_reported_bytes_sum_to_the_file_size(tmp_path, monkeypatch):
+    """Progress counts bytes per chunk; a file's reports must add up to its size
+    (the tail — padding or bytes after the last chunk — included), or a summed
+    progress bar would stop short of 100 %."""
+    path = tmp_path / "x.tracev3"
+    path.write_bytes(b"\0" * 100)
+    chunks = [RawChunk(tag=0x7777, sub_tag=0, data_size=8, data=b"\0" * 24, file_offset=off)
+              for off in (0, 24)]
+    monkeypatch.setattr(tracev3_parse, "iter_chunks", lambda _p: iter(chunks))
+    reported: list[int] = []
+    tracev3_parse.process_tracev3(
+        path, tmp_path, strings=None, oversize_cache={}, timesync_data={},
+        boot_uuid_to_timesync_file_id={}, tracev3_file_id=1, anchor_id_map={},
+        emit=lambda _entry: None, keep_raw=False, on_bytes=reported.append,
+    )
+    assert reported == [24, 24, 52]

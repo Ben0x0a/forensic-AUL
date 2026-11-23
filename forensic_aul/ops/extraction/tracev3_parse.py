@@ -97,8 +97,14 @@ def process_tracev3(
     *,
     keep_raw: bool,
     cancel: CancelToken = NEVER_CANCELLED,
+    on_bytes: "Callable[[int], None] | None" = None,
 ) -> FileParseStats:
     """Parse one tracev3 file, passing every resolved LogEntry to *emit*.
+
+    *on_bytes*, when given, is called after each top-level chunk with the number
+    of file bytes that chunk advanced; the calls for one file always sum to its
+    size (the remainder is reported once the file ends), so a caller can sum
+    them across files into a byte-exact progress fraction.
 
     Pure with respect to the DB: the file is pre-registered (``tracev3_file_id``)
     and anchors are pre-inserted (``anchor_id_map``), so this runs identically in
@@ -121,7 +127,7 @@ def process_tracev3(
     return _FileParse(
         path, logarchive_root, strings, oversize_cache, timesync_data,
         boot_uuid_to_timesync_file_id, tracev3_file_id, anchor_id_map, emit,
-        keep_raw=keep_raw, cancel=cancel,
+        keep_raw=keep_raw, cancel=cancel, on_bytes=on_bytes,
     ).run()
 
 
@@ -141,11 +147,14 @@ class _FileParse:
         boot_uuid_to_timesync_file_id: dict[str, int], tracev3_file_id: int,
         anchor_id_map: dict[tuple[int, int], int], emit: "Callable[[LogEntry], None]",
         *, keep_raw: bool, cancel: CancelToken,
+        on_bytes: "Callable[[int], None] | None" = None,
     ) -> None:
         self.path, self.strings, self.oversize_cache = path, strings, oversize_cache
         self.timesync_data, self.boot_to_timesync = timesync_data, boot_uuid_to_timesync_file_id
         self.file_id, self.anchor_id_map, self.emit = tracev3_file_id, anchor_id_map, emit
         self.keep_raw, self.cancel = keep_raw, cancel
+        self.on_bytes = on_bytes
+        self._bytes_reported = 0
         self.rel = path.relative_to(logarchive_root)
         self.boot_uuid = self.ios_model = self.ios_build = ""
         self.catalog: CatalogChunk | None = None
@@ -180,8 +189,9 @@ class _FileParse:
                 handler = handlers.get(raw.tag)
                 if handler is None:
                     self.watch.note(format_watch.CHUNK_TAG, f"0x{raw.tag:04x}")
-                    continue
-                handler(raw)
+                else:
+                    handler(raw)
+                self._report_bytes(raw.file_offset + len(raw.data))
         except OperationCancelled:
             # WHY explicit (OperationCancelled is not a PARSE_ERROR): the handler
             # below turns a failure into a counted parse error and returns normally,
@@ -193,6 +203,10 @@ class _FileParse:
             self.n_errors += 1
             log.error(f"{self.rel}  fatal error after {self.n_entries} entries: {exc}")
 
+        # Report the rest of the file (padding, or what a fatal error skipped) so
+        # this file's calls sum to its size.
+        if self.on_bytes is not None:
+            self._report_bytes(self.path.stat().st_size)
         log.info(f"  {str(self.rel):<45}  chunks={self.n_chunks:<3}  chunksets={self.n_chunksets:<3}  "
                  f"entries={self.n_entries:<6}  oversize_hits={self.n_oversize_hits:<3}  "
                  f"statedump={self.n_dumps['statedump']:<3}  simpledump={self.n_dumps['simpledump']:<3}  "
@@ -203,6 +217,12 @@ class _FileParse:
             chunksets=self.n_chunksets_seen, chunksets_decoded=self.n_chunksets_decoded,
             observations=self.watch.rows(),
         )
+
+    def _report_bytes(self, position: int) -> None:
+        """Tell *on_bytes* how far the parse has advanced since the last call."""
+        if self.on_bytes is not None and position > self._bytes_reported:
+            self.on_bytes(position - self._bytes_reported)
+            self._bytes_reported = position
 
     # ── top-level chunks ─────────────────────────────────────────────────────
 

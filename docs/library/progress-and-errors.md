@@ -101,10 +101,21 @@ the overall bar moving sensibly.
 | Phase | Weight | Covers |
 |---|---|---|
 | `prepare` | 0.08 | source preparation + hashing + timesync + string cache + oversize scan |
-| `parse` | 0.55 | the main parse pass, weighted by tracev3 bytes |
-| `ordering` | 0.17 | assigning the forensic ordering |
-| `index` | 0.13 | building the deferred indexes |
-| `fts` | 0.07 | the deferred FTS rebuild (only with `fast_fts=True`) |
+| `parse` | 0.55 | the main parse pass, in tracev3 bytes (see below) |
+| `ordering` | 0.17 | assigning the forensic ordering (one statement: 0 → 1) |
+| `index` | 0.13 | building the deferred indexes, one event per index (`"3/6 indexes"`) |
+| `fts` | 0.07 | the deferred FTS rebuild (only with `fast_fts=True`; one statement) |
+| `stats` | 0.05 | summary statistics, cached into the database |
+
+Within `parse`, the fraction is the mean of tracev3 bytes **parsed** and bytes
+**written** to the database, and the detail is `"<files done>/<files>"`. With
+`jobs > 1` the workers parse ahead and report through a shared counter read
+every 0.25 s, while the single writer inserts each file's rows in slices; either
+count alone would leave the bar still for seconds (parsed bytes stop once the
+workers finish; written bytes do not move before the first file returns).
+Events closer than 0.5 % of the phase are dropped. Measured on a 10-file
+archive (jobs=4): 88 events in 37 s, no parse gap above 2.1 s; the ordering and
+FTS statements remain the longest silences (about 6 s each there).
 
 `run_identify_workflow` phases:
 

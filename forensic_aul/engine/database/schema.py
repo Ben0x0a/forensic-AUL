@@ -30,6 +30,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import sqlite3
+from collections.abc import Callable
 
 from forensic_aul.config import WAL_AUTOCHECKPOINT_PAGES
 
@@ -626,8 +627,13 @@ def temp_store_on_disk(conn: sqlite3.Connection):
         conn.execute(f"PRAGMA temp_store={int(prev)};")
 
 
-def finalize_indexes(conn: sqlite3.Connection) -> None:
+def finalize_indexes(
+    conn: sqlite3.Connection, on_index: Callable[[int, int], None] | None = None,
+) -> None:
     """Build the secondary ``logs`` indexes after a bulk load.
+
+    *on_index(done, total)* is called after each index is built, so a caller
+    can report progress through a phase that is otherwise one long silence.
 
     Counterpart to ``init_schema(..., create_indexes=False)``. Each index is one
     sequential sorted build over the finished table — far cheaper than updating
@@ -635,8 +641,10 @@ def finalize_indexes(conn: sqlite3.Connection) -> None:
     (not RAM) so a multi-million-row build cannot exhaust memory.
     """
     with temp_store_on_disk(conn):
-        for ddl in _DDL_INDEXES:
+        for done, ddl in enumerate(_DDL_INDEXES, 1):
             conn.execute(ddl)
+            if on_index is not None:
+                on_index(done, len(_DDL_INDEXES))
 
 
 def apply_pragmas(
