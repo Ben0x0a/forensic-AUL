@@ -159,7 +159,9 @@ class IdentifyController:
             still_seconds=self._view.still_seconds(),
             settle_seconds=settings.identify.settle_seconds,
             repeat=self._view.repeat_count(),
-            write_csv=False,
+            # The [identify] setting, as in the CLI (default on): the CSV is how
+            # results are analysed outside the viewer.
+            write_csv=settings.identify.write_csv,
             # [identify.extract] settings; jobs default 0 = auto.
             extract=settings.identify.extract,
         )

@@ -456,3 +456,26 @@ def test_still_panel_gives_way_when_the_baseline_capture_starts(qapp):
     assert not screen._still_panel.isHidden()
     screen._on_progress(0.1, "baseline")       # next phase
     assert screen._still_panel.isHidden() and not screen._running_panel.isHidden()
+
+
+def test_a_gui_run_writes_the_results_csv_by_default(qapp, monkeypatch, tmp_path):
+    """Like the CLI: the [identify] write_csv setting (default on) decides."""
+    from app.settings import load_settings
+
+    # The defaults only — not this machine's app_data/faul.toml or FAUL_* env.
+    monkeypatch.setattr(identify_ctrl, "load_settings",
+                        lambda: load_settings(path=tmp_path / "absent.toml", env={}))
+    screen = _make_screen()
+    runner = _install_fake_workflow(monkeypatch, screen, drives="none")
+    seen: list = []
+
+    def fake(output_dir, case, opts, **_kwargs):
+        seen.append(opts)
+        return _fake_result()
+
+    monkeypatch.setattr(identify_ctrl, "run_identify_workflow", fake)
+    _select_device(screen)
+    screen._out.set_path("/tmp/out")
+    screen._ctrl.start()
+    runner.join_and_dispatch()
+    assert seen and seen[0].write_csv is True

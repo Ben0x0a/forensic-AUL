@@ -371,7 +371,8 @@ class IdentifyScreen(OperationScreen):
         panel = result_panel(
             True,
             f"Identify complete — {summary}{action}"
-            f"<br><span style='color:#545a68'>{diff.sqlite_path}</span>",
+            f"<br><span style='color:#545a68'>{diff.sqlite_path}"
+            + (f"<br>{diff.csv_path}" if diff.csv_path else "") + "</span>",
         )
         self._done_host.addWidget(panel)
 
