@@ -65,6 +65,7 @@ FLAG_MASK_FORMAT: int = 0xE       # mask to extract formatter flag
 # Other flags
 FLAG_HAS_CURRENT_AID: int = 0x0001
 FLAG_HAS_UNIQUE_PID: int = 0x0010
+FLAG_HAS_PERSONA: int = 0x0040      # iOS 27 / macOS 27: a u32 persona id (all three types)
 FLAG_HAS_PRIVATE_DATA: int = 0x0100
 FLAG_HAS_SUBSYSTEM: int = 0x0200
 FLAG_HAS_RULES: int = 0x0400
@@ -509,6 +510,13 @@ def _parse_non_activity(
             na.unknown_sentinel = struct.unpack_from("<I", data, pos+4)[0]
             pos += 8
 
+    # iOS 27 / macOS 27: a persona id follows the current activity id. Unread,
+    # it shifts every later field by 4 bytes (the subsystem id first).
+    if flags & FLAG_HAS_PERSONA:
+        if pos + 4 <= len(data):
+            na.persona_id = struct.unpack_from("<I", data, pos)[0]
+            pos += 4
+
     if flags & FLAG_HAS_PRIVATE_DATA:
         if pos + 4 <= len(data):
             na.private_strings_offset = struct.unpack_from("<H", data, pos)[0]
@@ -568,6 +576,13 @@ def _parse_activity(
             act.unknown_sentinel_2 = struct.unpack_from("<I", data, pos+4)[0]
             pos += 8
 
+    # iOS 27 / macOS 27: a persona id follows the current activity id. Unread,
+    # it shifts every later field by 4 bytes (the subsystem id first).
+    if flags & FLAG_HAS_PERSONA:
+        if pos + 4 <= len(data):
+            act.persona_id = struct.unpack_from("<I", data, pos)[0]
+            pos += 4
+
     if flags & FLAG_HAS_OTHER_AID:
         if pos + 8 <= len(data):
             act.unknown_activity_id_3 = struct.unpack_from("<I", data, pos)[0]
@@ -598,6 +613,13 @@ def _parse_signpost(
             sp.unknown_activity_id = struct.unpack_from("<I", data, pos)[0]
             sp.unknown_sentinel = struct.unpack_from("<I", data, pos+4)[0]
             pos += 8
+
+    # iOS 27 / macOS 27: a persona id follows the current activity id. Unread,
+    # it shifts every later field by 4 bytes (the subsystem id first).
+    if flags & FLAG_HAS_PERSONA:
+        if pos + 4 <= len(data):
+            sp.persona_id = struct.unpack_from("<I", data, pos)[0]
+            pos += 4
 
     if flags & FLAG_HAS_PRIVATE_DATA:
         if pos + 4 <= len(data):

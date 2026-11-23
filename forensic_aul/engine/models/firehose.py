@@ -44,6 +44,7 @@ class FirehoseNonActivity:
     """Non-activity type Firehose log entry (log_activity_type == 0x4)."""
     unknown_activity_id: int = 0          # u32, present if flag 0x0001
     unknown_sentinel: int = 0             # u32, always 0x80000000?
+    persona_id: int = 0                   # u32, present if flag 0x0040 (has_persona, iOS 27 / macOS 27)
     private_strings_offset: int = 0       # u16, present if flag 0x0100
     private_strings_size: int = 0         # u16, present if flag 0x0100
     unknown_message_string_ref: int = 0   # u32, present if flag 0x0008
@@ -62,6 +63,7 @@ class FirehoseActivity:
     pid: int = 0                    # u64, present if flag 0x0010 (has_unique_pid)
     unknown_activity_id_2: int = 0  # u32, present if flag 0x0001 (has_current_aid)
     unknown_sentinel_2: int = 0     # u32
+    persona_id: int = 0                   # u32, present if flag 0x0040 (has_persona, iOS 27 / macOS 27)
     unknown_activity_id_3: int = 0  # u32, present if flag 0x0200 (has_other_aid)
     unknown_sentinel_3: int = 0     # u32
     unknown_message_string_ref: int = 0  # u32
@@ -75,6 +77,7 @@ class FirehoseSignpost:
     unknown_pc_id: int = 0            # u32
     unknown_activity_id: int = 0      # u32, present if flag 0x0001
     unknown_sentinel: int = 0         # u32
+    persona_id: int = 0                   # u32, present if flag 0x0040 (has_persona, iOS 27 / macOS 27)
     subsystem: int = 0                # u16
     signpost_id: int = 0              # u64
     signpost_name: int = 0            # u32
