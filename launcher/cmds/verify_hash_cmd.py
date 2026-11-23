@@ -46,8 +46,8 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def run(args: argparse.Namespace) -> int:
-    from forensic_aul.ops.verify.verify import verify_database
-    from forensic_aul.ops.verify.report import format_verify
+    from forensic_aul import verify_database
+    from forensic_aul.reports import format_verify
 
     try:
         result = verify_database(

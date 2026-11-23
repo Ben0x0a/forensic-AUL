@@ -39,7 +39,7 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
 
 def run(args: argparse.Namespace) -> int:
     from forensic_aul import summarise
-    from forensic_aul.ops.summary.report import format_summary
+    from forensic_aul.reports import format_summary
 
     try:
         s = summarise(args.database, top=args.top, buckets=args.buckets)

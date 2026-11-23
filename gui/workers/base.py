@@ -22,7 +22,7 @@ from typing import Any
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
-from forensic_aul.errors import OperationCancelled
+from forensic_aul import OperationCancelled
 
 _LOG = logging.getLogger(__name__)
 

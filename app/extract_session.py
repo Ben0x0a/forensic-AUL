@@ -29,8 +29,8 @@ from forensic_aul import (
     OperationCancelled,
     run_extract,
 )
-from forensic_aul.engine.utils.cancellation import NEVER_CANCELLED, CancelToken
-from forensic_aul.engine.utils.progress import ProgressSink
+from forensic_aul import NEVER_CANCELLED, CancelToken
+from forensic_aul import ProgressSink
 
 from app.logging_config import configure_console
 

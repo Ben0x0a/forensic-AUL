@@ -35,8 +35,10 @@ produces see the [database schema](../docs/formats/database-schema.md).
 
 Everything in the table below is re-exported at the top level
 (`from forensic_aul import …`) and listed in `forensic_aul.__all__`. These are the
-**only** names you should depend on; everything else under `forensic_aul.*` is an
-internal implementation detail and may change.
+**only** names you should depend on — with `forensic_aul.reports`, the text
+renderers (`format_summary`, `format_verify`, `format_kb_stats`, …: result → str);
+everything else under `forensic_aul.*` is an internal implementation detail and may
+change. The project's own CLI and GUI are held to the same rule by a test.
 
 | Name | Kind | Signature → returns | Does |
 |---|---|---|---|

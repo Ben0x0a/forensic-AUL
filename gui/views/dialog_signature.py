@@ -43,9 +43,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from forensic_aul.ops.knowledge_base.loader import KnowledgeBaseError
-from forensic_aul.ops.knowledge_base.models import Match, SignatureDraft
-from forensic_aul.ops.knowledge_base.writer import render_signature, write_signature
+from forensic_aul import KnowledgeBaseError
+from forensic_aul import Match, SignatureDraft
+from forensic_aul import render_signature, write_signature
 from forensic_aul import default_kb_dir
 from gui.widgets.components import (
     ComboBox,

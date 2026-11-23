@@ -49,6 +49,15 @@ The GUI depends on `app/` (crash reporting) *and* directly on the library's
 public API; it never imports `launcher/`. `launcher/cli.py` is the only module
 that knows about both the CLI commands and the GUI entry point.
 
+**The frontends use only the public API**: `forensic_aul` itself (its
+`__all__`), `forensic_aul.reports` (the `format_*` text renderers) and, for the
+`validate-tool` command only, `forensic_aul.validation`. Never an internal module —
+so an internal move cannot break the CLI or the GUI, and a third-party tool relies
+on exactly what they rely on. `tests/unit/test_layering.py` enforces it, with
+the other layer rules (the library never imports a frontend; the engine imports
+only itself; no cycles; a brick never chains another — that is
+`ops/workflows`).
+
 ---
 
 ## Layer responsibilities

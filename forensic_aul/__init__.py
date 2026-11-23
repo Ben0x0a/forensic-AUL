@@ -37,16 +37,25 @@ from forensic_aul.ops.extraction.options import ExtractOptions
 
 # Annotation engine (load a knowledge base + annotate an extracted database)
 from forensic_aul.ops.knowledge_base.loader import KnowledgeBaseError, default_kb_dir, load_kb
-from forensic_aul.ops.annotation.matcher import annotate_connection, annotate_database
+from forensic_aul.ops.knowledge_base.lint import lint_labels
+from forensic_aul.ops.knowledge_base.models import Match, SignatureDraft
+from forensic_aul.ops.knowledge_base.writer import render_signature, write_signature
+from forensic_aul.ops.annotation.matcher import (
+    annotate_connection,
+    annotate_database,
+    annotation_state,
+    clear_annotations,
+    no_annotations,
+)
 
 # Action attribution (baseline vs action diff, plus the full interactive workflow)
 from forensic_aul.ops.identify.diff import run_diff
 from forensic_aul.ops.identify.results import IdentifyResults, ResultCounts
-from forensic_aul.ops.workflows.identify_options import IdentifyOptions
+from forensic_aul.ops.workflows.identify_options import IDENTIFY_EXTRACT, IdentifyOptions
 from forensic_aul.ops.workflows.identify import run_identify_workflow
 
 # Filtered export to CSV / JSON / JSONL (knowledge-base aware)
-from forensic_aul.ops.export.exporter import run_export
+from forensic_aul.ops.export.exporter import export_formats, run_export
 
 # In-memory query API — same filter vocabulary as export, but yielding rows.
 # LogRow / v_logs (see engine/database/schema.py) are the stable read contract.
@@ -74,6 +83,8 @@ from forensic_aul.ops.acquisition.acquire import (
     acquire,
 )
 from forensic_aul.ops.acquisition.options import AcquireOptions
+from forensic_aul.ops.acquisition.device import list_connected_devices
+from forensic_aul.ops.acquisition.report import load_sidecar_for
 from forensic_aul.device_info import DeviceInfo
 
 # Forensic hashing / chain of custody
@@ -94,13 +105,20 @@ from forensic_aul.engine.utils.progress import (
 # reports through one and is stopped through the other.
 from forensic_aul.engine.utils.cancellation import NEVER_CANCELLED, CancelToken
 
+# Small utilities the frontends share with the library (one definition each).
+from forensic_aul.engine.utils.system import physical_cpu_count
+from forensic_aul.engine.utils.time import format_timestamp
+
 # Input-source preparation (logarchive dir / sysdiagnose .tar.gz / FFS .zip).
 # The loose-dirs case goes through prepare_source / run_extract with the
 # {"diagnostics": …, "uuidtext": …} mapping — no separate entry point needed.
 from forensic_aul.ops.extraction.source import (
     INTEGRITY_MODES,
+    LOOSE_DIAGNOSTICS_KEY,
+    LOOSE_UUIDTEXT_KEY,
     PreparedSource,
     SourceType,
+    detect_source_type,
     find_loose_dirs,
     prepare_source,
 )
@@ -143,15 +161,25 @@ __all__ = [
     "load_kb",
     "default_kb_dir",
     "KnowledgeBaseError",
+    "lint_labels",
+    "Match",
+    "SignatureDraft",
+    "render_signature",
+    "write_signature",
     "annotate_database",
     "annotate_connection",
+    "annotation_state",
+    "clear_annotations",
+    "no_annotations",
     "run_diff",
     "run_identify_workflow",
     "IdentifyOptions",
+    "IDENTIFY_EXTRACT",
     "IdentifyResult",
     "IdentifyResults",
     "ResultCounts",
     "run_export",
+    "export_formats",
     "query_logs",
     "count_logs",
     "fetch_logs",
@@ -173,6 +201,13 @@ __all__ = [
     "tty_bar_sink",
     "prepare_source",
     "find_loose_dirs",
+    "detect_source_type",
+    "LOOSE_DIAGNOSTICS_KEY",
+    "LOOSE_UUIDTEXT_KEY",
+    "list_connected_devices",
+    "load_sidecar_for",
+    "physical_cpu_count",
+    "format_timestamp",
     "PreparedSource",
     "SourceType",
     "INTEGRITY_MODES",

@@ -54,9 +54,9 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
 
 
 def run(args: argparse.Namespace) -> int:
-    from forensic_aul.ops.knowledge_base.loader import KnowledgeBaseError, load_kb
-    from forensic_aul.ops.annotation.matcher import annotate_database
-    from forensic_aul.ops.annotation import report
+    from forensic_aul import KnowledgeBaseError, load_kb
+    from forensic_aul import annotate_database
+    from forensic_aul import reports
 
     if not args.database.is_file():
         log.error(f"error: {args.database} is not a file")
@@ -71,7 +71,7 @@ def run(args: argparse.Namespace) -> int:
     only_ids  = set(args.signature) if args.signature else None
     only_tags = set(args.tag)       if args.tag       else None
 
-    print(report.format_header(args.database, kb))
+    print(reports.format_annotate_header(args.database, kb))
     print("")
 
     # The library opens the DB, sets the forensic pragma, commits and closes.
@@ -82,5 +82,5 @@ def run(args: argparse.Namespace) -> int:
         return 1
 
     print("")
-    print(report.format_annotate_result(result))
+    print(reports.format_annotate_result(result))
     return 0

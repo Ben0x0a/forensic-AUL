@@ -21,7 +21,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from forensic_aul import ExtractOptions
-from forensic_aul.engine.utils.cancellation import CancelToken
+from forensic_aul import CancelToken
 
 log = logging.getLogger(__name__)
 
@@ -304,7 +304,7 @@ def _resolve_case_fields(
     if isinstance(source, dict):
         return case_number, imei, exhibit, analyst, notes
 
-    from forensic_aul.ops.acquisition.report import load_sidecar_for
+    from forensic_aul import load_sidecar_for
 
     sidecar = load_sidecar_for(Path(source))
     if not sidecar:
@@ -325,12 +325,8 @@ def _resolve_case_fields(
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def run(args: argparse.Namespace) -> int:
-    from forensic_aul.ops.extraction.source import (
-        LOOSE_DIAGNOSTICS_KEY,
-        LOOSE_UUIDTEXT_KEY,
-        detect_source_type,
-    )
-    from forensic_aul.engine.utils.progress import tty_bar_sink
+    from forensic_aul import LOOSE_DIAGNOSTICS_KEY, LOOSE_UUIDTEXT_KEY, detect_source_type
+    from forensic_aul import tty_bar_sink
     from forensic_aul import CaseInfo
     from app.extract_session import run_extract_session
 

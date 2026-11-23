@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from forensic_aul.engine.utils.system import physical_cpu_count
+from forensic_aul import physical_cpu_count
 from gui.controllers.pipeline import AcquireController, ExtractController
 from gui.recent_store import RecentStore
 from gui.settings_store import SettingsStore

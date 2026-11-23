@@ -7,7 +7,8 @@ Rules (see tasks/review_2026-11.md, Phase 0 / S2–S5, S10):
   1. The library (forensic_aul) never imports a frontend (app, launcher, gui).
   2. forensic_aul.engine depends only on itself, forensic_aul.config and
      forensic_aul.errors.
-  3. Frontends do not reach into forensic_aul.engine (they use the public API).
+  3. Frontends import only the public API: forensic_aul (its __all__),
+     forensic_aul.reports and, for validate-tool, forensic_aul.validation.
   4. No import cycles between bricks.
   5. An ops brick (forensic_aul.ops.<brick>) imports another brick only for its
      data (``models`` / ``options`` modules); chaining bricks is the job of
@@ -33,16 +34,9 @@ _ENGINE_MAY_IMPORT = ("forensic_aul.engine", "forensic_aul.config", "forensic_au
 
 # ── Known violations (the ratchet) ─────────────────────────────────────────────
 # Rule 3 — frontend → engine edges, as (importing file, imported module).
-_KNOWN_FRONTEND_ENGINE = {
-    ("app/extract_session.py", "forensic_aul.engine.utils.cancellation"),
-    ("app/extract_session.py", "forensic_aul.engine.utils.progress"),
-    ("gui/controllers/identify.py", "forensic_aul.engine.utils.cancellation"),
-    ("gui/controllers/pipeline.py", "forensic_aul.engine.utils.cancellation"),
-    ("gui/views/screen_exploit.py", "forensic_aul.engine.utils.time"),
-    ("gui/views/screens_pipeline.py", "forensic_aul.engine.utils.system"),
-    ("launcher/cmds/extract_cmd.py", "forensic_aul.engine.utils.cancellation"),
-    ("launcher/cmds/extract_cmd.py", "forensic_aul.engine.utils.progress"),
-}
+# Rule 3 — what a frontend may import from the library: the public API and the
+# renderers; the QA tool only for the validate-tool command. No exception.
+_FRONTEND_MAY_IMPORT = ("forensic_aul.reports", "forensic_aul.validation")
 # Rule 4 — cycles between bricks, each as the set of bricks in one cycle.
 _KNOWN_CYCLES: set[frozenset[str]] = set()  # none left — keep it that way
 
@@ -171,16 +165,17 @@ def test_engine_depends_only_on_engine_config_errors():
     assert bad == [], f"engine must stay a leaf layer: {bad}"
 
 
-def test_frontends_do_not_reach_into_the_engine():
-    actual = {
+def test_frontends_use_only_the_public_api():
+    """S5: a frontend imports ``forensic_aul`` itself (plus the renderers and the
+    QA tool), never an internal module — so moving one never breaks the CLI or the
+    GUI, and what a frontend may rely on is exactly ``forensic_aul.__all__``."""
+    deep = sorted(
         (file, target)
         for file, targets in _graph().items() if file.split("/")[0] in _FRONTENDS
-        for target in targets if target.startswith("forensic_aul.engine")
-    }
-    new = sorted(actual - _KNOWN_FRONTEND_ENGINE)
-    fixed = sorted(_KNOWN_FRONTEND_ENGINE - actual)
-    assert not new, f"new frontend → engine import (use the public API): {new}"
-    assert not fixed, f"fixed — remove from _KNOWN_FRONTEND_ENGINE: {fixed}"
+        for target in targets
+        if target.startswith("forensic_aul.") and not target.startswith(_FRONTEND_MAY_IMPORT)
+    )
+    assert not deep, f"frontend imports an internal module (use forensic_aul's public API): {deep}"
 
 
 def test_no_new_import_cycles():

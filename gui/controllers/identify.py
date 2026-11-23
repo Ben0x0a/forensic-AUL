@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Any
 
 from forensic_aul import CaseInfo, IdentifyOptions, load_kb, run_identify_workflow
-from forensic_aul.engine.utils.cancellation import CancelToken
+from forensic_aul import CancelToken
 from gui.controllers import phrase_failure
 from forensic_aul import default_kb_dir
 from app.settings import SettingsError, load_settings
@@ -86,7 +86,7 @@ class IdentifyController:
     def rescan(self) -> None:
         import asyncio
 
-        from forensic_aul.ops.acquisition.device import list_connected_devices
+        from forensic_aul import list_connected_devices
 
         self._view.set_device_scanning()
         # list_connected_devices is a coroutine — run it in its own loop on the

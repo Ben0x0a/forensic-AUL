@@ -44,7 +44,7 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
     )
     # Choices come from the writer registry so a newly registered format is
     # automatically accepted here.
-    from forensic_aul.ops.export.exporter import export_formats
+    from forensic_aul import export_formats
 
     p.add_argument(
         "--format",
@@ -92,8 +92,8 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
 
 def run(args: argparse.Namespace) -> int:
     from forensic_aul import LogFilter
-    from forensic_aul.ops.export.exporter import run_export
-    from forensic_aul.ops.export.report import format_export_result
+    from forensic_aul import run_export
+    from forensic_aul.reports import format_export_result
 
     filters = LogFilter(
         time_from=args.time_from,

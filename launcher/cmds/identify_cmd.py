@@ -23,7 +23,7 @@ from pathlib import Path
 from dataclasses import replace
 
 from forensic_aul import ExtractOptions, IdentifyOptions
-from forensic_aul.ops.workflows.identify_options import IDENTIFY_EXTRACT
+from forensic_aul import IDENTIFY_EXTRACT
 
 log = logging.getLogger(__name__)
 
@@ -161,12 +161,12 @@ def run(args: argparse.Namespace) -> int:
 # ── identify (terminal front-end for the workflow) ────────────────────────────
 
 def _run_identify(args: argparse.Namespace) -> int:
-    from forensic_aul.ops.acquisition.acquire import AcquisitionAborted, AcquisitionError
-    from forensic_aul.ops.identify.report import format_diff_result
+    from forensic_aul import AcquisitionAborted, AcquisitionError
+    from forensic_aul.reports import format_diff_result
 
     from forensic_aul import CaseInfo
-    from forensic_aul.ops.workflows.identify import run_identify_workflow
-    from forensic_aul.ops.knowledge_base.loader import KnowledgeBaseError, load_kb
+    from forensic_aul import run_identify_workflow
+    from forensic_aul import KnowledgeBaseError, load_kb
 
     # Terminal callbacks for the library workflow: the CLI owns every prompt and
     # print; the workflow owns the sequence (see ops/workflows/identify.py).
@@ -280,8 +280,8 @@ def _run_identify_diff(args: argparse.Namespace) -> int:
     print(f"  Diffing → {csv_out}")
     print(f"           {sqlite_out}")
 
-    from forensic_aul.ops.identify.diff import run_diff
-    from forensic_aul.ops.identify.report import format_diff_result
+    from forensic_aul import run_diff
+    from forensic_aul.reports import format_diff_result
     try:
         res = run_diff(baseline_db, action_db, csv_out, sqlite_out)
     except Exception as exc:
@@ -315,7 +315,7 @@ def _resolve_to_db(
         return path
     if path.is_dir() and path.suffix.lower() == ".logarchive":
         from forensic_aul import CaseInfo
-        from forensic_aul.ops.extraction.extract import open_or_extract
+        from forensic_aul import open_or_extract
 
         db_path = path.with_suffix(".db")
         try:

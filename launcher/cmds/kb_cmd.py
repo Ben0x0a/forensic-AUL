@@ -62,8 +62,8 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def run(args: argparse.Namespace) -> int:
-    from forensic_aul.ops.knowledge_base.loader import KnowledgeBaseError, load_kb
-    from forensic_aul.ops.knowledge_base import report
+    from forensic_aul import KnowledgeBaseError, load_kb
+    from forensic_aul import reports
 
     try:
         kb = load_kb(args.kb)
@@ -78,8 +78,8 @@ def run(args: argparse.Namespace) -> int:
             if (not args.tag or args.tag in s.tags)
             and (not args.process or s.match.process == args.process)
         ]
-        print(report.format_signature_list_json(selected) if args.json
-              else report.format_signature_list(kb, selected))
+        print(reports.format_kb_signature_list_json(selected) if args.json
+              else reports.format_kb_signature_list(kb, selected))
         return 0
 
     if action == "show":
@@ -87,20 +87,20 @@ def run(args: argparse.Namespace) -> int:
         if target is None:
             log.error(f"error: no signature with id {args.signature_id!r}")
             return 1
-        print(report.format_signature(target))
+        print(reports.format_kb_signature(target))
         return 0
 
     if action == "validate":
-        from forensic_aul.ops.knowledge_base.lint import lint_labels
-        print(report.format_validation(kb, lint_labels(kb)))
+        from forensic_aul import lint_labels
+        print(reports.format_kb_validation(kb, lint_labels(kb)))
         return 0
 
     if action == "labels":
-        print(report.format_labels(kb))
+        print(reports.format_kb_labels(kb))
         return 0
 
     if action == "stats":
-        print(report.format_stats(kb))
+        print(reports.format_kb_stats(kb))
         return 0
 
     raise AssertionError(f"unknown kb action: {action}")

@@ -29,8 +29,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from forensic_aul.ops.acquisition.report import load_sidecar_for
-from forensic_aul.ops.export.exporter import run_export
+from forensic_aul import load_sidecar_for
+from forensic_aul import run_export
 from forensic_aul import LogFilter
 from gui.controllers import phrase_failure
 from gui.recent_store import RecentStore

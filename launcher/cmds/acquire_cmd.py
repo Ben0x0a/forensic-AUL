@@ -179,11 +179,7 @@ def run(args) -> int:  # type: ignore[type-arg]
         return 1
 
     from forensic_aul import CaseInfo
-    from forensic_aul.ops.acquisition.acquire import (
-        AcquisitionAborted,
-        AcquisitionError,
-        acquire,
-    )
+    from forensic_aul import AcquisitionAborted, AcquisitionError, acquire
 
     log.info(f'Connecting to device{f" {args.udid}" if args.udid else ""}…')
     try:
@@ -219,7 +215,7 @@ def run(args) -> int:  # type: ignore[type-arg]
         log.exception(f"error: acquisition failed — {exc}")
         return 1
 
-    from forensic_aul.ops.acquisition.report import format_acquire_result
+    from forensic_aul.reports import format_acquire_result
     print(format_acquire_result(result))
 
     # ── Optional immediate extract (CLI-driven, with its own operational log) ──
@@ -284,7 +280,7 @@ def _make_confirm(skip_prompt: bool) -> Callable[[object], bool]:
 # ── --list handler ────────────────────────────────────────────────────────────
 
 async def _cmd_list() -> int:
-    from forensic_aul.ops.acquisition.device import list_connected_devices
+    from forensic_aul import list_connected_devices
     try:
         devices = await list_connected_devices()
     except ImportError as exc:
