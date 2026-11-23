@@ -106,7 +106,7 @@ class IdentifyScreen(OperationScreen):
         self._settings = settings
         self._recents = recents
         self.navigate = None  # set by the shell
-        self._ctrl = IdentifyController(self, recents)
+        self._ctrl = IdentifyController(self, recents, settings)
         self.progressChanged.connect(self._on_progress)
 
         self.content.addWidget(eyebrow("Identify"))

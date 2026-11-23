@@ -48,22 +48,17 @@ from forensic_aul import (
     ForensicAULError,
     IdentifyOptions,
     IdentifyResults,
+    KnowledgeBaseError,
     load_kb,
     run_identify_workflow,
 )
 from forensic_aul import CancelToken
 from gui.controllers import phrase_failure
-from forensic_aul import default_kb_dir
 from app.settings import SettingsError, load_settings
 from gui.recent_store import RecentStore
+from gui.settings_store import SettingsStore
 
 log = logging.getLogger(__name__)
-
-# The shipped knowledge base, resolved from the package (never the working
-# directory — a GUI launched from the Dock has cwd "/"). Annotation is enrichment
-# only, so an unloadable KB never blocks the run — see start().
-_KB_DIR = default_kb_dir()
-
 
 class IdentifyController:
     """Logic for the Identify wizard: setup validation, run, and the two pauses.
@@ -72,9 +67,10 @@ class IdentifyController:
     ``run_task`` host and ``navigate`` callback). *recents* records completed runs.
     """
 
-    def __init__(self, view: Any, recents: RecentStore) -> None:
+    def __init__(self, view: Any, recents: RecentStore, settings: SettingsStore) -> None:
         self._view = view
         self._recents = recents
+        self._settings = settings
         # GUI→worker control channels (set from the GUI thread, waited on in the
         # worker thread). Fresh objects are created per run in start().
         self._skip_event = threading.Event()
@@ -126,9 +122,11 @@ class IdentifyController:
         # The failure is remembered and surfaced on DONE (see on_done) — an
         # analyst must know the results are unannotated, not discover it later.
         self._kb_warning = None
+        # The knowledge base set in Preferences, else the shipped one — the same
+        # one Exploit annotates with.
         try:
-            kb = load_kb(_KB_DIR)
-        except Exception as exc:  # noqa: BLE001 — annotation is optional enrichment
+            kb = load_kb(self._settings.kb_dir())
+        except (KnowledgeBaseError, OSError) as exc:
             self._kb_warning = (
                 f"Knowledge base not loaded ({exc}) — results are unannotated."
             )

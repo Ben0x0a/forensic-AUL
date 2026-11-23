@@ -319,12 +319,20 @@ def test_hub_relays_wizard_progress(qapp):
 
 # ── Controller helpers (no Qt needed) ────────────────────────────────────────
 
-def test_kb_dir_points_at_the_shipped_knowledge_base():
-    # CWD-independent: a GUI launched from the Dock has cwd "/", so the KB path
-    # must resolve from the package location, not the working directory.
-    assert identify_ctrl._KB_DIR.is_absolute()
-    assert identify_ctrl._KB_DIR.name == "knowledge_base"
-    assert identify_ctrl._KB_DIR.is_dir()
+def test_identify_annotates_with_the_preferences_knowledge_base(qapp, monkeypatch, tmp_path):
+    """The same knowledge base Exploit uses: the Preferences folder, else the
+    shipped one (it used to be the shipped one always)."""
+    screen = _make_screen()
+    loaded: list = []
+    monkeypatch.setattr(identify_ctrl, "load_kb", lambda path: loaded.append(path))
+    screen.run_task = lambda *a, **k: None
+    _select_device(screen)
+    screen._out.set_path(str(tmp_path / "out"))
+    screen._settings.set("kbPath", str(tmp_path / "my_kb"))
+
+    screen._ctrl.start()
+
+    assert loaded == [tmp_path / "my_kb"]
 
 
 def test_a_crash_is_never_reported_as_an_abort(qapp, monkeypatch):
