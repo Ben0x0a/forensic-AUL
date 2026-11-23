@@ -1,4 +1,4 @@
-"""Unit tests for the diagnostic-report engine — app/diagnostics.py + app/sanitize.py.
+"""Unit tests for the diagnostic-report package — app/diagnostics/.
 
 Cover the four things that must not regress: (1) the sensitivity CLASSIFIER puts
 PII (typed domain objects, named fields, filesystem paths) in the ``sensitive``
@@ -29,11 +29,16 @@ from app.diagnostics import (
     SAFE,
     SENSITIVE,
     CrashConfig,
+    anonymise_path,
     classify,
+    find_report,
     list_reports,
+    redact_report,
+    render_markdown,
     write_bug_report,
+    write_shared_copy,
 )
-from app.sanitize import anonymise_path, redact_report, render_markdown
+from app.diagnostics import capture
 
 
 # ── stand-ins for the real domain / runtime types (matched by class name) ──────
@@ -94,24 +99,24 @@ def test_classify_safe(name, value):
 
 def test_long_string_summarised_with_hash():
     cfg = CrashConfig(max_string_len=10)
-    out = diagnostics._summarise("x" * 50, cfg, cfg.max_depth)
+    out = capture.summarise("x" * 50, cfg, cfg.max_depth)
     assert out["truncated"] is True and out["len"] == 50 and "sha256" in out
 
 
 def test_large_object_not_dumped():
-    out = diagnostics._summarise(Connection(10_000), CrashConfig(), 4)
+    out = capture.summarise(Connection(10_000), CrashConfig(), 4)
     assert out["not_dumped"] is True
     assert out["_pending_len"] == 10_000  # size hint, not the 10k rows themselves
 
 
 def test_summariser_survives_hostile_repr():
-    out = diagnostics._summarise(Hostile(), CrashConfig(), 4)
+    out = capture.summarise(Hostile(), CrashConfig(), 4)
     assert "repr_error" in out  # captured, not raised
 
 
 def test_noise_variables_are_dropped(tmp_path):
     exc_type, exc, tb = _raise(RuntimeError("boom"))
-    report = diagnostics._build_report(exc_type, exc, tb, CrashConfig(), None)
+    report = capture.build_crash_report(exc_type, exc, tb, CrashConfig(), None)
     crash_frame = report["frames"][-1]["locals"]
     all_names = {*crash_frame[SAFE], *crash_frame[SENSITIVE]}
     assert "__name__" not in all_names  # dunders / modules / functions filtered out
@@ -212,8 +217,8 @@ def test_render_markdown_has_template_sections(tmp_path):
 # ── path anonymisation (the repo-root anchor) ──────────────────────────────────
 
 def test_anonymise_path_relative_to_repo_root():
-    inside = str(Path(diagnostics.__file__).resolve())  # <repo>/app/diagnostics.py
-    assert anonymise_path(inside) == "app/diagnostics.py"
+    inside = str(Path(capture.__file__).resolve())  # <repo>/app/diagnostics/capture.py
+    assert anonymise_path(inside) == "app/diagnostics/capture.py"
 
 
 def test_anonymise_path_home_fallback():
@@ -262,7 +267,8 @@ def test_bug_report_excludes_the_reporters_own_frames(tmp_path):
     assert report["frames"], "captured zero frames"
 
     files = {f["file"] for f in report["frames"]}
-    assert diagnostics.__file__ not in files          # reporter trimmed …
+    package = Path(diagnostics.__file__).parent
+    assert not any(Path(f).parent == package for f in files)  # reporter trimmed …
     assert any("test_diagnostics" in f for f in files)  # … but its caller kept
 
 
@@ -291,3 +297,29 @@ def test_error_count_ignores_bug_reports(tmp_path):
     assert len(list_reports(tmp_path, kind=KIND_CRASH)) == 1
     assert len(list_reports(tmp_path, kind=KIND_BUG)) == 1
     assert len(list_reports(tmp_path)) == 2
+
+
+# ── the shareable copy (what redact-errors writes) ─────────────────────────────
+
+def test_shared_copy_is_redacted_and_kept_out_of_the_listing(tmp_path):
+    source = _write_sample(tmp_path)
+    assert find_report(source.stem, tmp_path) == source  # a stem is enough
+
+    shared_json, shared_md = write_shared_copy(source)
+
+    assert (shared_json.name, shared_md.name) == (
+        f"{source.stem}.shared.json", f"{source.stem}.shared.md")
+    blob = shared_json.read_text(encoding="utf-8-sig") + shared_md.read_text(encoding="utf-8-sig")
+    assert "356938035643809" not in blob and "hunter2" not in blob
+    assert list_reports(tmp_path) == [source], "a shared copy is not a new report"
+
+
+def test_default_folder_is_read_at_call_time(tmp_path, monkeypatch):
+    """Redirecting the default config must redirect every entry point — a default
+    frozen into a function signature would keep writing to the old folder."""
+    from app.diagnostics import config
+
+    monkeypatch.setattr(config, "DEFAULT_CONFIG", CrashConfig(crash_dir=tmp_path))
+    path = write_bug_report({"entrypoint": "test"})
+    assert path is not None and path.parent == tmp_path
+    assert diagnostics.report_dir() == tmp_path

@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-import app.diagnostics
+import app.diagnostics.hooks
 from launcher import cli
 from tests.synthetic import synthetic_sysdiagnose as _synthetic_sysdiagnose
 
@@ -38,7 +38,7 @@ def isolated_cli(monkeypatch):
     saved_handlers, saved_level = list(root.handlers), root.level
     monkeypatch.setattr(sys, "excepthook", sys.excepthook)
     monkeypatch.setattr(threading, "excepthook", threading.excepthook)
-    monkeypatch.setattr(app.diagnostics, "_installed", False)
+    monkeypatch.setattr(app.diagnostics.hooks, "_installed", False)
     yield
     for handler in list(root.handlers):
         if handler not in saved_handlers:

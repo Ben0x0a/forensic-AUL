@@ -45,9 +45,7 @@ _KNOWN_FRONTEND_ENGINE = {
     ("launcher/cmds/extract_cmd.py", "forensic_aul.engine.utils.system"),
 }
 # Rule 4 — cycles between bricks, each as the set of bricks in one cycle.
-_KNOWN_CYCLES = {
-    frozenset({"app.diagnostics", "app.sanitize"}),
-}
+_KNOWN_CYCLES: set[frozenset[str]] = set()  # none left — keep it that way
 
 
 # ── Import graph ───────────────────────────────────────────────────────────────

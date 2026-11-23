@@ -1,12 +1,11 @@
-"""Turn a full (plaintext) crash report into shareable artefacts: a redacted JSON
-twin and a human-readable Markdown summary.
+"""Turn a full (plaintext) diagnostic report into a shareable, redacted copy.
 
-Defines : ``redact_report`` (replace every sensitive value with a type + sha256
-          placeholder and anonymise filesystem paths) and ``render_markdown``
-          (a scannable summary that doubles as a fileable bug template).
-Used by : launcher.cmds.redact_errors_cmd (produces the shareable copies) and
-          app.diagnostics (renders the local Markdown twin at crash time).
-Uses    : app.diagnostics (the sensitivity vocabulary) and the standard library.
+Defines : ``redact_report`` (every sensitive value → a type + sha256 placeholder,
+          every path anonymised, every known-sensitive literal scrubbed from free
+          text), ``anonymise_path`` and ``anonymise_text``.
+Used by : app.diagnostics.store (``write_shared_copy``).
+Uses    : app.diagnostics.schema (the sensitivity vocabulary), app.paths
+          (``APP_ROOT``) and the standard library.
 
 WHY redaction lives here, not in the capture: the local report keeps FULL
 PLAINTEXT on the operator's own machine (maximum debug value, and the operator
@@ -26,12 +25,13 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from app.diagnostics import (
+from app.diagnostics.schema import (
     SAFE,
     SENSITIVE,
     SENSITIVE_TYPE_NAMES,
     is_sensitive_key,
 )
+from app.paths import APP_ROOT
 
 # ── path anonymisation ─────────────────────────────────────────────────────────
 # Filesystem paths leak the examiner's username and directory layout. A path under
@@ -40,14 +40,7 @@ from app.diagnostics import (
 # under a symbolic root ("<stdlib>/json/__init__.py"); anything else under home
 # renders as "~/…".
 #
-# WHY parent.parent: this file is <repo>/app/sanitize.py, so parent.parent is the
-# repo root. (This is the anchor mATLAS's diagnostics got subtly wrong — its module
-# sat one level deeper than its comment assumed, rooting relative paths too deep.)
-
-try:
-    _PROJECT_ROOT: Path | None = Path(__file__).resolve().parent.parent
-except Exception:  # noqa: BLE001 - root discovery is best-effort; None disables project-relative.
-    _PROJECT_ROOT = None
+# The anchor is app.paths.APP_ROOT — the one definition of "the app's folder".
 
 try:
     _HOME: Path | None = Path.home()
@@ -86,11 +79,10 @@ def anonymise_path(path_str: str) -> str:
         path = Path(path_str)
     except Exception:  # noqa: BLE001 - a non-path value is returned unchanged.
         return path_str
-    if _PROJECT_ROOT is not None:
-        try:
-            return path.relative_to(_PROJECT_ROOT).as_posix()
-        except (ValueError, TypeError):
-            pass
+    try:
+        return path.relative_to(APP_ROOT).as_posix()
+    except (ValueError, TypeError):
+        pass
     for root, label in _INTERPRETER_ROOTS:
         try:
             return f"{label}/{path.relative_to(root).as_posix()}"
@@ -109,9 +101,8 @@ def anonymise_text(text: str) -> str:
     root prefix, then collapse the home root to ``~``."""
     if not text:
         return text
-    if _PROJECT_ROOT is not None:
-        root = str(_PROJECT_ROOT)
-        text = text.replace(root + os.sep, "").replace(root, ".")
+    root = str(APP_ROOT)
+    text = text.replace(root + os.sep, "").replace(root, ".")
     if _HOME is not None:
         text = text.replace(str(_HOME), "~")
     return text
@@ -183,7 +174,7 @@ def _boundary_re(literal: str) -> re.Pattern[str]:
     name ("extract", "validate", "acquire"…) becomes a scrub literal — and each is a
     substring of real module and function names. A raw replace turned a shared
     traceback into ``app/<redacted>_session.py … run_<redacted>_session``, corrupting
-    the very artefact ``faul report`` exists to produce. Word boundaries keep the
+    the very artefact ``redact-errors`` exists to produce. Word boundaries keep the
     genuine occurrences (a path, an id, a standalone token) scrubbed while leaving
     identifiers that merely CONTAIN the token intact.
     """
@@ -300,120 +291,3 @@ def redact_report(report: dict[str, Any]) -> dict[str, Any]:
     # known-sensitive literal, so neither can survive in a field we did not
     # anticipate. See _sanitise_text_tree.
     return _sanitise_text_tree(red, literals)
-
-
-# ── Markdown rendering ─────────────────────────────────────────────────────────
-
-def _one_line(summary: Any) -> str:
-    """A short, single-line description of a summarised local for the Markdown view."""
-    if isinstance(summary, dict):
-        if summary.get("redacted"):
-            return f"`[redacted: {summary.get('type', '?')} · {str(summary.get('sha256', ''))[:12]}]`"
-        typ = summary.get("type", "object")
-        if "path" in summary:
-            return f"`{typ}` → `{summary['path']}`"
-        if "repr" in summary:
-            return f"`{typ}` {summary['repr']}"
-        hints = summary.get("len", summary.get("_pending_len"))
-        return f"`{typ}`" + (f" (len={hints})" if hints is not None else "")
-    return f"`{summary!r}`"
-
-
-def _metadata_rows(safe_meta: dict[str, Any]) -> list[str]:
-    keys = ("tool", "tool_version", "python_version", "platform", "git_commit", "context")
-    rows: list[str] = []
-    for key in keys:
-        if key in safe_meta:
-            value = safe_meta[key]
-            rendered = json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else str(value)
-            rows.append(f"| {key} | {rendered} |")
-    return rows
-
-
-def _frame_lines(frame: dict[str, Any]) -> list[str]:
-    """One frame rendered as a heading, its source line, and its two locals lists."""
-    lines = [
-        f"### `{frame.get('function', '?')}` — "
-        f"{frame.get('file', '?')}:{frame.get('lineno', '?')}"
-    ]
-    if frame.get("code"):
-        lines.append(f"> `{frame['code']}`")
-    locs = frame.get("locals", {})
-    for label, bucket in (("_Safe:_", locs.get(SAFE, {})),
-                          ("_⚠ Sensitive (review before sharing):_", locs.get(SENSITIVE, {}))):
-        if bucket:
-            lines.append("")
-            lines.append(label)
-            lines.extend(f"- `{name}` = {_one_line(summary)}" for name, summary in bucket.items())
-    lines.append("")
-    return lines
-
-
-def render_markdown(report: dict[str, Any]) -> str:
-    """A human-readable summary of a report (full or already-redacted). Doubles as a
-    fileable bug template via the placeholder sections at the end.
-
-    Renders BOTH kinds from the one schema: a crash report leads with the exception
-    and its traceback, while a bug report — which has neither — leads straight into
-    the live thread stacks. Frames carrying a ``thread`` label are grouped under it.
-    """
-    exc = report.get("exception") or {}
-    meta = report.get("metadata", {})
-    safe_meta = meta.get(SAFE, {}) if isinstance(meta, dict) else {}
-    is_bug = report.get("kind") == "bug" or not exc
-
-    lines: list[str] = []
-    lines.append(f"# forensic_AUL {'bug' if is_bug else 'crash'} report")
-    lines.append("")
-    if is_bug:
-        lines.append("Filed by the operator — no exception was raised. The stacks below are "
-                     "the tool's live state at the moment the report was requested.")
-    else:
-        lines.append(f"**{exc.get('type', 'Exception')}**: {exc.get('message', '')}")
-    lines.append("")
-
-    lines.append("## Environment")
-    lines.append("")
-    lines.append("| field | value |")
-    lines.append("| --- | --- |")
-    lines.extend(_metadata_rows(safe_meta))
-    lines.append("")
-
-    if report.get("traceback"):
-        lines.append("## Traceback")
-        lines.append("")
-        lines.append("```")
-        lines.append(str(report["traceback"]).rstrip())
-        lines.append("```")
-        lines.append("")
-
-    lines.append("## Live thread stacks & variables" if is_bug
-                 else "## Stack frames & variables")
-    lines.append("")
-    current_thread: str | None = None
-    for frame in report.get("frames", []):
-        thread = frame.get("thread")
-        if thread is not None and thread != current_thread:
-            lines.append(f"## Thread — {thread}")
-            lines.append("")
-            current_thread = thread
-        lines.extend(_frame_lines(frame))
-
-    lines.append("---")
-    lines.append("")
-    lines.append("> ⚠ **Before sharing this report**, confirm every value in the "
-                 "_Sensitive_ sections above is redacted or acceptable to disclose.")
-    lines.append("")
-    lines.append("## Steps to reproduce")
-    lines.append("")
-    lines.append("<!-- What were you doing when it went wrong? -->")
-    lines.append("")
-    lines.append("## Expected vs actual")
-    lines.append("")
-    lines.append("<!-- What did you expect to happen, and what happened instead? -->")
-    lines.append("")
-    lines.append("## Notes")
-    lines.append("")
-    lines.append("<!-- Anything else that might help. -->")
-    lines.append("")
-    return "\n".join(lines)

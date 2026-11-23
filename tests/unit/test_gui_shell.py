@@ -57,9 +57,10 @@ def test_report_entry_caption_follows_the_error_reports(qapp, tmp_path, monkeypa
     exists, "Open error reports" once one does — and filing a BUG report must not
     flip it, or asking for help would make the tool claim it had errored."""
     from app import diagnostics
+    from app.diagnostics import config
     from gui import report_actions
 
-    monkeypatch.setattr(diagnostics, "_DEFAULT_CONFIG", diagnostics.CrashConfig(crash_dir=tmp_path))
+    monkeypatch.setattr(config, "DEFAULT_CONFIG", diagnostics.CrashConfig(crash_dir=tmp_path))
 
     w = MainWindow()
     w.show()

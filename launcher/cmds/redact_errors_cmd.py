@@ -3,17 +3,16 @@
 Defines : the ``redact-errors`` command — list the local diagnostic reports (both
           the automatic *error* reports and the operator-filed *bug* reports), or
           turn one into a redacted, shareable pair (``*.shared.json`` +
-          ``*.shared.md``) safe to attach to a bug report. Argument parsing + file
-          I/O only; the redaction and Markdown rendering live in ``app.sanitize``.
+          ``*.shared.md``) safe to attach to a bug report. Argument parsing and
+          console output only; the files and the redaction live in app.diagnostics.
 Used by : launcher/cli.py (registers the parser, dispatches to ``run``).
-Uses    : app.diagnostics (report directory, ``list_reports``, ``report_kind``) and
-          app.sanitize (``redact_report``, ``render_markdown``).
+Uses    : app.diagnostics (``report_dir``, ``list_reports``, ``report_kind``,
+          ``find_report``, ``write_shared_copy``).
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 from pathlib import Path
 
@@ -47,9 +46,9 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def run(args: argparse.Namespace) -> int:
-    from app.diagnostics import CrashConfig
+    from app.diagnostics import report_dir
 
-    crash_dir: Path = args.dir or CrashConfig().crash_dir
+    crash_dir: Path = args.dir or report_dir()
     if args.target is None:
         return _list_reports(crash_dir)
     return _share(args.target, crash_dir)
@@ -72,38 +71,18 @@ def _list_reports(crash_dir: Path) -> int:
     return 0
 
 
-def _resolve(target: str, crash_dir: Path) -> Path | None:
-    """Accept a full path, a bare filename, or a report stem (``.json`` appended)."""
-    for candidate in (Path(target), crash_dir / target, crash_dir / f"{target}.json"):
-        if candidate.is_file():
-            return candidate
-    return None
-
-
 def _share(target: str, crash_dir: Path) -> int:
-    from app.sanitize import redact_report, render_markdown
+    from app.diagnostics import find_report, write_shared_copy
 
-    source = _resolve(target, crash_dir)
+    source = find_report(target, crash_dir)
     if source is None:
         log.error(f"error: crash report not found: {target}")
         return 1
     try:
-        report = json.loads(source.read_text(encoding="utf-8-sig"))
+        shared_json, shared_md = write_shared_copy(source)
     except (OSError, ValueError) as exc:
         log.error(f"error: could not read crash report {source}: {exc}")
         return 1
-
-    redacted = redact_report(report)
-    # Strip the trailing ``.json`` so a *.json source yields *.shared.json.
-    stem = source.name[:-5] if source.name.endswith(".json") else source.name
-    shared_json = source.with_name(f"{stem}.shared.json")
-    shared_md = source.with_name(f"{stem}.shared.md")
-
-    shared_json.write_text(
-        json.dumps(redacted, indent=2, ensure_ascii=False, default=str),
-        encoding="utf-8-sig",
-    )
-    shared_md.write_text(render_markdown(redacted), encoding="utf-8-sig")
 
     log.info("Redacted, shareable crash report written:")
     log.info(f"  JSON     : {shared_json}")

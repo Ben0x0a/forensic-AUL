@@ -30,7 +30,7 @@ flowchart TD
     gui --> lib
     cmds --> lib
 
-    app["app/<br/>extract_session · diagnostics · sanitize"] --> lib
+    app["app/<br/>extract_session · logging_config · diagnostics"] --> lib
 
     subgraph lib["forensic_aul/ — the installable library"]
         direction TB
@@ -125,12 +125,23 @@ library never imports it.
 | `app/paths.py` | `APP_ROOT` (the folder holding `faul.py`) and `app_data_dir()` — `app_data/` next to the app (git-ignored) for settings, recents and crash reports, so the operator can see, copy and delete what the tool writes. Standard library only. |
 | `app/logging_config.py` | The one place logging is configured: console logging (`dictConfig`, UTC, detailed with `-v`), the forensic operational log file of a session, and attaching a frontend's own handler (the GUI log panel). The library never configures logging — it only adds a `NullHandler`. |
 | `app/extract_session.py` | The shared *session* framing around an extract: set up the forensic operational log, log the invocation banner, run the pipeline, and **seal** the log (hash → `case_metadata` → close handler) on every exit path — success, `SIGINT` or failure. Used by both `extract` and `acquire --extract`, so every route produces the same sealed audit log. |
-| `app/diagnostics.py` | Forensic crash capture. Installs `sys.excepthook` + `threading.excepthook`; `capture_exception` covers the catch-log-and-return paths. Walks the traceback and records the type and value of every variable in every frame, classified `safe` / `sensitive`. Imports the **standard library only** — domain types are recognised by *name*, never imported, so it still works when a domain import is what crashed. |
-| `app/sanitize.py` | Turns a full plaintext crash report into a shareable pair: `redact_report` (every sensitive value → type + SHA-256 placeholder, paths anonymised) and `render_markdown` (a scannable summary that doubles as a bug template). |
+| `app/diagnostics/` | Forensic crash and bug reports: the type and value of every variable in every frame, classified `safe` / `sensitive`, kept in full plaintext locally; `write_shared_copy` produces the redacted copy that may leave the machine. **Standard library only** — domain types are recognised by *name*, never imported, so it still works when a domain import is what crashed. |
 
-Why redaction lives in `sanitize` and not in the capture: the local report keeps
-full plaintext on the operator's own machine; only the copy that leaves the
-machine is redacted, and the operator reviews it first.
+`app/diagnostics/` is a package of bricks, each layer importing only the layers above it:
+
+| Brick | Responsibility |
+|---|---|
+| `schema.py` | The report format (schema id, kinds, `safe` / `sensitive`) and the one sensitivity vocabulary + `classify`, shared by capture and redaction. |
+| `config.py` | `CrashConfig` (report folder, capture caps), read at call time so the folder can be redirected. |
+| `capture.py` | Builds a report in memory: walks a traceback (crash) or every live thread (bug), summarising each value within fixed bounds. |
+| `redact.py` | The shareable copy: sensitive values → type + SHA-256 placeholder, paths anonymised, known literals scrubbed from every string. |
+| `render.py` | The Markdown view, which doubles as a bug template. |
+| `store.py` | Every file rule: naming per kind, the one writer, listing, finding, the `*.shared.*` copy. |
+| `hooks.py` | The guarded entry points: `install_excepthook`, `capture_exception`, `write_crash_report`, `write_bug_report`. They never raise. |
+
+Why redaction is separate from the capture: the local report keeps full plaintext on
+the operator's own machine; only the copy that leaves the machine is redacted, and
+the operator reviews it first.
 
 ### `forensic_aul/` — the library
 

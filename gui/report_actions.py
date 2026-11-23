@@ -5,7 +5,7 @@ Defines : ``pending_action`` (which of the two states the control is in),
           folder, or file a bug report and reveal it).
 Used by : gui.views.shell (the Preferences submenu entry). Any other shell that
           grows the same control calls THIS, never a hand-copied twin.
-Uses    : app.diagnostics (``list_reports``, ``write_bug_report``) and PySide6's
+Uses    : app.diagnostics (``list_reports``, ``report_dir``, ``write_bug_report``) and PySide6's
           ``QDesktopServices`` for the platform file-manager hand-off.
 
 WHY one control and not two: it answers a single operator question — "something is
@@ -86,10 +86,11 @@ def perform(action: str | None = None, *, report_dir: Path | None = None) -> Pat
     that only wants "do the right thing" need not ask twice. Never raises: the whole
     point is to help an operator who is already having a bad time.
     """
-    from app.diagnostics import CrashConfig, write_bug_report
+    from app.diagnostics import report_dir as default_report_dir
+    from app.diagnostics import write_bug_report
 
     resolved = action or pending_action(report_dir)
-    directory = report_dir if report_dir is not None else CrashConfig().crash_dir
+    directory = report_dir if report_dir is not None else default_report_dir()
 
     if resolved == OPEN_ERRORS:
         if directory.is_dir():
