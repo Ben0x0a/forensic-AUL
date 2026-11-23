@@ -396,3 +396,18 @@ def test_inputs_are_opened_read_only(tmp_path):
     finally:
         for name in ("base.db", "act.db"):
             os.chmod(tmp_path / name, stat.S_IRUSR | stat.S_IWUSR)
+
+
+def test_an_unresolved_row_is_kept_in_its_own_tier(tmp_path):
+    """A timestamp-0 row is kept (cannot be proven pre-cutoff) and must not read
+    'repeat', even when its message is in the baseline; the counts add up."""
+    _db_fmt(tmp_path / "base.db", [(100, "idle tick", "kernel", "idle tick")])
+    _db_fmt(tmp_path / "act.db", [
+        (0, "idle tick", "kernel", "idle tick"),
+        (200, "camera opened", "camera", "camera opened"),
+    ])
+    res = run_diff(tmp_path / "base.db", tmp_path / "act.db", None, tmp_path / "out.db")
+    tiers = dict(sqlite3.connect(tmp_path / "out.db").execute(
+        "SELECT message, tier FROM identified_logs"))
+    assert tiers == {"idle tick": "unresolved", "camera opened": "new_template"}
+    assert res.retained == res.new_templates + res.new_values + res.unresolved == 2

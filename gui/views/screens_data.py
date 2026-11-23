@@ -139,6 +139,7 @@ class ExportScreen(OperationScreen):
         form = Panel()
         form.add(h2("Selected database"))
         self._db = PathPicker("file", placeholder="case.sqlite", name_filter=_DB_FILTER)
+        self._db.edit.textChanged.connect(self._ctrl.on_database_changed)
         form.add(field_row("File", self._db, required=True))
         self._out = PathPicker("save", placeholder="out.csv / out.json / out.jsonl",
                                name_filter=_OUT_FILTER)

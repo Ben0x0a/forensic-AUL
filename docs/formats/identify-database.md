@@ -29,8 +29,9 @@ Every action-database row with `timestamp_unix_ns > cutoff` **or**
 | `new_template` | `0` | The baseline never produced this template for this process (or, for a dynamic message, this message) — **read these first** |
 | `new_values` | `0` | A known template for this process with a message the baseline did not have — a familiar event with new values |
 | `repeat` | `1` | **Noise** — its `(message, process)` pair already appears in the baseline |
+| `unresolved` | `0` | Timestamp not resolved (`timestamp_unix_ns = 0`): kept, since it cannot be proven to predate the action, and not compared |
 
-Retained = `new_template` + `new_values` — the same rows the former two-way diff
+Retained = `new_template` + `new_values` + `unresolved` — the same rows the former two-way diff
 retained; the tier ranks them. On the iOS 27 screenshot test capture: 111,141
 post-cutoff rows → 48,145 repeat, 31,071 new values, 31,925 new template (6,724
 distinct templates; the top process is `ScreenshotServicesService`).
@@ -62,7 +63,7 @@ Rows are read ordered by `(timestamp_unix_ns ASC, id ASC)`.
 | `message` | TEXT | |
 | `format_string` | TEXT | The invariant template (`format_strs.value`); NULL for a dynamic message |
 | `matched_signatures` | TEXT NOT NULL DEFAULT `''` | Comma-joined signature ids (`GROUP_CONCAT`), `''` when the action DB has no KB tables or the row is unannotated |
-| `tier` | TEXT | `new_template` / `new_values` / `repeat` (see above); NULL in a database diffed before tiers existed |
+| `tier` | TEXT | `new_template` / `new_values` / `repeat` / `unresolved` (see above); NULL in a database diffed before tiers existed |
 | `excluded` | INTEGER NOT NULL | `0` retained, `1` baseline noise (`tier = repeat`) |
 | `note` | TEXT | Currently only the unresolved-timestamp note |
 

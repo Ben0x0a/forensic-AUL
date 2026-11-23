@@ -79,6 +79,7 @@ _PHASE_TO_STEP = {
     "connect": "Setup",
     "still": "Still",
     "prepare": "Prepare",
+    "settle": "Prepare",
     "baseline": "Baseline",
     "wait": "Action",
     "action": "Post-action",
@@ -381,10 +382,19 @@ class IdentifyScreen(OperationScreen):
         reveal_btn = ghost_button("Reveal in folder", "folder")
         reveal_btn.clicked.connect(self._reveal_output)
         new_btn = ghost_button("New run", "plus")
-        new_btn.clicked.connect(lambda: self.set_state(_State.SETUP))
+        new_btn.clicked.connect(self._new_run)
         for btn in (view_btn, reveal_btn, new_btn):
             row.addWidget(btn)
         self._done_host.addLayout(row)
+
+    def _new_run(self) -> None:
+        """Back to setup for another action: the last description does not apply.
+
+        Only here — a failed or cancelled run also returns to setup, and its
+        description is kept for the retry.
+        """
+        self._describe.clear()          # textChanged also clears the controller's copy
+        self.set_state(_State.SETUP)
 
     def _open_results(self, db_path: Any) -> None:
         self.go(ShowIdentifyResults(Path(db_path)))
@@ -417,8 +427,15 @@ class IdentifyScreen(OperationScreen):
             self.set_state(_State.WAITING)
         elif label == "prepare":
             self.set_state(_State.PREPARE)
-        elif self._waiting_panel.isVisible() or self._prepare_panel.isVisible():
-            # A later phase means the operator answered the pause.
+        elif label not in ("still", "settle") and (
+            # isHidden: the panel's own flag, set by set_state — true to the
+            # state whether or not the window is on screen.
+            not self._waiting_panel.isHidden() or not self._prepare_panel.isHidden()
+            or not self._still_panel.isHidden()
+        ):
+            # A later phase means the pause is over (the operator answered it,
+            # or the countdown ended): leave its panel, or the still panel's
+            # "Skip wait" would stay up through the baseline capture.
             self.set_state(_State.RUNNING)
         self._bar.setValue(int(fraction * 100))
         self._progress_label.setText(f"{fraction * 100:.1f}% · {label}")

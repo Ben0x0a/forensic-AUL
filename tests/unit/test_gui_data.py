@@ -220,3 +220,14 @@ def test_export_applies_carried_filters_until_cleared(qapp, tmp_path, monkeypatc
     calls[1][0]()
     assert (seen[1].process, seen[1].message_match, seen[1].time_to) == (
         ["locationd"], None, None), "the form's own filters stay; the carried ones go"
+
+
+def test_carried_filters_are_dropped_when_another_database_is_chosen(qapp, tmp_path):
+    exp = ExportScreen(SettingsStore(), RecentStore())
+    exp.receive(_handoff(tmp_path))
+    assert not exp._carried_row.isHidden()
+    exp._pick_db(str(tmp_path / "other.db"))
+    assert exp._carried_row.isHidden(), "filters of case.db must not narrow other.db"
+    from forensic_aul import LogFilter
+
+    assert exp._ctrl._carried == LogFilter()

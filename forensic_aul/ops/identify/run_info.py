@@ -4,7 +4,8 @@ Defines : write_run_info / read_run_info over an ``identify_run`` key/value tabl
           and the key name ACTION_DESCRIPTION_KEY.
 Used by : forensic_aul.ops.workflows.identify (writes after the diff);
           forensic_aul.ops.identify.results (reads, for the results viewer).
-Uses    : sqlite3.
+Uses    : sqlite3, forensic_aul.ops.identify.diff (read_only_uri: a
+          percent-encoded URI, so any path opens).
 
 WHY in the identified database and not a sidecar file: the database is the
 artefact an analyst keeps, copies and reopens; what the action was must travel
@@ -16,6 +17,8 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Mapping
 from pathlib import Path
+
+from forensic_aul.ops.identify.diff import read_only_uri
 
 # Keys of the identify_run table. Consumed by: workflows/identify.py, results.py.
 ACTION_DESCRIPTION_KEY = "action_description"
@@ -35,7 +38,7 @@ def write_run_info(db: Path, info: Mapping[str, str]) -> None:
 
 def read_run_info(db: Path) -> dict[str, str]:
     """The stored facts, or ``{}`` for a database written before they existed."""
-    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    conn = sqlite3.connect(read_only_uri(db), uri=True)
     try:
         return dict(conn.execute(f"SELECT key, value FROM {_TABLE_NAME}"))
     except sqlite3.OperationalError:

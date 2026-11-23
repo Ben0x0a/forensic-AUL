@@ -385,3 +385,30 @@ def test_a_single_run_keeps_its_names_and_has_no_ranking(patched):
     assert res.ranking is None and len(res.cycles) == 1
     # <prefix>-baseline.db, the prefix ending in the UTC timestamp: no cycle number.
     assert res.baseline_db.stem.split("-")[-2].endswith("Z")
+
+
+def test_run_info_reads_back_from_a_path_with_uri_characters(tmp_path):
+    """'#', '?' and '%' in a case folder must not hide the stored facts."""
+    from forensic_aul.ops.identify.run_info import read_run_info, write_run_info
+
+    db = tmp_path / "Case #12 ?50% done" / "out.db"
+    db.parent.mkdir()
+    write_run_info(db, {"action_description": "x"})
+    assert read_run_info(db) == {"action_description": "x"}
+
+
+def test_progress_ends_at_100_percent_only_at_the_end(patched, monkeypatch):
+    """Every phase's weight is counted once per cycle, so the bar is below
+    100 % until the diff is done, even with a preparation and repetitions."""
+    from forensic_aul import RankingResult
+
+    monkeypatch.setattr(wf, "rank_repeated", lambda dbs, out: RankingResult(out, len(dbs), 0, 0))
+    events: list = []
+    run_identify_workflow(
+        patched.out, opts=IdentifyOptions(repeat=2, still_seconds=5, settle_seconds=5),
+        confirm=lambda d: True, wait_still=lambda s: None, prepare=lambda: True,
+        wait_for_action=lambda: None, progress=events.append,
+    )
+    overall = [e.overall for e in events]
+    assert overall[-1] == 1.0
+    assert max(overall[:-1]) < 1.0

@@ -177,6 +177,10 @@ _CSV_HEADER = [
 TIER_NEW_TEMPLATE = "new_template"
 TIER_NEW_VALUES = "new_values"
 TIER_REPEAT = "repeat"
+# A row whose timestamp could not be resolved: kept (it cannot be proven to
+# predate the action) but not compared — its own tier, so a retained row never
+# reads "repeat" and the tier counts add up to the retained count.
+TIER_UNRESOLVED = "unresolved"
 
 
 def _baseline_cutoff_ns(baseline_db: Path) -> int:
@@ -259,6 +263,7 @@ def run_diff(
         excluded=n_excluded,
         new_templates=n_new_templates,
         new_values=n_new_values,
+        unresolved=n_unresolved,
     )
 
 
@@ -283,7 +288,7 @@ class DiffRow:
     message: str | None
     format_string: str | None   # the invariant template; None for a dynamic message
     matched_signatures: str
-    tier: str                   # TIER_NEW_TEMPLATE / TIER_NEW_VALUES / TIER_REPEAT
+    tier: str                   # TIER_NEW_TEMPLATE / _NEW_VALUES / _REPEAT / _UNRESOLVED
     excluded: bool              # baseline noise: tier == repeat (see the module docstring)
     note: str
 
@@ -306,6 +311,7 @@ def classify_rows(action_db: Path, baseline_db: Path, cutoff_ns: int) -> Iterato
                 # Unresolved timestamp: an empty ISO (not the 1970 sentinel), and
                 # retained — it cannot be proven to predate the action.
                 ts, note, excluded = "", "unresolved timestamp (timestamp_unix_ns=0)", False
+                tier = TIER_UNRESOLVED
             else:
                 ts, note = iso8601_from_unix_ns(ts_ns), ""
                 excluded = tier == TIER_REPEAT

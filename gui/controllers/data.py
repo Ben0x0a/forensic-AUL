@@ -44,6 +44,9 @@ class ExportController:
         # (time bounds, keyword, category…). Applied on export and always shown
         # to the analyst (show_carried), never applied invisibly.
         self._carried = LogFilter()
+        # The database the carried filters were set on: they describe a view of
+        # that database, so they are dropped when another one is chosen.
+        self._carried_db: str | None = None
 
     def receive(self, payload: ExportFrom) -> None:
         """Take a hand-off: the database, the form's filters, and the rest."""
@@ -53,11 +56,20 @@ class ExportController:
             process=", ".join(f.process or ()), subsystem=", ".join(f.subsystem or ()),
             level=", ".join(f.level or ()), like=f.like or "", last=f.last or "",
         )
+        # After fill_form: setting the path fires on_database_changed, which
+        # must not see the new filters as belonging to the previous database.
         self._carried = replace(f, **{name: None for name in _FORM_FIELDS})
+        self._carried_db = str(payload.db)
         self._view.show_carried(describe_filters(self._carried))
+
+    def on_database_changed(self, path: str) -> None:
+        """The database field changed (GUI thread): drop filters set on another one."""
+        if self._carried_db is not None and path.strip() != self._carried_db:
+            self.clear_carried()
 
     def clear_carried(self) -> None:
         self._carried = LogFilter()
+        self._carried_db = None
         self._view.show_carried("")
 
     def start(self, *, db: str, out: str, fmt: str, process: str, subsystem: str,

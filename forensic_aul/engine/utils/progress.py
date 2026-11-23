@@ -70,11 +70,19 @@ class ProgressReporter:
     *phases* is a list of ``(name, weight)``; weights are normalised, so only
     their ratios matter (e.g. ``[("parse", 6), ("finish", 4)]``). A missing or
     ``None`` sink makes every method a no-op.
+
+    *total* replaces the sum the weights are normalised by. It is for a run
+    that enters some phases several times (each entry adds the phase's weight):
+    pass the sum of the weights actually entered, or the bar reaches 100 %
+    early.
     """
 
-    def __init__(self, sink: ProgressSink | None, phases: Sequence[tuple[str, float]]) -> None:
+    def __init__(
+        self, sink: ProgressSink | None, phases: Sequence[tuple[str, float]],
+        *, total: float | None = None,
+    ) -> None:
         self._sink = sink
-        total = sum(w for _, w in phases) or 1.0
+        total = total or sum(w for _, w in phases) or 1.0
         self._weight: dict[str, float] = {name: w / total for name, w in phases}
         self._completed_weight = 0.0   # summed weight of phases already finished
         self._phase: str | None = None

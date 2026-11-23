@@ -170,6 +170,9 @@ class DiffResult:
     # baseline never produced, and known templates with new values.
     new_templates: int = 0
     new_values: int = 0
+    # Retained rows with an unresolved timestamp (not compared; see diff.py).
+    # retained == new_templates + new_values + unresolved.
+    unresolved: int = 0
 
 
 @dataclass(frozen=True)

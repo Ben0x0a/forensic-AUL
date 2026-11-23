@@ -12,6 +12,8 @@ def format_diff_result(res: DiffResult) -> str:
         f"    Retained : {res.retained}  →  {res.csv_path}",
         f"      new template : {res.new_templates}  (read these first)",
         f"      new values   : {res.new_values}",
+        *([f"      unresolved   : {res.unresolved}  (timestamp unknown, not compared)"]
+          if res.unresolved else []),
         f"    Excluded : {res.excluded}  (full set in {res.sqlite_path})",
     ])
 

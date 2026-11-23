@@ -856,6 +856,10 @@ def _run_parse(ctx: RunContext) -> _ParseStats:
                 part = entries[start:start + _WRITE_SLICE]
                 writer.add_batch(part)
                 byte_progress.advance(0, len(part) * per_entry, f"{done}/{len(rels)}")
+            if not entries:
+                # Nothing to write, but the file is done: count its bytes, or
+                # the parse bar would stop short of 100 % (written side).
+                byte_progress.advance(0, _sizes[rel], f"{done}/{len(rels)}")
             writer.flush()                              # see the serial path
             writer.add_format_observations(tracev3_file_ids[rel], file_stats.observations)
             writer.mark_file_parsed(tracev3_file_ids[rel])

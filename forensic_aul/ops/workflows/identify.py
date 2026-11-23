@@ -80,7 +80,7 @@ log = logging.getLogger(__name__)
 # the slowest step by far. "wait" and "annotate" get minimal but non-zero
 # weight since they can legitimately take a moment (operator pause / KB run).
 _IDENTIFY_PHASES = [
-    ("connect", 0.02), ("still", 0.04), ("prepare", 0.02), ("baseline", 0.12),
+    ("connect", 0.02), ("still", 0.04), ("prepare", 0.02), ("settle", 0.02), ("baseline", 0.12),
     ("wait", 0.02), ("action", 0.12), ("extract-baseline", 0.26),
     ("extract-action", 0.26), ("annotate", 0.04), ("diff", 0.12),
 ]
@@ -89,7 +89,8 @@ _IDENTIFY_PHASES = [
 def _identify_phases(repeat: int) -> list[tuple[str, float]]:
     """The phases for *repeat* repetitions: every phase but ``connect`` runs
     once per repetition, so its weight is shared out — the reporter adds a
-    phase's weight each time it is entered, and the bar must still end at 100 %."""
+    phase's weight each time it is entered. Pair with ``total=`` the sum of
+    ``_IDENTIFY_PHASES``: normalising by these shared-out weights would undo it."""
     n = max(1, repeat)
     return [(name, weight if name == "connect" else weight / n)
             for name, weight in _IDENTIFY_PHASES]
@@ -228,7 +229,10 @@ async def _run_identify_async(
     udid, write_csv = opts.udid, opts.write_csv
     integrity = opts.extract.integrity
     say = status or (lambda line: log.info(line))
-    reporter = ProgressReporter(progress, _identify_phases(opts.repeat))
+    # Normalised by one full run's total: the per-cycle phases carry 1/N of
+    # their weight and are entered N times, so together they add up to it.
+    reporter = ProgressReporter(progress, _identify_phases(opts.repeat),
+                                total=sum(w for _, w in _IDENTIFY_PHASES))
 
     # ── Connect ───────────────────────────────────────────────────────────────
     reporter.phase("connect")
@@ -417,7 +421,9 @@ async def _capture_cycle(
         reporter.phase("prepare")
         prepared = await asyncio.to_thread(prepare)
         if prepared and wait_still is not None and opts.settle_seconds > 0:
-            reporter.phase("still")
+            # Its own phase: re-entering "still" would add that weight twice
+            # and push the bar to 100 % before the run ends.
+            reporter.phase("settle")
             log.info(f"{label}Settle pause: {opts.settle_seconds} s")
             await asyncio.to_thread(wait_still, opts.settle_seconds)
 

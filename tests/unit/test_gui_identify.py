@@ -441,3 +441,18 @@ def test_pauses_are_rearmed_for_the_next_repetition(qapp):
     ctrl.prepared(False)
     assert ctrl.prepare() is False
     assert not ctrl._prepare_event.is_set()
+
+
+def test_new_run_clears_the_previous_description(qapp):
+    screen = _make_screen()
+    screen._describe.setText("took a screenshot")
+    screen._new_run()
+    assert screen._describe.text() == "" and screen._ctrl._description == ""
+
+
+def test_still_panel_gives_way_when_the_baseline_capture_starts(qapp):
+    screen = _make_screen()
+    screen._on_progress(-1.0, "still:1")       # countdown tick → STILL
+    assert not screen._still_panel.isHidden()
+    screen._on_progress(0.1, "baseline")       # next phase
+    assert screen._still_panel.isHidden() and not screen._running_panel.isHidden()

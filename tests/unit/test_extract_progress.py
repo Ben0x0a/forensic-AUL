@@ -46,3 +46,16 @@ def test_finalize_indexes_reports_each_index(tmp_path):
     finalize_indexes(conn, on_index=lambda done, total: calls.append((done, total)))
     assert calls and calls[-1][0] == calls[-1][1]
     assert [done for done, _ in calls] == list(range(1, len(calls) + 1))
+
+
+def test_written_side_completes_when_a_file_has_no_entries():
+    """Mirrors _run_parse's _handle_result: a file that decodes to no entries
+    still adds its bytes to the written side, so the parse phase ends at 100 %."""
+    events: list = []
+    reporter = ProgressReporter(events.append, [("parse", 1.0)])
+    reporter.phase("parse")
+    progress = _ByteProgress(reporter, total_bytes=300)
+    progress.set_parsed(300, "")           # workers parsed both files
+    progress.advance(0, 200, "1/2")        # file A: its entries written
+    progress.advance(0, 100, "2/2")        # file B: no entries — the new branch
+    assert events[-1].phase_fraction == 1.0
