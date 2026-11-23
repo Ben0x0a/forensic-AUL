@@ -15,6 +15,15 @@ from dataclasses import dataclass
 
 from forensic_aul.ops.extraction.options import ExtractOptions
 
+# Said by every frontend before an identify run. WHY advice and not a check: if
+# the device locks anyway, its lock/unlock lines are plainly visible in the
+# result, and the unlock may be the very action studied. Consumed by:
+# launcher/cmds/identify_cmd.py, gui/views/screens_identify.py.
+AUTO_LOCK_ADVICE = (
+    "Disable Auto-Lock (Settings › Display & Brightness › Auto-Lock › Never) "
+    "unless lock and unlock events are what you study."
+)
+
 # How both captures are extracted by default. WHY these differ from an evidence
 # extract: identify is a research tool that runs two short extracts back to back —
 # no full-text index (the diff never searches text), no source hashing (no chain

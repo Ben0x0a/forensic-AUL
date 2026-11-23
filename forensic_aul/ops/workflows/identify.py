@@ -57,16 +57,11 @@ from forensic_aul.ops.acquisition.acquire import (
     sanitise_filename_token,
 )
 from forensic_aul.device_info import DeviceInfo
-from forensic_aul.ops.acquisition.device import close_lockdown, connect_device, device_locked
+from forensic_aul.ops.acquisition.device import close_lockdown, connect_device
 from forensic_aul.ops.acquisition.report import write_acquisition_report
 from forensic_aul.case_info import CaseInfo
 from forensic_aul.ops.identify.diff import run_diff
-from forensic_aul.ops.identify.run_info import (
-    ACTION_DESCRIPTION_KEY,
-    WARNINGS_KEY,
-    encode_warnings,
-    write_run_info,
-)
+from forensic_aul.ops.identify.run_info import ACTION_DESCRIPTION_KEY, write_run_info
 from forensic_aul.ops.workflows.identify_options import IdentifyOptions
 from forensic_aul.errors import ExtractFailedError
 from forensic_aul.ops.annotation.matcher import annotate_database
@@ -87,14 +82,6 @@ _IDENTIFY_PHASES = [
     ("wait", 0.02), ("action", 0.12), ("extract-baseline", 0.26),
     ("extract-action", 0.26), ("annotate", 0.04), ("diff", 0.12),
 ]
-
-# How to keep a lock/unlock out of the result, said wherever the lock state is
-# reported. Consumed by: _run_identify_async.
-_UNLOCK_ADVICE = (
-    "unless the unlock is the action you study, unlock the device before the "
-    "baseline capture ends and keep it unlocked "
-    "(Settings › Display & Brightness › Auto-Lock › Never)"
-)
 
 # Seconds between "still collecting" progress updates during a capture.
 _COLLECT_TICK_S = 1.0
@@ -184,13 +171,6 @@ def run_identify_workflow(
         paths (two archives, two databases) and the nested
         :class:`~forensic_aul.outcomes.DiffResult`.
 
-    The lock state is read at the start and after each capture. Locked at the
-    start is only advice (*status*): an unlock during the still pause lands in
-    the baseline, and an unlock may be the very action studied. Locked when a
-    capture ends is reported in ``IdentifyResult.warnings`` (and the identified
-    database): the unlock that follows, or the lock itself, may then be among
-    the retained rows.
-
     Raises:
         ValueError: ``case.case_number`` yields no usable filename characters
             after sanitising.
@@ -230,7 +210,6 @@ async def _run_identify_async(
     integrity = opts.extract.integrity
     say = status or (lambda line: log.info(line))
     reporter = ProgressReporter(progress, _IDENTIFY_PHASES)
-    warnings: list[str] = []
 
     # ── Connect ───────────────────────────────────────────────────────────────
     reporter.phase("connect")
@@ -242,14 +221,6 @@ async def _run_identify_async(
         # on input(), which must not stall the event loop owning the connection.
         if confirm is not None and not await asyncio.to_thread(confirm, device):
             raise AcquisitionAborted("identify declined by confirm callback")
-
-        # ── Lock state at the start (I1) ──────────────────────────────────────
-        # Advice, not a refusal: the unlock may be the action being studied, and
-        # an unlock during the still pause still lands in the baseline (its
-        # window starts at t0, below). What matters for the diff is the state
-        # when the baseline ends, checked after that capture.
-        if await device_locked(lockdown):
-            say(f"The device is locked: {_UNLOCK_ADVICE}.")
 
         # ── Chain-of-custody output paths ─────────────────────────────────────
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -307,10 +278,6 @@ async def _run_identify_async(
         reporter.phase("baseline")
         say(f"[1/2] Acquiring baseline → {baseline_archive}")
         await _collect(lockdown, baseline_archive, t0, reporter)
-        if await device_locked(lockdown):
-            warnings.append(
-                "the device was locked when the baseline capture ended: unlocking it "
-                "for the action puts the unlock lines in the result")
 
         # Cutoff for the second acquisition: now (post-baseline). Anything after
         # this point is what the analyst is hunting for.
@@ -327,18 +294,12 @@ async def _run_identify_async(
         reporter.phase("action")
         say(f"[2/2] Acquiring post-action → {action_archive}")
         await _collect(lockdown, action_archive, action_start_unix, reporter)
-        if await device_locked(lockdown):
-            warnings.append(
-                "the device was locked at the end of the action capture: its lock "
-                "lines may be among the retained rows")
     finally:
         await close_lockdown(lockdown)
 
     description = ""
     if describe_action is not None:
         description = (await asyncio.to_thread(describe_action) or "").strip()
-    for warning in warnings:
-        say(f"Warning: {warning}")
 
     # ── Hash + acquisition reports (skipped when integrity="off": identify is
     # a research tool, and this chain-of-custody machinery is pure latency /
@@ -403,10 +364,7 @@ async def _run_identify_async(
     sqlite_out = session_dir / f"{prefix}-identified.db"
     say(f"Diffing → {sqlite_out}")
     diff = run_diff(baseline_db, action_db, csv_out, sqlite_out)
-    write_run_info(sqlite_out, {
-        ACTION_DESCRIPTION_KEY: description,
-        WARNINGS_KEY: encode_warnings(tuple(warnings)),
-    })
+    write_run_info(sqlite_out, {ACTION_DESCRIPTION_KEY: description})
     reporter.finish("complete")
 
     return IdentifyResult(
@@ -416,7 +374,6 @@ async def _run_identify_async(
         action_db=action_db,
         diff=diff,
         action_description=description,
-        warnings=tuple(warnings),
     )
 
 

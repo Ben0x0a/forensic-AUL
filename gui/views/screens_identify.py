@@ -28,6 +28,7 @@ from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QHBoxLayout, QLineEdit, QProgressBar, QVBoxLayout
 
+from forensic_aul import AUTO_LOCK_ADVICE
 from gui.controllers.identify import IdentifyController
 from gui.navigation import ShowIdentifyResults
 from gui.recent_store import RecentStore
@@ -175,6 +176,7 @@ class IdentifyScreen(OperationScreen):
 
         self._out = PathPicker("dir", placeholder="output folder for the artefacts")
         self._setup_panel.add(field_row("Output folder", self._out, required=True))
+        self._setup_panel.add(help_label(AUTO_LOCK_ADVICE))
 
         row = QHBoxLayout()
         row.addStretch(1)

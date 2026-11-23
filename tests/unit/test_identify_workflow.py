@@ -312,44 +312,12 @@ class TestWorkflow:
         assert "diff" not in patched.calls
 
 
-# ── Lock state (I1) and the action description (I5) ────────────────────────────
+# ── The action description (I5) ────────────────────────────────────────────────
 
-def _lock_states(monkeypatch, states):
-    """Make each lock read return the next value of *states*."""
-    answers = iter(states)
+def test_the_action_description_is_returned_and_stored(patched):
+    from forensic_aul.ops.identify.run_info import read_run_info
 
-    async def fake_locked(_lockdown):
-        return next(answers)
-
-    monkeypatch.setattr(wf, "device_locked", fake_locked)
-
-
-class TestLockAndDescription:
-    def test_a_locked_device_at_the_start_is_advice_not_a_refusal(self, patched, monkeypatch):
-        """The unlock may be the action studied: the run goes on, the operator is
-        told, and nothing is stored (the state at the end of the baseline is what
-        affects the diff)."""
-        _lock_states(monkeypatch, [True, False, False])
-        said: list[str] = []
-        res = run_identify_workflow(patched.out, confirm=lambda d: True,
-                                    wait_for_action=lambda: None, status=said.append)
-        assert len([c for c in patched.calls if c.startswith("collect:")]) == 2
-        assert any("locked" in line and "Auto-Lock" in line for line in said)
-        assert res.warnings == ()
-
-    def test_a_lock_during_the_run_is_reported_and_stored(self, patched, monkeypatch):
-        from forensic_aul.ops.identify.run_info import decode_warnings, read_run_info
-
-        _lock_states(monkeypatch, [False, True, False])   # start, after baseline, after action
-        res = run_identify_workflow(patched.out, confirm=lambda d: True, wait_for_action=lambda: None,
-                                    describe_action=lambda: "  opened the camera  ")
-        assert len(res.warnings) == 1 and "baseline capture ended" in res.warnings[0]
-        assert res.action_description == "opened the camera"
-        info = read_run_info(res.diff.sqlite_path)
-        assert info["action_description"] == "opened the camera"
-        assert decode_warnings(info["warnings"]) == res.warnings
-
-    def test_an_unreadable_lock_state_does_not_stop_the_run(self, patched, monkeypatch):
-        _lock_states(monkeypatch, [None, None, None])
-        res = run_identify_workflow(patched.out, confirm=lambda d: True, wait_for_action=lambda: None)
-        assert res.warnings == () and res.action_description == ""
+    res = run_identify_workflow(patched.out, confirm=lambda d: True, wait_for_action=lambda: None,
+                                describe_action=lambda: "  opened the camera  ")
+    assert res.action_description == "opened the camera"
+    assert read_run_info(res.diff.sqlite_path)["action_description"] == "opened the camera"

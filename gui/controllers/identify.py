@@ -223,12 +223,10 @@ class IdentifyController:
             "identify", str(result.diff.sqlite_path), f"{result.diff.retained} retained"
         )
         self._view.set_state(self._view.DONE, result, _result_counts(result.diff.sqlite_path))
-        # After set_state: DONE clears the result host, so warnings must land
-        # afterwards to stay visible next to the summary.
-        warnings = [*(f"Warning: {w}" for w in result.warnings),
-                    *([self._kb_warning] if self._kb_warning else [])]
-        if warnings:
-            self._view.show_result(False, "<br>".join(warnings))
+        if self._kb_warning:
+            # After set_state: DONE clears the result host, so the warning must
+            # land afterwards to stay visible next to the summary.
+            self._view.show_result(False, self._kb_warning)
 
     def on_failed(self, exc: BaseException) -> None:
         self._view.set_state(self._view.SETUP)

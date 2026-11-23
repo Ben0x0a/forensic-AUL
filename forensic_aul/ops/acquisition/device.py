@@ -125,24 +125,6 @@ async def _device_info_from_lockdown(lockdown, connection_type: str = "USB") -> 
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
-async def device_locked(lockdown) -> bool | None:
-    """Whether the device is locked right now; None when it cannot be read.
-
-    Reads lockdown's ``PasswordProtected`` with a fresh ``GetValue`` request
-    (``all_values`` is a snapshot taken at connection). That key reflects the
-    current lock state — per pymobiledevice3 (services/mobile_config.py), the
-    "a passcode is set" flag is ``PasscodePresent`` in the escalated
-    ``SecurityInfo`` — so it is the cheap question to ask between captures.
-    WHY None rather than an exception: the answer only feeds a precondition and
-    warnings; a device that cannot say must not stop a run by itself.
-    """
-    try:
-        return bool(await lockdown.get_value(key="PasswordProtected"))
-    except Exception:  # noqa: BLE001 — pymobiledevice3 raises many unrelated types
-        log.debug("could not read the lock state", exc_info=True)
-        return None
-
-
 async def list_connected_devices() -> list[DeviceInfo]:
     """Return a :class:`DeviceInfo` for every device visible via usbmux."""
     _require_pymobiledevice3()

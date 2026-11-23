@@ -121,7 +121,6 @@ from a database made by `run_diff` alone or `identify --diff`). Source:
 | `key` | `value` |
 |---|---|
 | `action_description` | the operator's description of the action (may be empty) |
-| `warnings` | JSON list of strings — conditions that may have put noise in the diff, e.g. the device found locked after a capture |
 
 `read_run_info(db)` returns the table as a dict (`{}` when absent).
 

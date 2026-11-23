@@ -388,26 +388,26 @@ def test_an_abort_reports_the_abort_wording(qapp, monkeypatch):
     assert shown and shown[-1][1].startswith("Aborted")
 
 
-def test_description_reaches_the_workflow_and_warnings_show_on_done(qapp, monkeypatch):
+def test_description_reaches_the_workflow(qapp, monkeypatch):
     """The typed description is handed to the workflow as a plain string (read on
-    the worker thread), and the run's warnings are shown next to the summary."""
+    the worker thread) and shown in the DONE summary."""
     from dataclasses import replace as dc_replace
 
     screen = _make_screen()
     runner = _install_fake_workflow(monkeypatch, screen, drives="none")
 
     def fake(*_args, **kwargs):
-        return dc_replace(_fake_result(), action_description=kwargs["describe_action"](),
-                          warnings=("the device locked during the baseline",))
+        return dc_replace(_fake_result(), action_description=kwargs["describe_action"]())
 
     monkeypatch.setattr(identify_ctrl, "run_identify_workflow", fake)
-    shown: list = []
-    screen.show_result = lambda ok, msg: shown.append(msg)
     _select_device(screen)
     screen._out.set_path("/tmp/out")
     screen._describe.setText("opened the camera")
 
     screen._ctrl.start()
     runner.join_and_dispatch()
-    assert any("Warning: the device locked during the baseline" in m for m in shown)
+    from PySide6.QtWidgets import QLabel
+
+    texts = [label.text() for label in screen.findChildren(QLabel)]
+    assert any("Action: opened the camera" in t for t in texts)
     assert screen._describe_panel.isHidden(), "the field is gone once the run is done"

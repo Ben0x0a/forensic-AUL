@@ -187,8 +187,6 @@ class IdentifyResult:
     diff: DiffResult                    # the attribution outputs
     # What the operator said the action was (may be empty).
     action_description: str = ""
-    # Conditions that may have put noise in the diff (e.g. a lock-state change).
-    warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

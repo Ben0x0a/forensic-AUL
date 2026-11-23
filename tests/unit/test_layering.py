@@ -220,6 +220,7 @@ def test_ops_bricks_do_not_chain_each_other():
 _VIEW_MAY_IMPORT = frozenset({
     "LogFilter", "Match", "SignatureDraft",            # data the forms build
     "__version__", "default_kb_dir", "physical_cpu_count",  # pure helpers
+    "AUTO_LOCK_ADVICE",                                 # shared operator text
 })
 
 

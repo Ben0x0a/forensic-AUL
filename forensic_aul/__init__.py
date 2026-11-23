@@ -51,7 +51,11 @@ from forensic_aul.ops.annotation.matcher import (
 # Action attribution (baseline vs action diff, plus the full interactive workflow)
 from forensic_aul.ops.identify.diff import run_diff
 from forensic_aul.ops.identify.results import IdentifyResults, ResultCounts
-from forensic_aul.ops.workflows.identify_options import IDENTIFY_EXTRACT, IdentifyOptions
+from forensic_aul.ops.workflows.identify_options import (
+    AUTO_LOCK_ADVICE,
+    IDENTIFY_EXTRACT,
+    IdentifyOptions,
+)
 from forensic_aul.ops.workflows.identify import run_identify_workflow
 
 # Filtered export to CSV / JSON / JSONL (knowledge-base aware)
@@ -175,6 +179,7 @@ __all__ = [
     "run_identify_workflow",
     "IdentifyOptions",
     "IDENTIFY_EXTRACT",
+    "AUTO_LOCK_ADVICE",
     "IdentifyResult",
     "IdentifyResults",
     "ResultCounts",

@@ -22,7 +22,7 @@ from pathlib import Path
 
 from dataclasses import replace
 
-from forensic_aul import ExtractOptions, IDENTIFY_EXTRACT, IdentifyOptions
+from forensic_aul import AUTO_LOCK_ADVICE, ExtractOptions, IDENTIFY_EXTRACT, IdentifyOptions
 
 log = logging.getLogger(__name__)
 
@@ -181,6 +181,8 @@ def _run_identify(args: argparse.Namespace) -> int:
         print("  Connected device")
         print("  " + "─" * 50)
         print(device.display_table(masked=not args.show_identifiers))
+        print("")
+        print(f"  {AUTO_LOCK_ADVICE}")
         print("")
         if args.yes:
             return True
