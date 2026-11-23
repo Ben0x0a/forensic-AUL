@@ -267,6 +267,19 @@ CREATE TABLE IF NOT EXISTS shutdown_clients (
 );
 """
 
+# What the parse saw that this version does not fully understand (catalog drift,
+# undocumented flag bits, unknown tags) plus the codecs seen — see
+# ops/extraction/format_watch.py. One row per (file, kind, detail).
+_DDL_FORMAT_OBSERVATIONS = """
+CREATE TABLE IF NOT EXISTS format_observations (
+    id             INTEGER PRIMARY KEY,
+    source_file_id INTEGER NOT NULL REFERENCES source_files(id),
+    kind           TEXT    NOT NULL,
+    detail         TEXT    NOT NULL,
+    count          INTEGER NOT NULL
+);
+"""
+
 _DDL_SHUTDOWN_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_shutdown_events_time    ON shutdown_events(shutdown_unix_ns);",
     "CREATE INDEX IF NOT EXISTS idx_shutdown_clients_event  ON shutdown_clients(shutdown_event_id);",
@@ -514,6 +527,7 @@ def init_schema(
             _DDL_LOGS_ORDER,
             _DDL_SHUTDOWN_EVENTS,
             _DDL_SHUTDOWN_CLIENTS,
+            _DDL_FORMAT_OBSERVATIONS,
         ):
             cur.executescript(ddl)
 

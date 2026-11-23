@@ -136,12 +136,11 @@ class TestIterSubchunks:
         chunks = list(iter_subchunks(sub))
         assert chunks[0].chunk_data_size == len(body)
 
-    def test_unknown_tag_skipped(self, caplog):
-        unknown_tag = 0xDEAD
-        sub = _build_subchunk(unknown_tag, b"junk")
-        chunks = list(iter_subchunks(sub))
-        # Unknown tags are logged and skipped
-        assert chunks == []
+    def test_unknown_tag_is_handed_to_the_caller(self):
+        # The caller records it (the format watch) instead of it vanishing here.
+        sub = _build_subchunk(0xDEAD, b"junk")
+        (chunk,) = iter_subchunks(sub)
+        assert (chunk.chunk_tag, chunk.data[16:]) == (0xDEAD, b"junk")
 
     def test_zero_padding_skipped(self):
         body = b"data"

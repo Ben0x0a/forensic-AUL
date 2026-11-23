@@ -36,10 +36,6 @@ from forensic_aul.config import MAX_CHUNKSET_DECOMPRESSED_SIZE
 from forensic_aul.engine.parser import lzbitmap
 from forensic_aul.engine.parser.format import (
     CHUNK_PREAMBLE_SIZE,
-    CHUNK_TAG_FIREHOSE,
-    CHUNK_TAG_OVERSIZE,
-    CHUNK_TAG_SIMPLEDUMP,
-    CHUNK_TAG_STATEDUMP,
     SIG_BV4_FOOTER,
     SIG_BV41_COMPRESSED,
     SIG_BV41_UNCOMPRESSED,
@@ -170,8 +166,9 @@ def decompress_chunkset(chunk_data: bytes) -> bytes:
 def iter_subchunks(decompressed: bytes) -> Generator[SubChunkRef, None, None]:
     """Iterate over sub-chunks in decompressed chunkset data.
 
-    Yields one SubChunkRef per sub-chunk (Firehose, Oversize, Statedump, Simpledump).
-    Unknown tags are logged and skipped. Zero-padding between chunks is consumed.
+    Yields one SubChunkRef per sub-chunk, known or not: the caller decides what to
+    parse and records an unknown tag (the format watch). Zero-padding between
+    chunks is consumed.
     """
     pos = 0
     total = len(decompressed)
@@ -196,20 +193,12 @@ def iter_subchunks(decompressed: bytes) -> Generator[SubChunkRef, None, None]:
 
         chunk_bytes = decompressed[pos : pos + total_chunk_size]
 
-        if chunk_tag in (
-            CHUNK_TAG_FIREHOSE,
-            CHUNK_TAG_OVERSIZE,
-            CHUNK_TAG_STATEDUMP,
-            CHUNK_TAG_SIMPLEDUMP,
-        ):
-            yield SubChunkRef(
-                chunk_tag=chunk_tag,
-                chunk_sub_tag=chunk_sub_tag,
-                chunk_data_size=chunk_data_size,
-                data=chunk_bytes,
-                source_offset=pos,
-            )
-        else:
-            log.warning(f"Subchunk: unknown tag 0x{chunk_tag:04x} at offset 0x{pos:x} (size {total_chunk_size}), skipping")
+        yield SubChunkRef(
+            chunk_tag=chunk_tag,
+            chunk_sub_tag=chunk_sub_tag,
+            chunk_data_size=chunk_data_size,
+            data=chunk_bytes,
+            source_offset=pos,
+        )
 
         pos += total_chunk_size

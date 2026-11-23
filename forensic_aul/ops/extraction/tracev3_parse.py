@@ -28,13 +28,16 @@ from forensic_aul.engine.parser.format import (
     CHUNK_TAG_HEADER,
     CHUNK_TAG_SIMPLEDUMP,
     CHUNK_TAG_STATEDUMP,
+    CHUNK_TAG_OVERSIZE,
 )
 from forensic_aul.engine.parser.chunkset import (
+    codec_for,
     decompress_chunkset,
     iter_subchunks,
 )
 from forensic_aul.engine.parser.firehose import (
     ACTIVITY_TYPE_NON_ACTIVITY,
+    KNOWN_FLAG_BITS,
     parse_firehose_preamble,
 )
 from forensic_aul.engine.parser.header import parse_header_chunk
@@ -48,6 +51,8 @@ from forensic_aul.ops.extraction.entry_builder import (
     statedump_to_log_entry,
 )
 from forensic_aul.engine.utils.cancellation import NEVER_CANCELLED, CancelToken
+from forensic_aul.ops.extraction import format_watch
+from forensic_aul.ops.extraction.format_watch import FormatWatch
 from forensic_aul.errors import PARSE_ERRORS, OperationCancelled
 from forensic_aul.ops.extraction.oversize_pass import OversizeCache
 
@@ -73,6 +78,8 @@ class FileParseStats:
     errors: int
     chunksets: int
     chunksets_decoded: int
+    # (kind, detail, count) — see ops/extraction/format_watch.py.
+    observations: tuple[tuple[str, str, int], ...] = ()
 
 
 def process_tracev3(
@@ -115,6 +122,7 @@ def process_tracev3(
     ios_build_version = ""
     catalog: CatalogChunk | None = None
 
+    watch = FormatWatch()
     n_chunks = 0
     n_chunksets = 0          # chunksets with a usable catalog (numbers the log lines)
     n_chunksets_seen = 0     # every chunkset in the file
@@ -137,6 +145,9 @@ def process_tracev3(
                 rel, n_chunks, raw.tag, raw.data_size, raw.file_offset,
             )
 
+            if raw.tag not in (CHUNK_TAG_HEADER, CHUNK_TAG_CATALOG, CHUNK_TAG_CHUNKSET):
+                watch.note(format_watch.CHUNK_TAG, f"0x{raw.tag:04x}")
+                continue
             if raw.tag == CHUNK_TAG_HEADER:
                 try:
                     r = reader_from_bytes(raw.data)
@@ -157,6 +168,8 @@ def process_tracev3(
             elif raw.tag == CHUNK_TAG_CATALOG:
                 try:
                     catalog = parse_catalog_chunk(raw.data)
+                    for note in catalog.observations:
+                        watch.note(format_watch.CATALOG_DRIFT, note)
                     log.debug(
                         "%s  catalog → %d process entries  %d UUIDs  %d sub-chunks",
                         rel,
@@ -182,6 +195,7 @@ def process_tracev3(
                     continue
                 n_chunksets += 1
                 try:
+                    watch.note(format_watch.CODEC, codec_for(raw.data).name)
                     decompressed = decompress_chunkset(raw.data)
                 except PARSE_ERRORS as exc:
                     n_parse_errors += 1
@@ -252,10 +266,9 @@ def process_tracev3(
                         n_entries_written += 1
                         continue
                     if sub.chunk_tag != CHUNK_TAG_FIREHOSE:
-                        log.debug(
-                            "%s  chunkset #%d  sub-chunk tag=0x%04x skipped",
-                            rel, n_chunksets, sub.chunk_tag,
-                        )
+                        # Oversize sub-chunks were read in pass 1; anything else is new.
+                        if sub.chunk_tag != CHUNK_TAG_OVERSIZE:
+                            watch.note(format_watch.SUBCHUNK_TAG, f"0x{sub.chunk_tag:04x}")
                         continue
                     n_sub += 1
                     n_firehose_blocks += 1
@@ -283,6 +296,9 @@ def process_tracev3(
                     timesync_file_id = boot_uuid_to_timesync_file_id.get(boot_uuid)
 
                     for entry in preamble.public_data:
+                        unknown_bits = entry.flags & ~KNOWN_FLAG_BITS
+                        if unknown_bits:
+                            watch.note(format_watch.FIREHOSE_FLAG, f"0x{unknown_bits:04x}")
                         # Assemble inside the guard (a malformed entry is a *parse*
                         # error to skip); emit OUTSIDE it so a storage failure is
                         # never silently miscounted as a parse error.
@@ -339,4 +355,5 @@ def process_tracev3(
         boot_uuid=boot_uuid, ios_model=ios_model, ios_build=ios_build_version,
         entries=n_entries_written, errors=n_parse_errors,
         chunksets=n_chunksets_seen, chunksets_decoded=n_chunksets_decoded,
+        observations=watch.rows(),
     )

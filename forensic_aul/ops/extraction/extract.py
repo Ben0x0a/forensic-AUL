@@ -80,6 +80,7 @@ from forensic_aul.ops.extraction.options import CaseInfo, ExtractOptions, RunCon
 from forensic_aul.ops.extraction.oversize_pass import OversizeCache, collect_oversize
 from forensic_aul.ops.extraction.source import PreparedSource, prepare_source
 from forensic_aul.ops.extraction.timesync_setup import setup_timesync
+from forensic_aul.ops.extraction import format_watch
 from forensic_aul.ops.extraction.tracev3_parse import FileParseStats, process_tracev3
 from forensic_aul.ops.extraction.workers import parallel_parse
 from forensic_aul.ops.summary.cache import refresh_summary
@@ -141,6 +142,8 @@ class _ParseStats:
     chunksets_decoded: int = 0
     # Files holding chunksets of which NONE could be decoded (relative paths).
     undecodable_files: list[str] = field(default_factory=list)
+    # Every file's format-watch rows, for the run's summary.
+    observations: list[tuple[str, str, int]] = field(default_factory=list)
 
     def absorb(self, rel: str, file_stats: FileParseStats) -> None:
         """Fold one tracev3 file's statistics in."""
@@ -148,6 +151,7 @@ class _ParseStats:
         self.total_errors += file_stats.errors
         self.chunksets += file_stats.chunksets
         self.chunksets_decoded += file_stats.chunksets_decoded
+        self.observations.extend(file_stats.observations)
         if file_stats.chunksets and not file_stats.chunksets_decoded:
             self.undecodable_files.append(rel)
             log.warning(f"{rel}  none of its {file_stats.chunksets} chunkset(s) could be decoded")
@@ -773,16 +777,18 @@ def _run_parse(ctx: RunContext) -> _ParseStats:
         # Serial in-process path: parse → writer.add directly.
         for i, (path, rel) in enumerate(zip(tracev3_files, rels), 1):
             log.info(f"[{i}/{len(tracev3_files)}] {rel}")
-            stats.absorb(rel, process_tracev3(
+            file_stats = process_tracev3(
                 path, logarchive, strings, oversize_cache,
                 ts.timesync_data, ts.boot_uuid_to_timesync_file_id,
                 tracev3_file_ids[rel], ts.anchor_id_map, writer.add,
                 keep_raw=opts.keep_raw, cancel=ctx.cancel,
-            ))
+            )
+            stats.absorb(rel, file_stats)
             # Flush BEFORE marking: parse_completed_at asserts that every row of
             # this file is in the database, and rows still in the batch buffer
             # would make that assertion false (see BatchWriter.mark_file_parsed).
             writer.flush()
+            writer.add_format_observations(tracev3_file_ids[rel], file_stats.observations)
             writer.mark_file_parsed(tracev3_file_ids[rel])
             _done_bytes += _sizes[rel]
             ctx.reporter.update(_done_bytes / _total_bytes, f"{i}/{len(tracev3_files)}")
@@ -796,6 +802,7 @@ def _run_parse(ctx: RunContext) -> _ParseStats:
             # Single writer (this process) — one DB connection, no contention.
             writer.add_batch(entries)
             writer.flush()                              # see the serial path
+            writer.add_format_observations(tracev3_file_ids[rel], file_stats.observations)
             writer.mark_file_parsed(tracev3_file_ids[rel])
             stats.absorb(rel, file_stats)
             done += 1
@@ -834,6 +841,8 @@ def _run_parse(ctx: RunContext) -> _ParseStats:
             "guard), which breaks spawn-based multiprocessing. Re-run with "
             "jobs=1, or guard the entry point."
         )
+
+    format_watch.log_summary(stats.observations)
 
     # ── Shutdown events (shutdown.log → shutdown_events/_clients) ───────────
     # Wall-clock-anchored power-off events; kept out of the logs/event_order

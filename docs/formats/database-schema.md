@@ -31,6 +31,7 @@ erDiagram
     source_files ||--o{ timesync_anchors : timesync_file_id
     source_files ||--o{ shutdown_events : source_file_id
     shutdown_events ||--o{ shutdown_clients : shutdown_event_id
+    source_files ||--o{ format_observations : source_file_id
     timesync_anchors ||--o{ logs : timesync_anchor_id
     processes     ||--o{ logs : process_id
     libraries     ||--o{ logs : library_id
@@ -363,6 +364,24 @@ Indexes: `idx_shutdown_events_time(shutdown_unix_ns)`,
 `idx_shutdown_clients_path(process_path)` — created inline (these tables are tiny).
 
 ---
+
+## `format_observations`
+
+What the parse saw that this version does not fully understand, and which
+chunkset codecs it met — the early warning of an OS format change (see
+`forensic_aul/ops/extraction/format_watch.py`). One row per file, kind and detail.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `source_file_id` | INTEGER NOT NULL FK → `source_files.id` | The tracev3 file |
+| `kind` | TEXT NOT NULL | `codec` (informational), or an alert: `catalog_drift`, `firehose_flag`, `chunk_tag`, `subchunk_tag` |
+| `detail` | TEXT NOT NULL | The codec name, the drift note, the unknown flag bits or tag (hex) |
+| `count` | INTEGER NOT NULL | How many times it was seen in that file |
+
+The alert kinds are also logged as WARNING at the end of the parse. The codecs
+seen, together with `case_metadata.ios_build_version`, are the format
+fingerprint of that OS build (iOS 18: `lz4`; iOS 27: `lz4` + `lzbitmap`).
+Databases from before November 2026 do not have this table.
 
 ## `v_logs` (stable view)
 

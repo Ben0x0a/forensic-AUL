@@ -75,6 +75,14 @@ FLAG_HAS_CONTEXT_DATA: int = 0x1000
 FLAG_HAS_OTHER_AID: int = 0x0200  # same bit as HAS_SUBSYSTEM but in Activity context
 FLAG_HAS_MESSAGE_STRING_REF: int = 0x0008  # declared in Rust struct, not parsed
 FLAG_HAS_NAME: int = 0x8000           # signpost-only — has_name flag (signpost.rs:111)
+# Every documented flag bit. A bit outside it is recorded by the format watch
+# (ops/extraction/format_watch.py): it is how a new field announces itself — 0x40
+# (has_persona) would have been flagged on the first iOS 27 archive.
+KNOWN_FLAG_BITS: int = (
+    FLAG_HAS_CURRENT_AID | FLAG_MASK_FORMAT | FLAG_HAS_UNIQUE_PID | FLAG_LARGE_OFFSET
+    | FLAG_HAS_PERSONA | FLAG_HAS_PRIVATE_DATA | FLAG_HAS_SUBSYSTEM | FLAG_HAS_RULES
+    | FLAG_HAS_OVERSIZE | FLAG_HAS_CONTEXT_DATA | FLAG_HAS_NAME
+)
 
 # Item type constants
 NUMBER_ITEM_TYPES: frozenset[int] = frozenset([0x0, 0x2])

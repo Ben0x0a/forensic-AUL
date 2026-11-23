@@ -40,6 +40,7 @@ def _patch_stream(monkeypatch, module) -> list[int]:
     # Just the attributes the loop reads when it logs a parsed catalog.
     catalog_a = SimpleNamespace(
         number_process_information_entries=0, catalog_uuids=[], number_sub_chunks=1,
+        observations=[],
     )
     outcomes = iter([catalog_a, ValueError("bad catalog B")])
 
@@ -66,6 +67,8 @@ def _patch_stream(monkeypatch, module) -> list[int]:
     monkeypatch.setattr(module, "iter_chunks", fake_iter_chunks)
     monkeypatch.setattr(module, "parse_catalog_chunk", fake_parse_catalog)
     monkeypatch.setattr(module, "decompress_chunkset", fake_decompress)
+    if hasattr(module, "codec_for"):          # the format watch's codec note
+        monkeypatch.setattr(module, "codec_for", lambda _data: SimpleNamespace(name="fake"))
     return decompressed
 
 
@@ -121,3 +124,13 @@ def test_a_bug_is_not_disguised_as_damage_in_the_evidence(tmp_path, monkeypatch)
     reporter), not be counted as a parse error in the evidence."""
     with pytest.raises(AttributeError):
         _run_with_catalog_raising(tmp_path, monkeypatch, AttributeError("no such field"))
+
+
+def test_unknown_chunk_tags_are_recorded_by_the_format_watch(tmp_path, monkeypatch):
+    monkeypatch.setattr(tracev3_parse, "iter_chunks", lambda _p: iter([_chunk(0x7777, 0)]))
+    stats = tracev3_parse.process_tracev3(
+        tmp_path / "x.tracev3", tmp_path, strings=None, oversize_cache={}, timesync_data={},
+        boot_uuid_to_timesync_file_id={}, tracev3_file_id=1, anchor_id_map={},
+        emit=lambda _entry: None, keep_raw=False,
+    )
+    assert stats.observations == (("chunk_tag", "0x7777", 1),)

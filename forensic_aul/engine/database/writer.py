@@ -336,6 +336,17 @@ class BatchWriter:
         ).fetchone()
         return row[0]
 
+    def add_format_observations(
+        self, source_file_id: int, rows: Sequence[tuple[str, str, int]],
+    ) -> None:
+        """Store one file's format-watch observations (kind, detail, count)."""
+        if rows:
+            self._conn.executemany(
+                "INSERT INTO format_observations(source_file_id, kind, detail, count) "
+                "VALUES (?, ?, ?, ?)",
+                [(source_file_id, kind, detail, n) for kind, detail, n in rows],
+            )
+
     def mark_file_parsed(self, source_file_id: int) -> None:
         """Record that every log row of *source_file_id* is now in the database.
 
