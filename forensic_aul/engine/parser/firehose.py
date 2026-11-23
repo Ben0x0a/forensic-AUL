@@ -20,6 +20,7 @@ import base64
 import logging
 import struct
 
+from forensic_aul.engine.parser.reader import reader_from_bytes
 from forensic_aul.engine.models import (
     Firehose,
     FirehoseActivity,
@@ -100,109 +101,90 @@ UNPARSEABLE_NUMBER: int = -9999
 NO_PRIVATE_DATA: int = 0x1000  # private_data_virtual_offset value = no private data
 
 
-def parse_firehose_preamble(data: bytes) -> FirehosePreamble | None:
+def parse_firehose_preamble(data: bytes) -> FirehosePreamble:
     """Parse a FirehosePreamble from sub-chunk data (including the 16-byte preamble).
 
     Args:
         data: Raw bytes starting at chunk_tag (full sub-chunk including preamble).
 
-    Returns:
-        FirehosePreamble or None on parse error.
+    Raises:
+        TruncatedRecord: *data* ends inside the fixed preamble.
+
+    WHY the shared BinaryReader here but plain ``struct`` in the entry loop below:
+    this runs once per firehose block; the entry loop runs once per log entry
+    (tens of millions of times), where a reader object's per-call overhead is
+    measurable. The entry parser stays bounded all the same: each entry is parsed
+    inside the slice of its declared size.
     """
-    pos = 0
+    r = reader_from_bytes(data)
+    # Outer preamble (16 bytes)
+    chunk_tag = r.u32()
+    chunk_sub_tag = r.u32()
+    chunk_data_size = r.u64()
 
-    def read(n: int) -> bytes:
-        nonlocal pos
-        if pos + n > len(data):
-            raise EOFError(f"Firehose preamble truncated at pos={pos}, need {n} bytes")
-        chunk = data[pos:pos+n]
-        pos += n
-        return chunk
+    # Inner header
+    first_number_proc_id = r.u64()
+    second_number_proc_id = r.u32()
+    ttl = r.u8()
+    collapsed = r.u8()
+    unknown = r.read(2)
+    public_data_size = r.u16()
+    private_data_virtual_offset = r.u16()
+    unknown2 = r.u16()
+    unknown3 = r.u16()
+    base_continuous_time = r.u64()
+    pos = r.offset
 
-    def u8() -> int:
-        return struct.unpack_from("<B", read(1))[0]
+    # public_data_size includes the 16 bytes of preamble fields above
+    public_data_size_offset = 16
+    public_data_bytes_count = public_data_size - public_data_size_offset
+    if public_data_bytes_count < 0:
+        log.warning(f"FirehosePreamble: public_data_size={public_data_size} < {public_data_size_offset}, empty public data")
+        public_data_bytes_count = 0
 
-    def u16() -> int:
-        return struct.unpack_from("<H", read(2))[0]
+    public_data_start = pos
+    public_data_end = pos + public_data_bytes_count
 
-    def u32() -> int:
-        return struct.unpack_from("<I", read(4))[0]
+    public_data_bytes = data[pos:public_data_end]
+    after_public = data[public_data_end:]
 
-    def u64() -> int:
-        return struct.unpack_from("<Q", read(8))[0]
+    # Parse firehose entries from the public data slice. We pass
+    # ``public_data_start`` so each entry can record its byte offset
+    # relative to the beginning of the FirehosePreamble (and therefore,
+    # together with the chunkset offsets, back to the .tracev3 file).
+    public_data_list = _parse_firehose_entries(
+        public_data_bytes,
+        private_data_virtual_offset,
+        public_data_offset_in_preamble=public_data_start,
+    )
 
-    try:
-        # Outer preamble (16 bytes)
-        chunk_tag = u32()
-        chunk_sub_tag = u32()
-        chunk_data_size = u64()
-
-        # Inner header
-        first_number_proc_id = u64()
-        second_number_proc_id = u32()
-        ttl = u8()
-        collapsed = u8()
-        unknown = read(2)
-        public_data_size = u16()
-        private_data_virtual_offset = u16()
-        unknown2 = u16()
-        unknown3 = u16()
-        base_continuous_time = u64()
-
-        # public_data_size includes the 16 bytes of preamble fields above
-        public_data_size_offset = 16
-        public_data_bytes_count = public_data_size - public_data_size_offset
-        if public_data_bytes_count < 0:
-            log.warning(f"FirehosePreamble: public_data_size={public_data_size} < {public_data_size_offset}, empty public data")
-            public_data_bytes_count = 0
-
-        public_data_start = pos
-        public_data_end = pos + public_data_bytes_count
-
-        public_data_bytes = data[pos:public_data_end]
-        after_public = data[public_data_end:]
-
-        # Parse firehose entries from the public data slice. We pass
-        # ``public_data_start`` so each entry can record its byte offset
-        # relative to the beginning of the FirehosePreamble (and therefore,
-        # together with the chunkset offsets, back to the .tracev3 file).
-        public_data_list = _parse_firehose_entries(
-            public_data_bytes,
-            private_data_virtual_offset,
-            public_data_offset_in_preamble=public_data_start,
+    # Handle private data strings if present
+    if private_data_virtual_offset != NO_PRIVATE_DATA:
+        private_input = _locate_private_data(
+            after_public, public_data_bytes, public_data_size,
+            public_data_size_offset, private_data_virtual_offset,
+            collapsed, data, pos,
         )
+        if private_input:
+            _apply_private_data(private_input, public_data_list,
+                                private_data_virtual_offset)
 
-        # Handle private data strings if present
-        if private_data_virtual_offset != NO_PRIVATE_DATA:
-            private_input = _locate_private_data(
-                after_public, public_data_bytes, public_data_size,
-                public_data_size_offset, private_data_virtual_offset,
-                collapsed, data, pos,
-            )
-            if private_input:
-                _apply_private_data(private_input, public_data_list,
-                                    private_data_virtual_offset)
-
-        return FirehosePreamble(
-            chunk_tag=chunk_tag,
-            chunk_sub_tag=chunk_sub_tag,
-            chunk_data_size=chunk_data_size,
-            first_number_proc_id=first_number_proc_id,
-            second_number_proc_id=second_number_proc_id,
-            ttl=ttl,
-            collapsed=collapsed,
-            unknown=unknown,
-            public_data_size=public_data_size,
-            private_data_virtual_offset=private_data_virtual_offset,
-            unknown2=unknown2,
-            unknown3=unknown3,
-            base_continuous_time=base_continuous_time,
-            public_data=public_data_list,
-        )
-
-    except EOFError as exc:
-        log.error(f"Failed to parse FirehosePreamble: {exc}")
-        return None
+    return FirehosePreamble(
+        chunk_tag=chunk_tag,
+        chunk_sub_tag=chunk_sub_tag,
+        chunk_data_size=chunk_data_size,
+        first_number_proc_id=first_number_proc_id,
+        second_number_proc_id=second_number_proc_id,
+        ttl=ttl,
+        collapsed=collapsed,
+        unknown=unknown,
+        public_data_size=public_data_size,
+        private_data_virtual_offset=private_data_virtual_offset,
+        unknown2=unknown2,
+        unknown3=unknown3,
+        base_continuous_time=base_continuous_time,
+        public_data=public_data_list,
+    )
 
 
 # ── Private data location ─────────────────────────────────────────────────────

@@ -268,9 +268,6 @@ def process_tracev3(
                             rel, n_chunksets, n_sub, exc,
                         )
                         continue
-                    if preamble is None:
-                        n_parse_errors += 1
-                        continue
 
                     log.debug(
                         "%s  firehose block proc=%d_%d  base_time=%d  "
