@@ -5,7 +5,7 @@ Defines : the result dataclasses returned by the library's main entry points —
           ``ExportResult`` (run_export). They bundle the output path(s) with the
           facts a caller would otherwise have to re-query, so calls chain cleanly:
 
-              res = run_extract(src, "case.db", case_number="C1")
+              res = run_extract(src, "case.db", CaseInfo(case_number="C1"))
               annotate_database(res.db_path, kb)      # reuse the path, no re-query
 
 Used by : forensic_aul.ops.extraction.extract, forensic_aul.ops.identify.diff,

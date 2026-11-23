@@ -18,6 +18,7 @@ import pytest
 
 from forensic_aul.engine.database.schema import EVENT_TYPE_NAMES, LOG_LEVEL_NAMES
 from forensic_aul.ops.extraction.extract import run_extract
+from forensic_aul.ops.extraction.options import CaseInfo, ExtractOptions
 from forensic_aul.ops.summary.cache import load_summary
 
 # ── Test data paths ────────────────────────────────────────────────────────────
@@ -44,12 +45,10 @@ def extracted_db(tmp_path_factory):
     _require_logarchive()
     db_path = tmp_path_factory.mktemp("extract") / "test_extract.db"
     run_extract(
-        logarchive=_LOGARCHIVE,
-        db_path=db_path,
-        case_number="TEST-INTEGRATION",
-        imei="000000000000000",
-        notes="pytest integration run",
-        batch_size=500,
+        _LOGARCHIVE, db_path,
+        CaseInfo(case_number="TEST-INTEGRATION", imei="000000000000000",
+                 notes="pytest integration run"),
+        ExtractOptions(batch_size=500),
     )
     return db_path
 

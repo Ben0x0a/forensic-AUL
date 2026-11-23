@@ -43,8 +43,9 @@ report = {
     "root_handlers_changed": logging.getLogger().handlers != handlers_before,
     "missing_public_names": [n for n in fa.__all__ if not hasattr(fa, n)],
 }
-result = fa.run_extract(archive, f"{out}/case.db", case_number="C1",
-                        imei="350000000000000", integrity="off")
+result = fa.run_extract(archive, f"{out}/case.db",
+                        fa.CaseInfo(case_number="C1", imei="350000000000000"),
+                        fa.ExtractOptions(integrity="off"))
 report["entry_count"] = result.entry_count
 report["db_exists"] = result.db_path.is_file()
 report["query_rows"] = len(list(fa.query_logs(result.db_path)))

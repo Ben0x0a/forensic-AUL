@@ -321,8 +321,10 @@ async def _run_identify_async(
 
     # ── Extract both ──────────────────────────────────────────────────────────
     from forensic_aul.ops.extraction.extract import run_extract
+    from forensic_aul.ops.extraction.options import CaseInfo, ExtractOptions
 
     imei = device.imei or "UNKNOWN"
+    opts = ExtractOptions(batch_size=batch_size, jobs=jobs, fts=fts, integrity=integrity)
     baseline_db = session_dir / f"{prefix}-baseline.db"
     action_db = session_dir / f"{prefix}-action.db"
 
@@ -332,17 +334,13 @@ async def _run_identify_async(
     ):
         reporter.phase(phase)
         say(f"Extracting {label} → {db}")
-        run_extract(
-            archive, db,
+        case = CaseInfo(
             case_number=case_number, imei=imei,
             exhibit_number=exhibit_number, analyst_name=analyst,
             notes=f"identify/{label}" + (f" — {notes}" if notes else ""),
-            batch_size=batch_size,
-            jobs=jobs,
-            fts=fts,
-            integrity=integrity,
-            progress=lambda ev: reporter.update(ev.overall, ev.detail),
         )
+        run_extract(archive, db, case, opts,
+                    progress=lambda ev: reporter.update(ev.overall, ev.detail))
 
     # ── Annotate (enrichment, not a requirement — never abort the run) ────────
     if kb is not None:

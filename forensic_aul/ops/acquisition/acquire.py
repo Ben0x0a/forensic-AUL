@@ -293,13 +293,14 @@ async def _acquire_async(
     extract_result = None
     if extract:
         from forensic_aul.ops.extraction.extract import run_extract
+        from forensic_aul.ops.extraction.options import CaseInfo, ExtractOptions
         target_db = db_path or output.with_suffix(".db")
         log.info(f"Running extract → {target_db}")
         extract_result = run_extract(
             output, target_db,
-            case_number=case_number, imei=device.imei or "UNKNOWN",
-            exhibit_number=exhibit_number, analyst_name=analyst, notes=notes,
-            batch_size=batch_size, overwrite=True,
+            CaseInfo(case_number=case_number, imei=device.imei or "UNKNOWN",
+                     exhibit_number=exhibit_number, analyst_name=analyst, notes=notes),
+            ExtractOptions(batch_size=batch_size, overwrite=True),
             # Same token: cancelling an `acquire --extract` must stop the whole
             # thing, not collect the archive and then quietly parse it anyway.
             cancel=cancel,

@@ -392,8 +392,8 @@ def test_extract_notes_reach_run_extract(qapp, tmp_path, monkeypatch):
 
     captured: dict = {}
 
-    def fake_run_extract(*args, **kwargs):
-        captured.update(kwargs)
+    def fake_run_extract(source, db_path, case, opts, **kwargs):
+        captured.update(notes=case.notes)
         raise RuntimeError("stop before any real extraction runs")
 
     import gui.controllers.pipeline as pipeline_module

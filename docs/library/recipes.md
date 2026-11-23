@@ -24,17 +24,17 @@ sysdiagnose `.tar.gz`, a full-file-system `.zip`, or a `.faul` container — det
 by content, not by extension.
 
 ```python
-from forensic_aul import run_extract
+from forensic_aul import CaseInfo, ExtractOptions, run_extract
 
 res = run_extract(
     Path("evidence/CASE-001.faul"),
     Path("case.db"),
-    case_number="CASE-2024-001",
-    imei="35…",
-    analyst_name="A. Analyst",
-    overwrite=True,        # else OutputExistsError when case.db already exists
-    fts=False,             # skip the full-text index: big cost, only useful for
+    CaseInfo(case_number="CASE-2024-001", imei="35…", analyst_name="A. Analyst"),
+    ExtractOptions(
+        overwrite=True,    # else OutputExistsError when case.db already exists
+        fts=False,         # skip the full-text index: big cost, only useful for
                            # interactive keyword search (see "keyword search" below)
+    ),
 )
 print(res.entry_count, res.ios_version, res.time_range)
 print(res.parse_errors, res.write_errors)
@@ -46,7 +46,13 @@ print(res.source_sha256, res.source_files_verified, res.source_files_changed)
 `device_model`, `ios_build`, `ios_version`, `boot_uuid`, `time_range`, and the
 per-file integrity counters.
 
-For speed on a large acquisition, add `jobs=N` — but read the spawn caveat in
+`CaseInfo` holds the case identifiers (`case_number`, `imei`, `exhibit_number`,
+`analyst_name`, `notes`); `ExtractOptions` holds every tunable (`jobs`, `fts`,
+`fast_fts`, `fast_write`, `keep_raw`, `batch_size`, `overwrite`, `integrity`,
+`work_dir`, `reset_work_dir`). Both are frozen dataclasses with the shipped
+defaults, so build them once and pass them through.
+
+For speed on a large acquisition, use `ExtractOptions(jobs=N)` — but read the spawn caveat in
 [index.md](index.md#import-safety-guarantees) first.
 
 ---
@@ -57,13 +63,13 @@ Extraction is the expensive step. `open_or_extract` returns the database path
 immediately when the file already exists, and only extracts otherwise.
 
 ```python
-from forensic_aul import open_or_extract
+from forensic_aul import CaseInfo, ExtractOptions, open_or_extract
 
 db = open_or_extract(
     Path("evidence/CASE-001.faul"),
     Path("case.db"),
-    case_number="CASE-2024-001",
-    fts=False,
+    CaseInfo(case_number="CASE-2024-001"),
+    ExtractOptions(fts=False),
 )
 ```
 
@@ -80,7 +86,7 @@ version, embedded acquisition sidecar) before committing to a long parse. Hand t
 preparation, no re-hash, full provenance preserved.
 
 ```python
-from forensic_aul import prepare_source, run_extract
+from forensic_aul import CaseInfo, prepare_source, run_extract
 
 with prepare_source(Path("acquisition.zip"), integrity="full") as src:
     print(src.source_type)            # SourceType.FILESYSTEM
@@ -88,7 +94,7 @@ with prepare_source(Path("acquisition.zip"), integrity="full") as src:
     print(src.ios_product_version)    # from SystemVersion.plist, when present
     print(src.sidecar)                # acquisition sidecar, for a .faul container
 
-    run_extract(src, Path("case.db"), case_number="C1")
+    run_extract(src, Path("case.db"), CaseInfo(case_number="C1"))
 ```
 
 **Returns** a `PreparedSource` (a context manager — exiting removes any temp
@@ -104,11 +110,11 @@ mapping instead; they are merged into a logarchive root by hard link (zero-copy,
 originals untouched):
 
 ```python
-from forensic_aul import find_loose_dirs, run_extract
+from forensic_aul import CaseInfo, find_loose_dirs, run_extract
 
 dirs = find_loose_dirs(Path("/evidence/ffs_extracted"))   # or None
 if dirs:                       # {"diagnostics": …, "uuidtext": …}
-    run_extract(dirs, Path("case.db"), case_number="C1")
+    run_extract(dirs, Path("case.db"), CaseInfo(case_number="C1"))
 ```
 
 ---

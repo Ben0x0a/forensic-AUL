@@ -10,6 +10,7 @@ and the IdentifyResult assembly.
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -64,9 +65,10 @@ def patched(monkeypatch, tmp_path):
         calls.append("report")
         return Path(str(kwargs["logarchive_path"])).with_suffix(".acquisition.json")
 
-    def fake_run_extract(archive, db, **kwargs):
+    def fake_run_extract(archive, db, case, opts, **kwargs):
         calls.append(f"extract:{Path(db).name}")
-        extract_calls.append(kwargs)
+        # One flat record of what reached run_extract: case + options + keywords.
+        extract_calls.append({**asdict(case), **asdict(opts), **kwargs})
         progress_cb = kwargs.get("progress")
         if progress_cb is not None:
             progress_cb(ProgressEvent(1.0, "extract", 1.0, "done"))

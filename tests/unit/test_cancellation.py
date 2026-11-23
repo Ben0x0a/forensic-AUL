@@ -38,7 +38,12 @@ from forensic_aul.errors import (
     OperationCancelled,
     OutputExistsError,
 )
+from forensic_aul.ops.extraction.options import CaseInfo, ExtractOptions
 from tests.synthetic import synthetic_sysdiagnose as _synthetic_sysdiagnose
+
+# The case and options every synthetic run here uses (hashing off: speed).
+_C1 = CaseInfo(case_number="C1")
+_OFF = ExtractOptions(integrity="off")
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -145,7 +150,7 @@ def test_cancel_leaves_a_partial_and_no_final_database(tmp_path, phase):
 
     with pytest.raises(OperationCancelled) as caught:
         run_extract(
-            arc, db, case_number="C1", integrity="off",
+            arc, db, _C1, _OFF,
             cancel=token, progress=_cancel_on_phase(token, phase),
         )
 
@@ -161,7 +166,7 @@ def test_successful_run_renames_and_records_complete(tmp_path):
     arc = _synthetic_sysdiagnose(tmp_path)
     db = tmp_path / "case.sqlite"
 
-    result = run_extract(arc, db, case_number="C1", integrity="off")
+    result = run_extract(arc, db, _C1, _OFF)
 
     assert result.db_path == db
     assert db.is_file()
@@ -177,7 +182,7 @@ def test_cancel_before_any_work_still_leaves_no_final_database(tmp_path):
     token.cancel()
 
     with pytest.raises(OperationCancelled):
-        run_extract(arc, db, case_number="C1", integrity="off", cancel=token)
+        run_extract(arc, db, _C1, _OFF, cancel=token)
 
     assert not db.exists()
 
@@ -189,7 +194,7 @@ def test_overwrite_guard_covers_the_partial_name(tmp_path):
     (tmp_path / "case.sqlite.partial").write_text("previous run", encoding="utf-8")
 
     with pytest.raises(OutputExistsError, match=r"\.partial"):
-        run_extract(arc, db, case_number="C1", integrity="off")
+        run_extract(arc, db, _C1, _OFF)
 
 
 def test_overwrite_clears_a_leftover_partial(tmp_path):
@@ -197,7 +202,7 @@ def test_overwrite_clears_a_leftover_partial(tmp_path):
     db = tmp_path / "case.sqlite"
     (tmp_path / "case.sqlite.partial").write_text("previous run", encoding="utf-8")
 
-    run_extract(arc, db, case_number="C1", integrity="off", overwrite=True)
+    run_extract(arc, db, _C1, ExtractOptions(integrity="off", overwrite=True))
 
     assert db.is_file()
     assert not (tmp_path / "case.sqlite.partial").exists()
@@ -346,7 +351,7 @@ def _phases(db: Path) -> list[tuple[str, str | None]]:
 def test_completed_run_records_every_phase_as_finished(tmp_path):
     arc = _synthetic_sysdiagnose(tmp_path)
     db = tmp_path / "case.sqlite"
-    run_extract(arc, db, case_number="C1", integrity="off")
+    run_extract(arc, db, _C1, _OFF)
 
     rows = _phases(db)
     names = [phase for phase, _ in rows]
@@ -366,7 +371,7 @@ def test_cancelled_run_leaves_the_dying_phase_open(tmp_path):
 
     with pytest.raises(OperationCancelled):
         run_extract(
-            arc, db, case_number="C1", integrity="off",
+            arc, db, _C1, _OFF,
             cancel=token, progress=_cancel_on_phase(token, "ordering"),
         )
 
@@ -384,7 +389,7 @@ def test_source_files_record_per_file_parse_completion(tmp_path):
     """
     arc = _synthetic_sysdiagnose(tmp_path)
     db = tmp_path / "case.sqlite"
-    run_extract(arc, db, case_number="C1", integrity="off")
+    run_extract(arc, db, _C1, _OFF)
 
     conn = sqlite3.connect(str(db))
     try:
@@ -491,7 +496,7 @@ class TestCliSigint:
         partial = tmp_path / "case.sqlite.partial"
         partial.write_text("partial", encoding="utf-8")
 
-        def _cancelling_run_extract(**_kwargs):
+        def _cancelling_run_extract(*_args, **_kwargs):
             exc = OperationCancelled("stopped")
             exc.partial_db_path = partial
             raise exc
@@ -501,7 +506,7 @@ class TestCliSigint:
         try:
             code = session.run_extract_session(
                 logarchive=tmp_path / "src", db_path=db,
-                case_number="C1", imei="X",
+                case=CaseInfo(case_number="C1", imei="X"), opts=ExtractOptions(),
             )
         finally:
             session.run_extract = original
@@ -522,7 +527,7 @@ class TestOpenIncomplete:
         token = CancelToken()
         with pytest.raises(OperationCancelled):
             run_extract(
-                arc, tmp_path / "case.sqlite", case_number="C1", integrity="off",
+                arc, tmp_path / "case.sqlite", _C1, _OFF,
                 cancel=token, progress=_cancel_on_phase(token, "ordering"),
             )
         return tmp_path / "case.sqlite.partial"
@@ -574,5 +579,5 @@ class TestOpenIncomplete:
     def test_completed_run_opens_normally(self, tmp_path):
         arc = _synthetic_sysdiagnose(tmp_path)
         db = tmp_path / "done.sqlite"
-        run_extract(arc, db, case_number="C1", integrity="off")
+        run_extract(arc, db, _C1, _OFF)
         open_analysis_database(db).close()

@@ -316,16 +316,13 @@ def _run_extract(
     # Same sealed-log extraction session as the standalone `extract` command:
     # one shared helper so an acquired-then-extracted DB gets an identically
     # sealed, tamper-evident operational log.
+    from forensic_aul import CaseInfo, ExtractOptions
     from app.extract_session import run_extract_session
 
     return run_extract_session(
         logarchive=logarchive,
         db_path=db_path,
-        case_number=case_number,
-        imei=imei,
-        exhibit_number=exhibit_number,
-        analyst_name=analyst_name,
-        notes=notes,
-        batch_size=batch_size,
-        overwrite=True,
+        case=CaseInfo(case_number=case_number, imei=imei, exhibit_number=exhibit_number,
+                      analyst_name=analyst_name, notes=notes),
+        opts=ExtractOptions(batch_size=batch_size, overwrite=True),
     )

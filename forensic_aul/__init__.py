@@ -30,6 +30,7 @@ from forensic_aul.errors import (
 
 # Core pipeline
 from forensic_aul.ops.extraction.extract import open_or_extract, run_extract
+from forensic_aul.ops.extraction.options import CaseInfo, ExtractOptions
 
 # Annotation engine (load a knowledge base + annotate an extracted database)
 from forensic_aul.ops.knowledge_base.loader import KnowledgeBaseError, default_kb_dir, load_kb
@@ -128,6 +129,8 @@ __all__ = [
     "NEVER_CANCELLED",
     "run_extract",
     "open_or_extract",
+    "CaseInfo",
+    "ExtractOptions",
     "load_kb",
     "default_kb_dir",
     "KnowledgeBaseError",

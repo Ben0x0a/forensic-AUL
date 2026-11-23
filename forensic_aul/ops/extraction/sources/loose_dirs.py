@@ -109,7 +109,7 @@ def find_loose_dirs(fs_root: Path | str) -> dict[str, Path] | None:
 
         dirs = find_loose_dirs("/evidence/ffs_extracted")
         if dirs:
-            run_extract(dirs, Path("case.db"), ...)
+            run_extract(dirs, Path("case.db"), case, opts)
 
     Returns None when no diagnostics folder is found, or when ``uuidtext`` is
     missing (both folders are required downstream). When several roots contain

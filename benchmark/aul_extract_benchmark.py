@@ -908,14 +908,12 @@ def run_default_extract(
     db_path: Path,
     progress: Callable[[Any], None],
 ) -> Any:
+    from forensic_aul import CaseInfo, ExtractOptions
+
     return run_extract(
-        logarchive=logarchive,
-        db_path=db_path,
-        case_number="BENCHMARK-DEFAULT",
-        fast_fts=False,
-        fast_write=False,
-        jobs=1,
-        overwrite=True,
+        logarchive, db_path,
+        CaseInfo(case_number="BENCHMARK-DEFAULT"),
+        ExtractOptions(fast_fts=False, fast_write=False, jobs=1, overwrite=True),
         progress=progress,
     )
 
@@ -927,15 +925,13 @@ def run_fast_safe_extract(
     jobs: int,
     progress: Callable[[Any], None],
 ) -> Any:
+    from forensic_aul import CaseInfo, ExtractOptions
+
     return run_extract(
-        logarchive=logarchive,
-        db_path=db_path,
-        case_number="BENCHMARK-FAST-SAFE",
-        batch_size=FAST_SAFE_BATCH_SIZE,
-        fast_fts=True,
-        fast_write=False,
-        jobs=jobs,
-        overwrite=True,
+        logarchive, db_path,
+        CaseInfo(case_number="BENCHMARK-FAST-SAFE"),
+        ExtractOptions(batch_size=FAST_SAFE_BATCH_SIZE, fast_fts=True, fast_write=False,
+                       jobs=jobs, overwrite=True),
         progress=progress,
     )
 

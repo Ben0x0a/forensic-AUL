@@ -42,11 +42,11 @@ import logging
 import sqlite3
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from forensic_aul._version import __version__
-from forensic_aul.config import BATCH_SIZE, PARTIAL_SUFFIX
+from forensic_aul.config import PARTIAL_SUFFIX
 from forensic_aul.engine.database.ordering import assign_ordering
 from forensic_aul.engine.database.schema import (
     EXTRACT_STATUS_CANCELLED,
@@ -190,36 +190,25 @@ def _ingest_shutdown_log(
 def run_extract(
     logarchive: Path | str | Mapping[str, Path] | PreparedSource,
     db_path: Path | str,
+    case: CaseInfo | None = None,
+    opts: ExtractOptions | None = None,
     *,
-    case_number: str | None = None,
-    imei: str | None = None,
-    exhibit_number: str | None = None,
-    analyst_name: str | None = None,
-    notes: str | None = None,
-    batch_size: int = BATCH_SIZE,
-    work_dir: Path | None = None,
-    reset_work_dir: bool = False,
-    fast_fts: bool = True,
-    fast_write: bool = False,
-    fts: bool = True,
-    keep_raw: bool = False,
-    jobs: int = 1,
-    overwrite: bool = False,
-    integrity: str = "full",
     progress: ProgressSink | None = None,
     cancel: CancelToken = NEVER_CANCELLED,
 ) -> ExtractResult:
     """Full extract pipeline: source → SQLite.
 
-    This is the main entry point called by the CLI. *logarchive* may be a
+    *case* holds the operator's case identifiers (recorded in ``case_metadata``)
+    and *opts* every tunable (see :class:`ExtractOptions`); both default to empty /
+    the shipped defaults. *logarchive* may be a
     ``.logarchive`` directory, a sysdiagnose ``.tar.gz``, a full-file-system
     ``.zip``, or a mapping of two already-uncompressed folders
     ``{"diagnostics": dir, "uuidtext": dir}`` — the source-preparation layer
     normalises all of them to a logarchive layout before parsing (see
     forensic_aul/ops/extraction/source.py). Archives / loose dirs are materialised
-    into *work_dir* (kept) or an auto-cleaned temp dir. A kept work root that
+    into ``opts.work_dir`` (kept) or an auto-cleaned temp dir. A kept work root that
     already holds files is **refused** — reusing it would parse the previous run's
-    evidence into this case; pass *reset_work_dir* to delete it first.
+    evidence into this case; set ``opts.reset_work_dir`` to delete it first.
 
     Alternatively pass an already-built :class:`PreparedSource` (from
     ``prepare_source``, e.g. to inspect the type/hashes before committing to a
@@ -229,7 +218,7 @@ def run_extract(
     are ignored (both were decided at preparation time) and cleanup stays with
     the caller (use ``with prepare_source(...) as src:``).
 
-    *jobs* is the total process budget for parsing: ``1`` (default) parses
+    ``opts.jobs`` is the total process budget for parsing: ``1`` (default) parses
     in-process; ``N`` uses ``N-1`` worker processes plus the writer (this main
     process), so total processes ≈ one per CPU core. The result is identical
     regardless of *jobs* (ordering is assigned post-load; see database/ordering.py).
@@ -242,7 +231,7 @@ def run_extract(
         be re-executed by every spawned worker, which typically surfaces as a
         run that "succeeds" with 0 entries.
 
-    *integrity* selects the source-hashing mode (see
+    ``opts.integrity`` selects the source-hashing mode (see
     ``ops/extraction/source.INTEGRITY_MODES``): ``"full"`` (default) takes the
     complete chain-of-custody attestation (per-file SHA-256, content hash,
     end-of-run re-verification); ``"fingerprint"`` keeps only the cheap archive
@@ -250,16 +239,16 @@ def run_extract(
     attestation for start-up speed — the database then records NULL hashes and
     the end-of-run integrity re-check is skipped.
 
-    *fts* (default True) builds an FTS5 full-text index over every message —
+    ``opts.fts`` (default True) builds an FTS5 full-text index over every message —
     valuable for interactive analyst search, but a large cost on multi-million
     row extracts. Programmatic consumers that filter on structured columns
     (process / subsystem / format string / message prefix — see ``query_logs``)
-    should pass ``fts=False``.
+    should pass ``ExtractOptions(fts=False)``.
 
     If *db_path* (or the ``.partial`` of a previous interrupted run) already
-    exists the call refuses to proceed unless *overwrite* is True — extracting
+    exists the call refuses to proceed unless ``opts.overwrite`` is True — extracting
     into an existing database would silently merge two acquisitions into one
-    file. With *overwrite* both (and their ``-wal`` / ``-shm`` sidecars) are
+    file. With ``overwrite`` both (and their ``-wal`` / ``-shm`` sidecars) are
     removed first so the run starts clean.
 
     **The output is written to ``<db_path>.partial`` and renamed to *db_path*
@@ -288,36 +277,20 @@ def run_extract(
         UUID, time range, source type and SHA-256).
 
     Raises:
-        OutputExistsError: *db_path* (or its ``.partial``) exists and *overwrite*
-            is False.
+        OutputExistsError: *db_path* (or its ``.partial``) exists and
+            ``opts.overwrite`` is False.
         OperationCancelled: *cancel* was cancelled during the run.
     """
     # Library callers routinely pass plain strings; normalise once, here.
     db_path = Path(db_path)
+    case = case if case is not None else CaseInfo()
+    opts = opts if opts is not None else ExtractOptions()
     # For a caller-supplied PreparedSource the integrity mode was decided at
     # preparation time; derive it from the prepared state so the finaliser's
     # re-hash decision matches reality (there is no baseline to re-check when
     # preparation did not hash).
     if isinstance(logarchive, PreparedSource):
-        integrity = "full" if logarchive.file_hashes else "off"
-
-    opts = ExtractOptions(
-        batch_size=batch_size,
-        fast_fts=fast_fts,
-        fast_write=fast_write,
-        fts=fts,
-        keep_raw=keep_raw,
-        jobs=jobs,
-        overwrite=overwrite,
-        integrity=integrity,
-    )
-    case = CaseInfo(
-        case_number=case_number,
-        imei=imei,
-        exhibit_number=exhibit_number,
-        analyst_name=analyst_name,
-        notes=notes,
-    )
+        opts = replace(opts, integrity="full" if logarchive.file_hashes else "off")
 
     # Fail fast (before the expensive source hashing) and never silently append
     # a second acquisition into an existing database. The actual removal is
@@ -330,7 +303,7 @@ def run_extract(
     for existing in (db_path, work_path):
         if existing.exists() and not opts.overwrite:
             raise OutputExistsError(
-                f"{existing} already exists; pass overwrite=True to replace it "
+                f"{existing} already exists; set overwrite=True to replace it "
                 "(extracting into an existing database would merge two acquisitions)"
             )
 
@@ -361,8 +334,8 @@ def run_extract(
         else:
             log.debug("Source path : %s", Path(logarchive).resolve())
         prepared = prepare_source(
-            logarchive, work_dir=work_dir, integrity=opts.integrity,
-            reset_work_dir=reset_work_dir, cancel=cancel,
+            logarchive, work_dir=opts.work_dir, integrity=opts.integrity,
+            reset_work_dir=opts.reset_work_dir, cancel=cancel,
         )
     log.info(f"Source type        : {prepared.source_type.value}")
     if prepared.archive_fingerprint is not None:
@@ -579,7 +552,8 @@ def _promote_partial(work_path: Path, db_path: Path) -> None:
 def open_or_extract(
     logarchive: Path | Mapping[str, Path],
     db_path: Path,
-    **run_extract_kwargs,
+    case: CaseInfo | None = None,
+    opts: ExtractOptions | None = None,
 ) -> Path:
     """Return *db_path*, extracting *logarchive* into it first if it is absent.
 
@@ -588,13 +562,13 @@ def open_or_extract(
     re-implementing the exists-check. When *db_path* already exists it is
     returned as-is — its content is trusted to be a previous extract of the same
     source (this helper does not verify that; delete the file to force a fresh
-    extract). Otherwise :func:`run_extract` runs with the given keyword options
-    and the resulting path is returned.
+    extract). Otherwise :func:`run_extract` runs with *case* and *opts* and the
+    resulting path is returned.
     """
     if db_path.exists():
         log.info(f"Reusing existing analysis database: {db_path}")
         return db_path
-    return run_extract(logarchive, db_path, **run_extract_kwargs).db_path
+    return run_extract(logarchive, db_path, case, opts).db_path
 
 
 def _run_extract_inner(ctx: RunContext) -> ExtractResult:

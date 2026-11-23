@@ -49,7 +49,7 @@ Two consequences for you as a caller:
 1. **You configure logging.** The library only ever calls
    `logging.getLogger("forensic_aul.…")`. Without a handler you see nothing — see
    [progress-and-errors.md](progress-and-errors.md).
-2. **`jobs > 1` needs an import-safe entry point.** `run_extract(..., jobs=N)` with
+2. **`jobs > 1` needs an import-safe entry point.** `run_extract(..., ExtractOptions(jobs=N))` with
    `N > 1` uses **spawn-based multiprocessing**: every worker re-imports your entry
    module. If your script starts the extract at import time, each worker restarts
    the whole run. The classic symptom is a run that "succeeds" with an *empty*
@@ -58,10 +58,10 @@ Two consequences for you as a caller:
    ```python
    # extract_case.py
    from pathlib import Path
-   from forensic_aul import run_extract
+   from forensic_aul import ExtractOptions, run_extract
 
    def main() -> None:
-       run_extract(Path("acquisition.tar.gz"), Path("case.db"), jobs=8)
+       run_extract(Path("acquisition.tar.gz"), Path("case.db"), opts=ExtractOptions(jobs=8))
 
    if __name__ == "__main__":      # required for jobs > 1
        main()

@@ -300,16 +300,16 @@ def _resolve_to_db(
     if path.is_file() and path.suffix.lower() == ".db":
         return path
     if path.is_dir() and path.suffix.lower() == ".logarchive":
+        from forensic_aul import CaseInfo, ExtractOptions
         from forensic_aul.ops.extraction.extract import open_or_extract
 
         db_path = path.with_suffix(".db")
         try:
             return open_or_extract(
                 path, db_path,
-                case_number=case_number or "IDENTIFY",
-                imei=imei or "UNKNOWN",
-                notes="identify --diff",
-                batch_size=batch_size,
+                CaseInfo(case_number=case_number or "IDENTIFY", imei=imei or "UNKNOWN",
+                         notes="identify --diff"),
+                ExtractOptions(batch_size=batch_size),
             )
         except Exception as exc:
             log.exception(f"error: extract failed — {exc}")

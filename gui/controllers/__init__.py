@@ -41,7 +41,7 @@ _ERROR_PHRASING: dict[str, Callable[[str], str]] = {
     # honest) if the upstream wording ever drifts — see phrase_failure's
     # docstring on never hiding the detail.
     "OutputExistsError": lambda msg: msg.replace(
-        "pass overwrite=True to replace it",
+        "set overwrite=True to replace it",
         'tick "Overwrite the output database if it exists" to replace it',
     ),
     "InvalidDatabaseError": lambda msg: f"Not a usable database — {msg}",

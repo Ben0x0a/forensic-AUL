@@ -100,9 +100,9 @@ Details in the [forensic model](docs/concepts/forensic-model.md) and the
 `forensic_aul` is importable on its own, with **no import-time side effects**:
 
 ```python
-from forensic_aul import run_extract, query_logs
+from forensic_aul import CaseInfo, run_extract, query_logs
 
-result = run_extract("evidence.logarchive", "case.db", case_number="C1", imei="35…")
+result = run_extract("evidence.logarchive", "case.db", CaseInfo(case_number="C1", imei="35…"))
 for row in query_logs(result.db_path, process="locationd", last="1h"):
     print(row.timestamp_iso, row.message)
 ```

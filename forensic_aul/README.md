@@ -40,7 +40,9 @@ internal implementation detail and may change.
 
 | Name | Kind | Signature → returns | Does |
 |---|---|---|---|
-| `run_extract` | func | `(logarchive: Path \| Mapping[str, Path] \| PreparedSource, db_path: Path, *, case_number=None, imei=None, exhibit_number=None, analyst_name=None, notes=None, batch_size=100000, work_dir=None, fast_fts=False, fast_write=False, fts=True, keep_raw=False, jobs=1, overwrite=False, integrity="full", progress=None)` → `ExtractResult` | Full pipeline: source → SQLite. `logarchive` is either a single path — a `.logarchive` dir, a sysdiagnose `.tar.gz`, or an FFS `.zip` (auto-detected by magic bytes, not extension) — **or** a mapping of two already-uncompressed folders `{"diagnostics": dir, "uuidtext": dir}` (see `find_loose_dirs`). **Refuses to write into an existing `db_path` unless `overwrite=True`** (raises `FileExistsError`). **`jobs > 1` uses spawn-based multiprocessing — the calling entry point must be import-safe** (an `if __name__ == "__main__":` guard, or code that only runs inside functions); an import-unsafe caller typically produces an *empty* database, which the run now flags with an ERROR. `integrity` selects the source-hashing mode (`"full"` / `"fingerprint"` / `"off"` — see `INTEGRITY_MODES`). Performance/output toggles: `fts` builds the FTS5 full-text index (**on by default; it is the single largest cost/size addition — programmatic consumers that filter on structured columns should pass `fts=False`**), `fast_fts` defers its rebuild to the end, `fast_write` sets `synchronous=OFF` (faster, less crash-durable), `keep_raw` stores the raw firehose item data as JSON for traceability (off by default to save space). Accepts an already-built `PreparedSource` to skip re-preparation (see `prepare_source`). Returns an `ExtractResult`. |
+| `run_extract` | func | `(logarchive: Path \| str \| Mapping[str, Path] \| PreparedSource, db_path: Path \| str, case: CaseInfo \| None = None, opts: ExtractOptions \| None = None, *, progress=None, cancel=NEVER_CANCELLED)` → `ExtractResult` | Full pipeline: source → SQLite. `case` (`CaseInfo`) carries the case identifiers recorded in `case_metadata`; `opts` (`ExtractOptions`) carries every tunable named below. `logarchive` is either a single path — a `.logarchive` dir, a sysdiagnose `.tar.gz`, or an FFS `.zip` (auto-detected by magic bytes, not extension) — **or** a mapping of two already-uncompressed folders `{"diagnostics": dir, "uuidtext": dir}` (see `find_loose_dirs`). **Refuses to write into an existing `db_path` unless `overwrite=True`** (raises `OutputExistsError`). **`jobs > 1` uses spawn-based multiprocessing — the calling entry point must be import-safe** (an `if __name__ == "__main__":` guard, or code that only runs inside functions); an import-unsafe caller typically produces an *empty* database, which the run now flags with an ERROR. `integrity` selects the source-hashing mode (`"full"` / `"fingerprint"` / `"off"` — see `INTEGRITY_MODES`). Performance/output toggles: `fts` builds the FTS5 full-text index (**on by default; it is the single largest cost/size addition — programmatic consumers that filter on structured columns should pass `fts=False`**), `fast_fts` defers its rebuild to the end, `fast_write` sets `synchronous=OFF` (faster, less crash-durable), `keep_raw` stores the raw firehose item data as JSON for traceability (off by default to save space). Accepts an already-built `PreparedSource` to skip re-preparation (see `prepare_source`). Returns an `ExtractResult`. |
+| `CaseInfo` | dataclass | `(case_number=None, imei=None, exhibit_number=None, analyst_name=None, notes=None)` | The operator's case identifiers, recorded in `case_metadata`. Frozen; build once, pass through. |
+| `ExtractOptions` | dataclass | `(batch_size=100000, fast_fts=True, fast_write=False, fts=True, keep_raw=False, jobs=1, overwrite=False, integrity="full", work_dir=None, reset_work_dir=False)` | Every tunable of `run_extract` / `open_or_extract`. Frozen; the defaults are the shipped ones. |
 | `open_or_extract` | func | `(logarchive, db_path: Path, **run_extract_kwargs)` → `Path` | "Parse once, reuse": returns `db_path` immediately when it already exists, otherwise runs `run_extract` and returns the produced path. |
 | `query_logs` | func | `(database: Path, *, process=None, subsystem=None, level=None, message_prefix=None, message_contains=None, message_match=None, format_str=None, like=None, time_from=None, time_to=None, last=None, signature=None, action=None, tag=None, annotated_only=False, limit=None)` → `Iterator[LogRow]` | **The stable in-memory read API** — the same filter vocabulary as `run_export`, but yielding `LogRow` objects instead of writing a file, so consumers never touch the internal schema. List filters accept a single string or a list. `message_prefix` / `message_contains` match the composed message *literally* (`%`/`_` escaped — prefix vs anywhere); `message_match` is an FTS5 keyword search (requires the index — a DB extracted with `--no-fts` raises); `like` is a raw SQL LIKE (the CLI flag is `export --like`); `format_str` matches the invariant template exactly. Raises `FileNotFoundError` / `ValueError`. See *Reading rows back* below. |
 | `count_logs` | func | `(database: Path, filters: LogFilters \| None = None)` → `int` | Total logs matching *filters* — the paging counterpart of `fetch_logs` (call once per filter change, then page). |
@@ -96,7 +98,8 @@ internal implementation detail and may change.
 import logging
 from pathlib import Path
 from forensic_aul import (
-    run_extract, prepare_source, load_kb, annotate_database, run_export, ExportFilters,
+    CaseInfo, ExtractOptions, run_extract, prepare_source, load_kb, annotate_database,
+    run_export, ExportFilters,
 )
 
 logging.basicConfig(level=logging.INFO)   # the library logs; the host app configures handlers
@@ -105,11 +108,13 @@ logging.basicConfig(level=logging.INFO)   # the library logs; the host app confi
 #    One call — run_extract detects, extracts, hashes and cleans up itself.
 res = run_extract(
     Path("acquisition.tar.gz"), Path("case.db"),
-    case_number="CASE-2024-001", imei="35…",
-    jobs=8,            # parser process budget; result is identical for any value.
-                       # run_extract itself defaults to jobs=1; the CLI/GUI resolve a
-                       # memory-aware default via engine.utils.system.resolve_auto_jobs.
-    overwrite=True,    # replace case.db if it already exists (else FileExistsError)
+    CaseInfo(case_number="CASE-2024-001", imei="35…"),
+    ExtractOptions(
+        jobs=8,          # parser process budget; result is identical for any value.
+                         # ExtractOptions defaults to jobs=1; the CLI/GUI resolve a
+                         # memory-aware default via engine.utils.system.resolve_auto_jobs.
+        overwrite=True,  # replace case.db if it already exists (else OutputExistsError)
+    ),
 )
 print(res.entry_count, res.ios_version, res.time_range)
 
@@ -136,7 +141,7 @@ everything twice and recording it (not the real evidence) as the source.
 ```python
 with prepare_source(Path("acquisition.zip")) as src:   # cleaned up on exit
     print(src.source_type, src.content_sha256, src.ios_product_version)
-    run_extract(src, Path("case.db"), case_number="C1", imei="35…")
+    run_extract(src, Path("case.db"), CaseInfo(case_number="C1", imei="35…"))
 ```
 
 If the two unified-log folders are already uncompressed on disk (the on-device
@@ -147,7 +152,7 @@ link (zero-copy, originals untouched):
 ```python
 run_extract(
     {"diagnostics": Path("dump/diagnostics"), "uuidtext": Path("dump/uuidtext")},
-    Path("case.db"), case_number="C1",
+    Path("case.db"), CaseInfo(case_number="C1"),
 )
 # find_loose_dirs(fs_root) builds that mapping from an extracted full file system.
 ```
@@ -180,10 +185,10 @@ Every purposeful library error derives from `ForensicAULError`, so a consumer
 can wrap any call in one handler while letting genuine bugs propagate:
 
 ```python
-from forensic_aul import ForensicAULError, run_extract, query_logs
+from forensic_aul import CaseInfo, ForensicAULError, run_extract, query_logs
 
 try:
-    res = run_extract(src, db, case_number="C1")
+    res = run_extract(src, db, CaseInfo(case_number="C1"))
     rows = list(query_logs(res.db_path, subsystem="com.apple.locationd"))
 except ForensicAULError as exc:      # bad input, unusable source/database, …
     print(f"forensic_aul rejected the request: {exc}")
@@ -193,7 +198,7 @@ The concrete types (see the table above) also subclass the builtin exceptions
 historically raised (`ValueError` for `SourceError` / `InvalidDatabaseError` /
 `KnowledgeBaseError`), so existing `except ValueError` code keeps working.
 Builtin errors keep their conventional meaning: `FileNotFoundError` (missing
-path), `FileExistsError` (`run_extract` without `overwrite=True`),
+path), `OutputExistsError` (`run_extract` without `overwrite=True`),
 `ImportError` (optional `pymobiledevice3` missing).
 
 Two behaviours worth knowing:

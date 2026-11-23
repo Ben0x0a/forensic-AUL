@@ -36,6 +36,7 @@ from forensic_aul.ops.acquisition.acquire import acquire
 from forensic_aul.ops.acquisition.device import list_connected_devices
 from forensic_aul.ops.acquisition.report import load_sidecar_for
 from forensic_aul.ops.extraction.extract import run_extract
+from forensic_aul.ops.extraction.options import CaseInfo, ExtractOptions
 from gui.controllers import phrase_failure
 from gui.recent_store import RecentStore
 
@@ -245,26 +246,27 @@ class ExtractController:
         # explicit core count chosen from the curated dropdown.
         jobs = self._view.jobs_value() or resolve_auto_jobs()
         self._cancel = CancelToken()   # fresh token per run
-        kwargs = dict(
-            logarchive=Path(self._view.source_path()),
-            db_path=Path(self._view.output_path()),
+        source = Path(self._view.source_path())
+        db_path = Path(self._view.output_path())
+        case = CaseInfo(
             case_number=self._view.case_text(),
             imei=self._view.imei_text(),
             exhibit_number=self._view.exhibit_text() or None,
             analyst_name=self._view.analyst_text() or None,
             notes=self._view.notes_text() or None,
-            jobs=jobs,
-            # Not offered in the GUI — see ExtractScreen's Options panel.
-            fast_fts=True,
-            fast_write=self._view.fast_write(),
-            overwrite=self._view.overwrite(),
-            progress=lambda ev: self._view.emit_progress(ev.overall, ev.phase),
-            cancel=self._cancel,
         )
+        # fast_fts is not offered in the GUI — see ExtractScreen's Options panel.
+        opts = ExtractOptions(
+            jobs=jobs, fast_fts=True,
+            fast_write=self._view.fast_write(), overwrite=self._view.overwrite(),
+        )
+        progress = lambda ev: self._view.emit_progress(ev.overall, ev.phase)  # noqa: E731
+        cancel = self._cancel
         self._view.begin_progress()
         self._view.show_running_actions()
         self._view.run_task(
-            lambda: run_extract(**kwargs), self.on_done, self.on_failed, self.on_cancelled,
+            lambda: run_extract(source, db_path, case, opts, progress=progress, cancel=cancel),
+            self.on_done, self.on_failed, self.on_cancelled,
         )
 
     def on_done(self, result: Any) -> None:

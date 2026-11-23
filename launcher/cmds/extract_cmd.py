@@ -328,6 +328,7 @@ def run(args: argparse.Namespace) -> int:
     )
     from forensic_aul.engine.utils.progress import tty_bar_sink
     from forensic_aul.engine.utils.system import resolve_auto_jobs
+    from forensic_aul import CaseInfo, ExtractOptions
     from app.extract_session import run_extract_session
 
     output: Path = args.output
@@ -396,27 +397,26 @@ def run(args: argparse.Namespace) -> int:
         return run_extract_session(
             logarchive=source,
             db_path=output,
-            case_number=case_number,
-            imei=imei,
-            exhibit_number=exhibit,
-            analyst_name=analyst,
-            notes=notes,
-            batch_size=args.batch_size,
-            work_dir=args.work_dir,
-            reset_work_dir=args.reset_work_dir,
-            # --fast is a CLI-only shortcut for both fast-fts and fast-write.
-            # WHY fast_fts is NOT or'd with --fast: deferred FTS is already the
-            # default, so the only way args.fast_fts is False here is an explicit
-            # --no-fast-fts — and or'ing would silently discard that opt-out for
-            # anyone who wrote `--no-fast-fts --fast`. An explicit flag wins over
-            # a shorthand.
-            fast_fts=args.fast_fts,
-            fast_write=args.fast_write or args.fast,
-            fts=args.fts,
-            keep_raw=args.keep_raw,
-            jobs=jobs,
-            overwrite=args.overwrite,
-            integrity=args.integrity,
+            case=CaseInfo(case_number=case_number, imei=imei, exhibit_number=exhibit,
+                          analyst_name=analyst, notes=notes),
+            opts=ExtractOptions(
+                batch_size=args.batch_size,
+                work_dir=args.work_dir,
+                reset_work_dir=args.reset_work_dir,
+                # --fast is a CLI-only shortcut for both fast-fts and fast-write.
+                # WHY fast_fts is NOT or'd with --fast: deferred FTS is already the
+                # default, so the only way args.fast_fts is False here is an explicit
+                # --no-fast-fts — and or'ing would silently discard that opt-out for
+                # anyone who wrote `--no-fast-fts --fast`. An explicit flag wins over
+                # a shorthand.
+                fast_fts=args.fast_fts,
+                fast_write=args.fast_write or args.fast,
+                fts=args.fts,
+                keep_raw=args.keep_raw,
+                jobs=jobs,
+                overwrite=args.overwrite,
+                integrity=args.integrity,
+            ),
             verbose=args.verbose,
             # Live bar on an interactive terminal; no-op when piped/redirected
             # (the per-phase INFO log lines remain the recorded trail).

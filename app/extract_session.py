@@ -26,12 +26,12 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from forensic_aul import __version__
-from forensic_aul.config import BATCH_SIZE
 from forensic_aul.engine.integrity import seal_log_file
 from forensic_aul.engine.utils.cancellation import NEVER_CANCELLED, CancelToken
 from forensic_aul.engine.utils.progress import ProgressSink
 from forensic_aul.errors import OperationCancelled
 from forensic_aul.ops.extraction.extract import run_extract
+from forensic_aul.ops.extraction.options import CaseInfo, ExtractOptions
 
 from app.logging_config import close_case_log, configure_console, open_case_log
 
@@ -42,24 +42,8 @@ def run_extract_session(
     *,
     logarchive: Path | Mapping[str, Path],
     db_path: Path,
-    case_number: str,
-    imei: str,
-    exhibit_number: str | None = None,
-    analyst_name: str | None = None,
-    notes: str | None = None,
-    batch_size: int = BATCH_SIZE,
-    work_dir: Path | None = None,
-    reset_work_dir: bool = False,
-    # Deferred FTS is the app default: it yields the same final database with far
-    # less write amplification on large archives. The standalone `extract` command
-    # passes this explicitly (with a --no-fast-fts opt-out); `acquire` inherits it.
-    fast_fts: bool = True,
-    fast_write: bool = False,
-    fts: bool = True,
-    keep_raw: bool = False,
-    jobs: int = 1,
-    overwrite: bool = False,
-    integrity: str = "full",
+    case: CaseInfo,
+    opts: ExtractOptions,
     verbose: bool = False,
     progress: ProgressSink | None = None,
     source_label: str | None = None,
@@ -78,38 +62,14 @@ def run_extract_session(
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     configure_console(verbose=verbose)
-    log_path = open_case_log(case_number=case_number, imei=imei, db_path=db_path)
+    log_path = open_case_log(case_number=case.case_number, imei=case.imei, db_path=db_path)
 
-    _log_banner(
-        log_path=log_path, case_number=case_number, imei=imei,
-        exhibit_number=exhibit_number, analyst_name=analyst_name,
-        logarchive=logarchive, source_label=source_label, work_dir=work_dir,
-        db_path=db_path, batch_size=batch_size, jobs=jobs,
-    )
+    _log_banner(log_path=log_path, case=case, opts=opts, logarchive=logarchive,
+                source_label=source_label, db_path=db_path)
 
     metadata_id: int | None = None
     try:
-        result = run_extract(
-            logarchive=logarchive,
-            db_path=db_path,
-            case_number=case_number,
-            imei=imei,
-            exhibit_number=exhibit_number,
-            analyst_name=analyst_name,
-            notes=notes,
-            batch_size=batch_size,
-            work_dir=work_dir,
-            reset_work_dir=reset_work_dir,
-            fast_fts=fast_fts,
-            fast_write=fast_write,
-            fts=fts,
-            keep_raw=keep_raw,
-            jobs=jobs,
-            overwrite=overwrite,
-            integrity=integrity,
-            progress=progress,
-            cancel=cancel,
-        )
+        result = run_extract(logarchive, db_path, case, opts, progress=progress, cancel=cancel)
         metadata_id = result.metadata_id
     except OperationCancelled as exc:
         # An expected outcome, not a failure: no traceback, and point the analyst
@@ -146,37 +106,33 @@ def run_extract_session(
 def _log_banner(
     *,
     log_path: Path,
-    case_number: str,
-    imei: str,
-    exhibit_number: str | None,
-    analyst_name: str | None,
+    case: CaseInfo,
+    opts: ExtractOptions,
     logarchive: Path | Mapping[str, Path],
     source_label: str | None,
-    work_dir: Path | None,
     db_path: Path,
-    batch_size: int,
-    jobs: int,
 ) -> None:
     if isinstance(logarchive, Mapping):
         src_path = ", ".join(f"{k}={Path(v).resolve()}" for k, v in logarchive.items())
     else:
         src_path = str(logarchive.resolve())
     src = src_path + (f"  ({source_label})" if source_label else "")
+    jobs = opts.jobs
     jobs_desc = "serial" if jobs <= 1 else f"{jobs - 1} workers + 1 writer"
     log.info("=" * 72)
     log.info(f"AUL Parser {__version__} — extract session started")
     log.info(f"Log file   : {log_path}")
-    log.info(f"Case       : {case_number}")
-    log.info(f"IMEI       : {imei}")
-    if exhibit_number:
-        log.info(f"Exhibit    : {exhibit_number}")
-    if analyst_name:
-        log.info(f"Analyst    : {analyst_name}")
+    log.info(f"Case       : {case.case_number}")
+    log.info(f"IMEI       : {case.imei}")
+    if case.exhibit_number:
+        log.info(f"Exhibit    : {case.exhibit_number}")
+    if case.analyst_name:
+        log.info(f"Analyst    : {case.analyst_name}")
     log.info(f"Source     : {src}")
-    if work_dir:
-        log.info(f"Work dir   : {work_dir}  (kept)")
+    if opts.work_dir:
+        log.info(f"Work dir   : {opts.work_dir}  (kept)")
     log.info(f"Output DB  : {db_path.resolve()}")
-    log.info(f"Batch size : {batch_size}")
+    log.info(f"Batch size : {opts.batch_size}")
     log.info(f"Jobs       : {jobs}  ({jobs_desc})")
     log.info("=" * 72)
 

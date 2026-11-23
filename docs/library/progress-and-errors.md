@@ -36,9 +36,9 @@ Two operations accept `progress=` today: `run_extract` and
 `run_identify_workflow`.
 
 ```python
-from forensic_aul import run_extract, tty_bar_sink
+from forensic_aul import CaseInfo, run_extract, tty_bar_sink
 
-run_extract(src, Path("case.db"), case_number="C1", progress=tty_bar_sink())
+run_extract(src, Path("case.db"), CaseInfo(case_number="C1"), progress=tty_bar_sink())
 ```
 
 ### The three ready-made sinks
@@ -150,10 +150,10 @@ handler covers "the library rejected the input / could not do the work", while
 genuine bugs (`AttributeError`, `sqlite3` internals, …) still propagate loudly.
 
 ```python
-from forensic_aul import ForensicAULError, query_logs, run_extract
+from forensic_aul import CaseInfo, ForensicAULError, query_logs, run_extract
 
 try:
-    res  = run_extract(src, db, case_number="C1")
+    res  = run_extract(src, db, CaseInfo(case_number="C1"))
     rows = list(query_logs(res.db_path, subsystem="com.apple.locationd"))
 except ForensicAULError as exc:
     print(f"forensic_aul rejected the request: {exc}")

@@ -31,6 +31,7 @@ import pytest
 from forensic_aul.engine.utils.cancellation import CancelToken
 from forensic_aul.errors import OperationCancelled
 from forensic_aul.ops.extraction.extract import run_extract
+from forensic_aul.ops.extraction.options import CaseInfo, ExtractOptions
 
 pytestmark = pytest.mark.integration
 
@@ -91,8 +92,8 @@ def test_cancel_during_a_parallel_parse(tmp_path):
 
     with pytest.raises(OperationCancelled) as caught:
         run_extract(
-            _LOGARCHIVE, db, case_number="C-MP", imei="X",
-            integrity="off", fts=False, jobs=_JOBS,
+            _LOGARCHIVE, db, CaseInfo(case_number="C-MP", imei="X"),
+            ExtractOptions(integrity="off", fts=False, jobs=_JOBS),
             cancel=token, progress=sink,
         )
 
@@ -128,8 +129,8 @@ def test_parallel_run_without_a_token_is_unaffected(tmp_path):
     """The cancellation plumbing must not change the normal parallel result."""
     db = tmp_path / "plain.sqlite"
     result = run_extract(
-        _LOGARCHIVE, db, case_number="C-MP2", imei="X",
-        integrity="off", fts=False, jobs=_JOBS,
+        _LOGARCHIVE, db, CaseInfo(case_number="C-MP2", imei="X"),
+        ExtractOptions(integrity="off", fts=False, jobs=_JOBS),
     )
     assert db.is_file()
     assert not (tmp_path / "plain.sqlite.partial").exists()

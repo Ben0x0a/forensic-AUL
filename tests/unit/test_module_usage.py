@@ -13,7 +13,13 @@ import sqlite3
 
 import pytest
 
-from forensic_aul import OutputExistsError, annotate_connection, annotate_database
+from forensic_aul import (
+    CaseInfo,
+    ExtractOptions,
+    OutputExistsError,
+    annotate_connection,
+    annotate_database,
+)
 from forensic_aul.ops.knowledge_base.loader import load_kb
 from forensic_aul.engine.database.schema import apply_pragmas, init_schema
 
@@ -223,14 +229,15 @@ def test_open_or_extract_delegates_when_absent(tmp_path, monkeypatch):
     class _FakeResult:
         db_path = db
 
-    def _fake_run_extract(logarchive, db_path, **kwargs):
-        seen.update(logarchive=logarchive, db_path=db_path, kwargs=kwargs)
+    def _fake_run_extract(logarchive, db_path, case, opts):
+        seen.update(logarchive=logarchive, db_path=db_path, case=case, opts=opts)
         return _FakeResult()
 
     monkeypatch.setattr(extract_mod, "run_extract", _fake_run_extract)
-    out = open_or_extract(tmp_path / "src.logarchive", db, fts=False, integrity="off")
+    opts = ExtractOptions(fts=False, integrity="off")
+    out = open_or_extract(tmp_path / "src.logarchive", db, CaseInfo(case_number="C1"), opts)
     assert out == db
-    assert seen["kwargs"] == {"fts": False, "integrity": "off"}
+    assert seen["opts"] is opts and seen["case"].case_number == "C1"
 
 
 def test_public_api_surface_importable():
@@ -277,7 +284,7 @@ def test_run_extract_accepts_prepared_source(tmp_path, monkeypatch):
             raise AssertionError("prepare_source must not run again")
 
         monkeypatch.setattr(extract_mod, "prepare_source", _boom)
-        res = run_extract(prepared, tmp_path / "case.db", case_number="C1")
+        res = run_extract(prepared, tmp_path / "case.db", CaseInfo(case_number="C1"))
 
         # Provenance comes from the ORIGINAL container, not the extraction dir.
         assert res.source_type == "sysdiagnose"

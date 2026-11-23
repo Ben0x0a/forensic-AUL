@@ -1,10 +1,16 @@
 """Option and run-state containers for the extract pipeline.
 
 Defines : ``ExtractOptions`` (the user-tunable knobs of ``run_extract``),
-          ``CaseInfo`` (the operator-supplied case identifiers) and
+          ``CaseInfo`` (the operator-supplied case identifiers) — both public,
+          built ONCE by a frontend and passed through untouched — and
           ``RunContext`` (the per-run state threaded through the pipeline
           stages instead of ~20 individual parameters).
-Used by : forensic_aul.ops.extraction.extract (run_extract and its stages).
+Used by : forensic_aul.ops.extraction.extract (run_extract and its stages), and
+          every caller of run_extract (re-exported from forensic_aul).
+
+WHY objects and not keyword arguments: the same ~20 options used to be re-declared
+at every layer (CLI → session → run_extract), and one layer forgetting to forward
+one was a real bug. With one object, a new option is one field here plus one flag.
 Uses    : forensic_aul.config (BATCH_SIZE default),
           forensic_aul.engine.utils.cancellation (CancelToken),
           forensic_aul.ops.extraction.source (PreparedSource),
@@ -47,6 +53,11 @@ class ExtractOptions:
     jobs: int = 1               # total process budget (1 = serial, in-process)
     overwrite: bool = False     # replace an existing output database
     integrity: str = "full"     # source hashing mode (source.INTEGRITY_MODES)
+    # Where archives / loose dirs are materialised: None = an auto-cleaned temp
+    # dir; a path = kept. A kept dir that already holds files is refused unless
+    # reset_work_dir (it would parse the previous run's evidence into this case).
+    work_dir: Path | None = None
+    reset_work_dir: bool = False
 
 
 @dataclass(frozen=True)

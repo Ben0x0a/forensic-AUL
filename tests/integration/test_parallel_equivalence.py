@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 
 from forensic_aul.ops.extraction.extract import run_extract
+from forensic_aul.ops.extraction.options import CaseInfo, ExtractOptions
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
@@ -74,12 +75,9 @@ def _resolved_digest(db_path: Path) -> tuple[int, str]:
 
 def _extract(db_path: Path, jobs: int) -> None:
     run_extract(
-        logarchive=_LOGARCHIVE,
-        db_path=db_path,
-        case_number="TEST-EQUIV",
-        imei="000000000000000",
-        batch_size=1000,
-        jobs=jobs,
+        _LOGARCHIVE, db_path,
+        CaseInfo(case_number="TEST-EQUIV", imei="000000000000000"),
+        ExtractOptions(batch_size=1000, jobs=jobs),
     )
 
 
