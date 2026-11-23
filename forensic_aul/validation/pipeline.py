@@ -122,9 +122,11 @@ def _dispatch(
     if getattr(args, "acquisition", None):
         return _run_acquisition_compare(args)
 
-    # Mode "no args": list devices on macOS, otherwise help.
+    # Mode "no args": nothing to validate. (The CLI lists the connected devices
+    # before getting here — printing is the shell's job, not the pipeline's.)
     if args.source is None and args.from_device is None and args.regen_ref is None:
-        return _print_devices_or_help()
+        log.error("Nothing to do. Try `forensic-aul validate-tool --help`.")
+        return 1
 
     # Mode L3: --from-device → acquire the same device both ways, check acquisition
     # (L2) + parser (L1). Needs macOS + root (Apple `log collect`).
@@ -184,29 +186,6 @@ def _dispatch(
 
 
 # ── Acquisition / extraction helpers ──────────────────────────────────────────
-
-def _print_devices_or_help() -> int:
-    """No arguments: on mac, list devices; otherwise nudge the user toward --help."""
-    from forensic_aul.validation.platform import is_macos, list_devices
-
-    if not is_macos():
-        log.error("Nothing to do. Try `forensic-aul validate-tool --help`.")
-        return 1
-    try:
-        devices = list_devices()
-    except Exception as exc:
-        log.error(f"error: could not enumerate devices: {exc}")
-        return 1
-    if not devices:
-        print("No iOS devices connected. Plug one in (and trust the host) to use --from-device.")
-        return 1
-    print("Connected iOS devices:")
-    for d in devices:
-        print(f"  • {d.display()}")
-    print("")
-    print("Run again with --from-device <NAME_OR_UDID> to start the full pipeline.")
-    return 0
-
 
 def _collect_from_device(
     udid: str,

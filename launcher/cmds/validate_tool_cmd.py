@@ -215,6 +215,35 @@ def add_subcommand(sub) -> None:  # type: ignore[type-arg]
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def run(args: argparse.Namespace) -> int:
-    """Delegate to the self-check pipeline (QA tooling lives in the library)."""
+    """Delegate to the self-check pipeline (QA tooling lives in the library).
+
+    With no source at all on macOS, list the connected devices instead: that is
+    the shell's printing, so it lives here and not in the pipeline (S11).
+    """
     from forensic_aul.validation.pipeline import run as run_pipeline
+    from forensic_aul.validation.platform import is_macos
+
+    nothing_given = (args.source is None and args.from_device is None
+                     and args.regen_ref is None and not getattr(args, "acquisition", None))
+    if nothing_given and is_macos():
+        return _print_devices()
     return run_pipeline(args)
+
+
+def _print_devices() -> int:
+    from forensic_aul.validation.platform import list_devices
+
+    try:
+        devices = list_devices()
+    except Exception as exc:  # noqa: BLE001 — pymobiledevice3's errors are not one typed family
+        log.error(f"error: could not enumerate devices: {exc}")
+        return 1
+    if not devices:
+        print("No iOS devices connected. Plug one in (and trust the host) to use --from-device.")
+        return 1
+    print("Connected iOS devices:")
+    for d in devices:
+        print(f"  • {d.display()}")
+    print("")
+    print("Run again with --from-device <NAME_OR_UDID> to start the full pipeline.")
+    return 0
