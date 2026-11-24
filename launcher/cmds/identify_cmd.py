@@ -108,6 +108,9 @@ def _add_identify(sub):  # type: ignore[type-arg,no-untyped-def]
     acq.add_argument("--action", metavar="TEXT", default=None,
                      help="Description of the action performed (default: asked during "
                           "the still pause, editable after the captures).")
+    acq.add_argument("--verbose", dest="identify_verbose", action="store_true",
+                     help="Show the full log (extraction details, file paths) instead "
+                          "of one line per step.")
     acq.add_argument("--show-identifiers", action="store_true",
                      help="Show the device's identifiers in full (default: masked — "
                           "name, phone number, IMSI, ICCID and MACs hidden, other "
@@ -190,8 +193,24 @@ def run(args: argparse.Namespace) -> int:
 # ── identify (terminal front-end for the workflow) ────────────────────────────
 
 def _run_identify(args: argparse.Namespace) -> int:
+    """Run the workflow with the library's step-by-step log hidden unless asked.
+
+    WHY: the terminal is where the operator follows prompts and steps; the
+    library's INFO log (extract internals, file paths) buried them. Warnings and
+    errors still show; ``--verbose`` (or the global ``-v``) shows everything.
+    """
+    library = logging.getLogger("forensic_aul")
+    previous = library.level
+    if not (args.identify_verbose or getattr(args, "verbose", False)):
+        library.setLevel(logging.WARNING)
+    try:
+        return _run_identify_steps(args)
+    finally:
+        library.setLevel(previous)
+
+
+def _run_identify_steps(args: argparse.Namespace) -> int:
     from forensic_aul import AcquisitionAborted, AcquisitionError
-    from forensic_aul.reports import format_diff_result
 
     from forensic_aul import CaseInfo
     from forensic_aul import run_identify_workflow
@@ -222,7 +241,12 @@ def _run_identify(args: argparse.Namespace) -> int:
 
     def wait_still(seconds: int) -> None:
         end = time.monotonic() + seconds
-        print(f"  Keep the device untouched for {seconds} s (Ctrl-C aborts).")
+        # The same callback serves the still pause and, after the preparation,
+        # the settle pause; say which one it is.
+        if description.pop("settling", False):
+            print(f"  Letting the device settle for {seconds} s (Ctrl-C aborts).")
+        else:
+            print(f"  Keep the device still for {seconds} s (Ctrl-C aborts).")
         # Asked once, in the first pause (the settle pause reuses this callback).
         if args.action is None and not description.get("asked"):
             description["asked"] = True
@@ -232,9 +256,10 @@ def _run_identify(args: argparse.Namespace) -> int:
         while (left := end - time.monotonic()) > 0:
             print(f"\r  Still: {left:4.0f} s left ", end="", flush=True)
             time.sleep(min(1.0, left))
-        print("\r  Still: done.          ")
+        print("\r  Still: done.                 ")
 
     def prepare() -> None:
+        description["settling"] = True
         print("")
         print("  Do now what must happen before the action but is NOT of interest")
         print("  (unlock, open the app, reach the right screen): its lines go to the baseline.")
@@ -250,10 +275,8 @@ def _run_identify(args: argparse.Namespace) -> int:
 
     def wait_for_action() -> None:
         print("")
-        print("  ──────────────────────────────────────────────────────────")
-        print("  Baseline collected. Perform the action on the device now.")
-        print("  Press Enter when the action is complete (Ctrl-C to abort).")
-        print("  ──────────────────────────────────────────────────────────")
+        print("  >>> Perform the action on the device now.")
+        print("      Press Enter when it is complete (Ctrl-C to abort).")
         try:
             input("  > ")
         except EOFError:
@@ -263,7 +286,12 @@ def _run_identify(args: argparse.Namespace) -> int:
 
     def status(line: str) -> None:
         line_out.end_line()
-        print(f"  {line}")
+        if line.startswith("Repetition "):
+            # A section header: each repetition is its own block.
+            print("")
+            print(f"  ── {line} " + "─" * max(0, 44 - len(line)))
+        else:
+            print(f"  {line}")
 
     # A log record must not land on the end of an unfinished progress line
     # (seen: "extract-action 87.3% merging timeline 09:05:16 INFO — …"): end it
@@ -289,6 +317,7 @@ def _run_identify(args: argparse.Namespace) -> int:
         except KnowledgeBaseError as exc:
             log.warning(f"could not load the shipped knowledge base: {exc}")
 
+    print("  Connecting to the device…")
     try:
         res = run_identify_workflow(
             args.output_dir,
@@ -331,37 +360,29 @@ def _run_identify(args: argparse.Namespace) -> int:
         for handler in console_handlers:
             handler.removeFilter(end_line_filter)
 
-    print("")
-    if res.action_description:
-        print(f"  Action: {res.action_description}")
-    for number, cycle in enumerate(res.cycles or (res,), 1):
-        if len(res.cycles) > 1:
-            print(f"  Repetition {number}:")
-        print(format_diff_result(cycle.diff))
-    if res.ranking is not None:
-        from forensic_aul import ranked_templates
-        from forensic_aul.reports import format_ranking
+    from forensic_aul import ranked_templates
+    from forensic_aul.reports import format_identify_result
 
-        print("")
-        print(format_ranking(res.ranking, ranked_templates(res.ranking.path)))
+    top = ranked_templates(res.ranking.path) if res.ranking is not None else None
     print("")
-    print("  Results (intermediate files in the intermediate/ subfolder):")
-    print(f"    Database : {res.identified_db}")
-    if res.csv_path is not None:
-        print(f"    Lines    : {res.csv_path}")
-    if res.ranking is not None and res.ranking.csv_path is not None:
-        print(f"    Ranking  : {res.ranking.csv_path}")
+    print(format_identify_result(res, top))
     return 0
 
 
-# Phases during which the identify CLI draws a live progress line. The operator
-# phases (still, wait) have their own countdown and prompt, so nothing is drawn
-# over them. Consumed by: _progress_line.
-_DRAWN_PHASES = ("baseline", "action", "extract-baseline", "extract-action", "annotate", "diff")
+# What the progress line says during each phase, in plain words. The operator
+# phases (still, prepare, wait) have their own countdown and prompt, so nothing
+# is drawn over them. Consumed by: _ProgressLine.
+_PHASE_LABELS = {
+    "baseline": "baseline", "action": "action",
+    "extract-baseline": "extracting the baseline", "extract-action": "extracting the action",
+    "annotate": "annotating", "diff": "comparing",
+}
+# The progress line's width: drawn padded to it, and blanked with it.
+_LINE_WIDTH = 72
 
 
 class _EndLineFilter(logging.Filter):
-    """Ends the progress line before a log record is printed (never drops one)."""
+    """Clears the progress line before a log record is printed (never drops one)."""
 
     def __init__(self, line: "_ProgressLine") -> None:
         super().__init__()
@@ -373,32 +394,35 @@ class _EndLineFilter(logging.Filter):
 
 
 class _ProgressLine:
-    """One live progress line per drawn phase; silent off a terminal.
+    """A transient progress line under the current step; silent off a terminal.
 
-    ``end_line`` lets the status printer start on a fresh line instead of
-    writing over an unfinished progress line.
+    WHY transient: the step lines ("Capturing the baseline…") are the record of
+    the run; the progress line only shows that the current one is moving, so it
+    is blanked when the step ends instead of leaving a trail of percentages.
+    ``end_line`` is called before anything else is printed.
     """
 
     def __init__(self) -> None:
         import sys
 
         self.enabled = sys.stdout.isatty()
-        self._open = False      # a progress line is drawn and not yet ended
+        self._open = False      # a progress line is drawn and not yet cleared
 
     def end_line(self) -> None:
         if self._open:
-            print()
+            print("\r" + " " * _LINE_WIDTH + "\r", end="", flush=True)
             self._open = False
 
     def sink(self, event) -> None:  # type: ignore[no-untyped-def]
-        if event.phase not in _DRAWN_PHASES:
+        label = _PHASE_LABELS.get(event.phase)
+        if label is None or event.overall >= 1.0:
             self.end_line()
             return
-        print(f"\r  {event.phase:<16} {event.overall * 100:5.1f}%  {event.detail:<28}",
-              end="", flush=True)
+        if not event.detail:            # a phase's opening event: nothing to show yet
+            return
+        text = f"    {label}: {event.detail}"[:_LINE_WIDTH - 6]
+        print(f"\r{text:<{_LINE_WIDTH - 6}}{event.overall:5.0%}", end="", flush=True)
         self._open = True
-        if event.overall >= 1.0:
-            self.end_line()
 
 
 def _ask(prompt: str) -> str:

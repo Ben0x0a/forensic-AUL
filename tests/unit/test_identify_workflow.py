@@ -420,7 +420,7 @@ def test_progress_ends_at_100_percent_only_at_the_end(patched, monkeypatch):
 
 
 def test_a_log_record_starts_on_a_new_line_after_the_progress_line(capsys):
-    """The identify CLI ends its live progress line before any log record."""
+    """The identify CLI clears its live progress line before any log record."""
     import logging
 
     from forensic_aul.engine.utils.progress import ProgressEvent
@@ -438,4 +438,28 @@ def test_a_log_record_starts_on_a_new_line_after_the_progress_line(capsys):
     finally:
         logger.removeHandler(handler)
     out = capsys.readouterr().out
-    assert out.endswith("\n"), "the progress line was ended before the record"
+    # The transient line is blanked (carriage return, spaces, carriage return)
+    # before the record, which goes to stderr — nothing is written after it.
+    assert out.endswith("\r" + " " * 72 + "\r"), "the progress line was cleared first"
+
+
+def test_identify_summary_is_one_table_and_file_names(tmp_path):
+    """The CLI summary: the action, one row per repetition, file names only."""
+    from forensic_aul import IdentifyCycle, IdentifyResult, RankingResult
+    from forensic_aul.reports import format_identify_result
+
+    run = tmp_path / "PREFIX"
+    diff = DiffResult(None, run / "intermediate" / "x.db", 10, 5, new_templates=6, new_values=4)
+    cycle = IdentifyCycle(run / "b.logarchive", run / "a.logarchive", run / "b.db", run / "a.db", diff)
+    res = IdentifyResult(
+        cycle.baseline_archive, cycle.action_archive, cycle.baseline_db, cycle.action_db, diff,
+        action_description="took a screenshot", cycles=(cycle, cycle),
+        ranking=RankingResult(run / "PREFIX-identified.db", 2, 3, 1, run / "PREFIX-repeat.csv"),
+        identified_db=run / "PREFIX-identified.db", csv_path=run / "PREFIX-identified.csv",
+    )
+    text = format_identify_result(res)
+    assert "Action : took a screenshot" in text
+    rows = [line.split() for line in text.splitlines() if line.split()[:1] in (["1"], ["2"])]
+    assert rows == [["1", "10", "6", "4", "5"], ["2", "10", "6", "4", "5"]]
+    assert f"Results in {run}/" in text
+    assert "PREFIX-repeat.csv" in text and str(run / "intermediate") not in text

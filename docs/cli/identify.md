@@ -20,7 +20,7 @@ There is no separate `identify-diff` command; `--diff` replaces it.
 ```bash
 faul.py identify [--case-number CASE] [-e EXHIBIT] [--analyst NAME]
                  [--notes TEXT] [--udid UDID] [--still SECONDS] [--settle SECONDS]
-                 [--repeat N]
+                 [--repeat N] [--verbose]
                  [--output-dir DIR] [--yes] [--action TEXT]
                  [--show-identifiers] [--kb PATH] [--no-csv] [--batch-size N]
 ```
@@ -55,6 +55,13 @@ baseline, having you perform the action, acquiring again, and diffing:
    optionally annotate the action database with a knowledge base.
 
 The description is stored in the identified database (table `identify_run`).
+
+The terminal shows one line per step (repetition headers, "Capturing the
+baseline…", "Processing the captures…") with a transient progress line under
+it; warnings and errors always show. At the end: the action, one row per
+repetition (retained, new template, new values, excluded), the top of the
+ranking when repeated, and the result files. `--verbose` adds the library's
+full log, including where every file is written.
 
 **Repeating the action** (`--repeat N`) is the way to cut the result down. A
 line that belongs to the action appears in every repetition; background noise
@@ -100,6 +107,7 @@ no root). The diff itself is pure SQLite and cross-platform.
 | `-y, --yes` | off | Skip the device confirmation prompt before the baseline acquire. |
 | `--action TEXT` | asked | Description of the action; skips both description prompts. |
 | `--show-identifiers` | off | Show the device identifiers in full in the summary. |
+| `--verbose` | off | Show the full log (each extraction's steps, every file path) instead of one line per step. The global `-v` does the same. |
 
 #### Knowledge base
 

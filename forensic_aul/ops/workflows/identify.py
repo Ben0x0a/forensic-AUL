@@ -294,6 +294,8 @@ async def _run_identify_async(
 
         for number, cycle in enumerate(cycles, 1):
             label = f"[{number}/{len(cycles)}] " if len(cycles) > 1 else ""
+            if len(cycles) > 1:
+                say(f"Repetition {number} of {len(cycles)}")
             await _capture_cycle(
                 lockdown, cycle, opts, reporter, say, label,
                 wait_still=wait_still, prepare=prepare, wait_for_action=wait_for_action,
@@ -317,13 +319,16 @@ async def _run_identify_async(
     # ── Per cycle: extract both, annotate the action, diff ──────────────────────
     imei = device.imei or "UNKNOWN"
     diffs = []
+    say("Processing the captures (extract, compare)…")
     for cycle in cycles:
         for label, phase, archive, db in (
             ("baseline", "extract-baseline", cycle.baseline_archive, cycle.baseline_db),
             ("post-action", "extract-action", cycle.action_archive, cycle.action_db),
         ):
             reporter.phase(phase)
-            say(f"Extracting {label} → {db}")
+            # Paths in the log, not the status lines: the status says what is
+            # happening, the log (--verbose) says where.
+            log.info(f"Extracting {label} → {db}")
             capture_case = CaseInfo(
                 case_number=case_number, imei=imei,
                 exhibit_number=exhibit_number, analyst_name=analyst,
@@ -345,14 +350,15 @@ async def _run_identify_async(
                 log.warning(f"Could not annotate action database: {exc}")
 
         reporter.phase("diff")
-        say(f"Diffing → {cycle.identified_db}")
+        log.info(f"Diffing → {cycle.identified_db}")
         # No CSV here: the run's one CSV is written from the result database.
         diffs.append(run_diff(cycle.baseline_db, cycle.action_db, None, cycle.identified_db))
 
     # ── Repeated runs: one result database, ranked ──────────────────────────────
     ranking = None
     if len(cycles) > 1:
-        say(f"Merging {len(cycles)} repetitions → {result_db}")
+        say(f"Merging the {len(cycles)} repetitions and ranking the templates…")
+        log.info(f"Merging → {result_db}")
         merge_repetitions([c.identified_db for c in cycles], result_db)
         # Always with its CSV, whatever write_csv says: the CSV is how the
         # ranking is read (no viewer for it), in any spreadsheet or script.
@@ -452,7 +458,8 @@ async def _capture_cycle(
 
     # ── Baseline (never skipped: the diff needs its cutoff) ────────────────────
     reporter.phase("baseline")
-    say(f"{label}Acquiring baseline → {cycle.baseline_archive}")
+    say("Capturing the baseline…")
+    log.info(f"{label}Baseline → {cycle.baseline_archive}")
     await _collect(lockdown, cycle.baseline_archive, t0, reporter)
 
     # Cutoff for the action capture: now (post-baseline). Anything after this
@@ -468,7 +475,8 @@ async def _capture_cycle(
 
     # ── Post-action ──────────────────────────────────────────────────────────
     reporter.phase("action")
-    say(f"{label}Acquiring post-action → {cycle.action_archive}")
+    say("Capturing the action…")
+    log.info(f"{label}Action → {cycle.action_archive}")
     await _collect(lockdown, cycle.action_archive, action_start_unix, reporter)
 
 
