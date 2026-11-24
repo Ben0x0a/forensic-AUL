@@ -96,6 +96,18 @@ def patched(monkeypatch, tmp_path):
     monkeypatch.setattr(wf, "annotate_database", fake_annotate_database)
     monkeypatch.setattr(wf, "run_diff", fake_run_diff)
 
+    # The result-folder steps read real diff tables; the fake diff writes none.
+    def fake_write_csv(db, out):
+        calls.append("csv")
+        Path(out).write_text("")
+        return 0
+
+    def fake_merge(dbs, out):
+        calls.append(f"merge:{len(dbs)}")
+
+    monkeypatch.setattr(wf, "write_identified_csv", fake_write_csv)
+    monkeypatch.setattr(wf, "merge_repetitions", fake_merge)
+
     return SimpleNamespace(
         device=device, calls=calls, out=tmp_path / "out",
         extract_calls=extract_calls, annotate_calls=annotate_calls,
@@ -114,7 +126,8 @@ class TestWorkflow:
         assert "action" in seen  # wait_for_action ran
         # Both archives extracted, then diffed; the connection was closed.
         assert [c for c in patched.calls if c.startswith("extract:")]
-        assert patched.calls[-1] == "diff" and "close" in patched.calls
+        # Diffed, then the run's CSV written from the result database.
+        assert patched.calls[-2:] == ["diff", "csv"] and "close" in patched.calls
         # Result carries the four artefacts + the nested diff.
         assert res.baseline_archive.name.endswith("-baseline.logarchive")
         assert res.action_archive.name.endswith("-action.logarchive")
@@ -123,26 +136,21 @@ class TestWorkflow:
         # Chain-of-custody prefix embeds case + IMEI.
         assert res.baseline_db.name.startswith("CASE-1-356938035643809-")
 
-    def test_artefacts_share_one_session_directory(self, patched):
-        """Every artefact of a run lands in output_dir/<prefix>/, not loose in cwd."""
+    def test_results_on_top_inputs_in_intermediate(self, patched):
+        """The run folder (output_dir/<prefix>/) holds the results only — the
+        identified database and its CSV; the archives and extracts they came
+        from are in its intermediate/ subfolder."""
         res = run_identify_workflow(patched.out, CaseInfo(case_number="CASE-1"), confirm=lambda device: True, wait_for_action=lambda: None)
-        artefacts = [
-            res.baseline_archive, res.action_archive,
-            res.baseline_db, res.action_db,
-            res.diff.sqlite_path,
-        ]
-        if res.diff.csv_path is not None:
-            artefacts.append(res.diff.csv_path)
-
-        session_dirs = {p.parent for p in artefacts}
-        assert len(session_dirs) == 1, f"artefacts scattered across {session_dirs}"
-
-        session_dir = session_dirs.pop()
-        # The session dir sits directly under output_dir and carries the prefix,
-        # which each file inside repeats so it stays self-identifying if moved.
+        session_dir = res.identified_db.parent
         assert session_dir.parent == patched.out
         assert session_dir.name.startswith("CASE-1-356938035643809-")
-        assert all(p.name.startswith(session_dir.name) for p in artefacts)
+        assert res.csv_path.parent == session_dir
+        assert res.diff.sqlite_path == res.identified_db, "a single run diffs into the result"
+        inputs = [res.baseline_archive, res.action_archive, res.baseline_db, res.action_db]
+        assert {p.parent for p in inputs} == {session_dir / "intermediate"}
+        # Each file repeats the prefix, so it stays self-identifying if moved.
+        assert all(p.name.startswith(session_dir.name)
+                   for p in [*inputs, res.identified_db, res.csv_path])
 
     def test_confirm_decline_aborts_before_collection(self, patched):
         with pytest.raises(AcquisitionAborted):
@@ -325,7 +333,7 @@ def test_the_action_description_is_returned_and_stored(patched):
 
 # ── The preparation pause ─────────────────────────────────────────────────────
 
-def _sequence(patched, prepared: bool):
+def _sequence(patched):
     events: list = []
 
     def wait_still(seconds):
@@ -333,7 +341,6 @@ def _sequence(patched, prepared: bool):
 
     def prepare():
         events.append("prepare")
-        return prepared
 
     run_identify_workflow(
         patched.out, opts=IdentifyOptions(still_seconds=30, settle_seconds=10),
@@ -344,14 +351,9 @@ def _sequence(patched, prepared: bool):
 
 
 def test_preparation_lands_in_the_baseline_after_a_settle_pause(patched):
-    events, collects = _sequence(patched, prepared=True)
+    events, collects = _sequence(patched)
     assert events == ["still:30", "prepare", "still:10", "action"]
     assert "baseline" in collects[0], "the baseline is collected after the preparation"
-
-
-def test_nothing_to_prepare_skips_the_settle_pause(patched):
-    events, _ = _sequence(patched, prepared=False)
-    assert events == ["still:30", "prepare", "action"]
 
 
 # ── Repetitions ───────────────────────────────────────────────────────────────
@@ -361,9 +363,9 @@ def test_repeat_runs_every_cycle_and_ranks_them(patched, monkeypatch):
 
     ranked: list = []
 
-    def fake_rank(dbs, out, csv_out):
-        ranked.append((list(dbs), out, csv_out))
-        return RankingResult(out, len(dbs), 5, 2, csv_out)
+    def fake_rank(db, csv_out):
+        ranked.append((db, csv_out))
+        return RankingResult(db, 3, 5, 2, csv_out)
 
     monkeypatch.setattr(wf, "rank_repeated", fake_rank)
     actions: list = []
@@ -375,10 +377,12 @@ def test_repeat_runs_every_cycle_and_ranks_them(patched, monkeypatch):
     assert [("-1-" in c, "-2-" in c, "-3-" in c) for c in collects[::2]] == [
         (True, False, False), (False, True, False), (False, False, True)]
     assert len(res.cycles) == 3 and res.ranking.in_every_cycle == 2
-    dbs, out, csv_out = ranked[0]
-    assert csv_out == out.with_suffix(".csv"), "the ranking CSV is always written"
-    assert [db.name.split("-identified")[0][-1] for db in dbs] == ["1", "2", "3"]
-    assert out.name.endswith("-repeat.db")
+    db, csv_out = ranked[0]
+    assert "merge:3" in patched.calls, "the repetitions are merged before ranking"
+    assert db == res.identified_db and db.parent.name != "intermediate"
+    assert csv_out.name.endswith("-repeat.csv"), "the ranking CSV is always written"
+    # Results on top, everything else in intermediate/.
+    assert {c.baseline_archive.parent.name for c in res.cycles} == {"intermediate"}
 
 
 def test_a_single_run_keeps_its_names_and_has_no_ranking(patched):
@@ -403,7 +407,7 @@ def test_progress_ends_at_100_percent_only_at_the_end(patched, monkeypatch):
     100 % until the diff is done, even with a preparation and repetitions."""
     from forensic_aul import RankingResult
 
-    monkeypatch.setattr(wf, "rank_repeated", lambda dbs, out, csv_out: RankingResult(out, len(dbs), 0, 0))
+    monkeypatch.setattr(wf, "rank_repeated", lambda db, csv_out: RankingResult(db, 2, 0, 0))
     events: list = []
     run_identify_workflow(
         patched.out, opts=IdentifyOptions(repeat=2, still_seconds=5, settle_seconds=5),
@@ -413,3 +417,25 @@ def test_progress_ends_at_100_percent_only_at_the_end(patched, monkeypatch):
     overall = [e.overall for e in events]
     assert overall[-1] == 1.0
     assert max(overall[:-1]) < 1.0
+
+
+def test_a_log_record_starts_on_a_new_line_after_the_progress_line(capsys):
+    """The identify CLI ends its live progress line before any log record."""
+    import logging
+
+    from forensic_aul.engine.utils.progress import ProgressEvent
+    from launcher.cmds.identify_cmd import _EndLineFilter, _ProgressLine
+
+    line = _ProgressLine()
+    line.enabled = True
+    logger = logging.getLogger("test.endline")
+    handler = logging.StreamHandler()
+    handler.addFilter(_EndLineFilter(line))
+    logger.addHandler(handler)
+    try:
+        line.sink(ProgressEvent(0.5, "extract-action", 0.5, "merging timeline"))
+        logger.warning("next record")
+    finally:
+        logger.removeHandler(handler)
+    out = capsys.readouterr().out
+    assert out.endswith("\n"), "the progress line was ended before the record"

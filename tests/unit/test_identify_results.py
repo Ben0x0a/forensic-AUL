@@ -256,7 +256,7 @@ class TestExportCsv:
             "timestamp", "timestamp_unix_ns", "event_order", "source_order",
             "source_file", "process", "pid",
             "tid", "log_level", "event_type", "subsystem", "category",
-            "message", "matched_signatures", "tier", "format_string", "note",
+            "message", "matched_signatures", "new_template", "new_message",
         }
         msgs = {r["message"] for r in rows}
         assert msgs == {"user tapped Camera", "background chatter"}

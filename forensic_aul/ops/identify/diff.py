@@ -145,6 +145,14 @@ _BASELINE_KEY_SQL = (
 _FORMAT_SPEC_RE = re.compile(r"%(?:\{[^}]*\})?[-+ #0'0-9.*]*(?:hh|h|ll|l|j|z|t|L|q)?[A-Za-z@%]")
 
 
+def csv_flags(tier: str | None) -> tuple[object, object]:
+    """``(new_template, new_message)`` as 1/0 for *tier*; empty when the row was
+    not compared (unresolved timestamp, or a database diffed before tiers)."""
+    if tier in (None, TIER_UNRESOLVED):
+        return "", ""
+    return int(tier == TIER_NEW_TEMPLATE), int(tier != TIER_REPEAT)
+
+
 def has_literal_text(template: str | None) -> bool:
     """True when *template* says something beyond its ``%`` specifiers."""
     if not template:
@@ -165,12 +173,21 @@ def _build_csv_sql(conn: sqlite3.Connection) -> str:
     return _CSV_SQL_TEMPLATE.format(matched_signatures=expr)
 
 
-_CSV_HEADER = [
+# The CSV columns: exactly the ``export`` CSV's base columns (keep in step with
+# ops/export/exporter.py _BASE_FIELDS — a test checks it), then two 1/0 flags.
+# WHY flags and not the tier string: a spreadsheet filters on 1/0 directly, and
+# ``new_message`` stays useful where the format string is uninformative
+# ("%{public}s", "<private>"). Consumed by: _CsvOut, write_identified_csv,
+# ops/identify/results.py (IdentifyResults.export_csv).
+EXPORT_COLUMNS = (
     "timestamp", "timestamp_unix_ns", "event_order", "source_order", "source_file",
     "process", "pid", "tid",
     "log_level", "event_type", "subsystem", "category", "message",
-    "matched_signatures", "tier", "format_string", "note",
-]
+    "matched_signatures",
+)
+_CSV_HEADER = [*EXPORT_COLUMNS, "new_template", "new_message"]
+# Added after the flags when the run was repeated (see write_identified_csv).
+REPETITION_COLUMN = "repetition"
 
 # The tier values, strongest signal first. Consumed by: classify_rows, run_diff,
 # ops/identify/results.py, the frontends.
@@ -346,39 +363,7 @@ class _SqliteOut:
             path.unlink()
         self._conn = sqlite3.connect(str(path))
         self._batch: list[tuple] = []
-        # Output SQLite schema: identical columns to the CSV plus the flag.
-        self._conn.execute("""
-            CREATE TABLE identified_logs (
-                id                  INTEGER PRIMARY KEY,
-                timestamp           TEXT,
-                timestamp_unix_ns   INTEGER,
-                event_order         INTEGER,
-                source_order        INTEGER,
-                source_file         TEXT,
-                process             TEXT,
-                pid                 INTEGER,
-                tid                 INTEGER,
-                log_level           TEXT,
-                event_type          TEXT,
-                subsystem           TEXT,
-                category            TEXT,
-                message             TEXT,
-                format_string       TEXT,
-                matched_signatures  TEXT NOT NULL DEFAULT '',
-                tier                TEXT NOT NULL,
-                excluded            INTEGER NOT NULL,
-                note                TEXT
-            )
-        """)
-        self._conn.execute("CREATE INDEX idx_identified_logs_excluded ON identified_logs(excluded)")
-        self._conn.execute("CREATE INDEX idx_identified_logs_ts ON identified_logs(timestamp_unix_ns)")
-        self._conn.execute("CREATE INDEX idx_identified_logs_tier ON identified_logs(tier)")
-        # hidden_keys / v_identified_visible: analyst judgment, kept separate from
-        # `excluded`. `excluded` is the engine's mechanical classification and is
-        # never rewritten after the diff runs; hidden_keys is reversible (the
-        # viewer's "hide identical lines"), persisted so a reopened session keeps
-        # the pruning across runs.
-        create_hidden_keys_objects(self._conn)
+        create_identified_schema(self._conn)
 
     def add(self, r: DiffRow) -> None:
         self._batch.append((r.timestamp, r.timestamp_unix_ns, r.event_order, r.source_order,
@@ -418,13 +403,89 @@ class _CsvOut:
         self._writer.writerow([r.timestamp, r.timestamp_unix_ns, r.event_order, r.source_order,
                                r.source_file, r.process, r.pid, r.tid, r.log_level,
                                r.event_type, r.subsystem, r.category, r.message,
-                               r.matched_signatures, r.tier, r.format_string, r.note])
+                               r.matched_signatures, *csv_flags(r.tier)])
 
     def __enter__(self) -> _CsvOut:
         return self
 
     def __exit__(self, *_exc) -> None:  # type: ignore[no-untyped-def]
         self._fh.close()
+
+
+# Every identified_logs column but ``id``, in table order. Consumed by:
+# create_identified_schema (the DDL) and ops/identify/repeat.py (the merge).
+IDENTIFIED_COLUMNS = (
+    "timestamp", "timestamp_unix_ns", "event_order", "source_order", "source_file",
+    "process", "pid", "tid", "log_level", "event_type", "subsystem", "category",
+    "message", "format_string", "matched_signatures", "tier", "excluded", "note",
+    "repetition",
+)
+
+
+def create_identified_schema(conn: sqlite3.Connection) -> None:
+    """Create ``identified_logs`` (+ its indexes and the hidden_keys objects).
+
+    ``repetition`` numbers the capture cycle a row came from: 1 for a single
+    run, 1…N in the merged database of a repeated run (ops/identify/repeat.py).
+    """
+    conn.execute("""
+        CREATE TABLE identified_logs (
+            id                  INTEGER PRIMARY KEY,
+            timestamp           TEXT,
+            timestamp_unix_ns   INTEGER,
+            event_order         INTEGER,
+            source_order        INTEGER,
+            source_file         TEXT,
+            process             TEXT,
+            pid                 INTEGER,
+            tid                 INTEGER,
+            log_level           TEXT,
+            event_type          TEXT,
+            subsystem           TEXT,
+            category            TEXT,
+            message             TEXT,
+            format_string       TEXT,
+            matched_signatures  TEXT NOT NULL DEFAULT '',
+            tier                TEXT NOT NULL,
+            excluded            INTEGER NOT NULL,
+            note                TEXT,
+            repetition          INTEGER NOT NULL DEFAULT 1
+        )
+    """)
+    conn.execute("CREATE INDEX idx_identified_logs_excluded ON identified_logs(excluded)")
+    conn.execute("CREATE INDEX idx_identified_logs_ts ON identified_logs(timestamp_unix_ns)")
+    conn.execute("CREATE INDEX idx_identified_logs_tier ON identified_logs(tier)")
+    # hidden_keys / v_identified_visible: analyst judgment, kept separate from
+    # `excluded`. `excluded` is the engine's mechanical classification and is
+    # never rewritten after the diff runs; hidden_keys is reversible (the
+    # viewer's "hide identical lines"), persisted so a reopened session keeps
+    # the pruning across runs.
+    create_hidden_keys_objects(conn)
+
+
+def write_identified_csv(db: Path, out: Path) -> int:
+    """Write *db*'s retained rows to *out* as CSV; returns the row count.
+
+    The ``export`` columns, the ``new_template``/``new_message`` flags and, when
+    the database holds several repetitions, a ``repetition`` column. UTF-8 with
+    BOM (Excel detects the encoding). Rows in time order.
+    """
+    with contextlib.closing(sqlite3.connect(read_only_uri(db), uri=True)) as conn:
+        repeated = (conn.execute("SELECT MAX(repetition) FROM identified_logs").fetchone()[0] or 1) > 1
+        rows = conn.execute(
+            f"SELECT {', '.join(EXPORT_COLUMNS)}, tier, repetition FROM identified_logs "
+            "WHERE excluded = 0 ORDER BY timestamp_unix_ns, repetition, id"
+        )
+        out.parent.mkdir(parents=True, exist_ok=True)
+        n = 0
+        with out.open("w", newline="", encoding="utf-8-sig") as fh:
+            writer = csv.writer(fh)
+            writer.writerow([*_CSV_HEADER, *([REPETITION_COLUMN] if repeated else [])])
+            for *export_values, tier, repetition in rows:
+                writer.writerow([*export_values, *csv_flags(tier),
+                                 *([repetition] if repeated else [])])
+                n += 1
+    return n
 
 
 def create_hidden_keys_objects(conn: sqlite3.Connection) -> None:
@@ -471,3 +532,5 @@ def ensure_source_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE identified_logs ADD COLUMN format_string TEXT")
     if "tier" not in cols:
         conn.execute("ALTER TABLE identified_logs ADD COLUMN tier TEXT")
+    if "repetition" not in cols:
+        conn.execute("ALTER TABLE identified_logs ADD COLUMN repetition INTEGER NOT NULL DEFAULT 1")

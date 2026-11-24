@@ -234,14 +234,11 @@ def _run_identify(args: argparse.Namespace) -> int:
             time.sleep(min(1.0, left))
         print("\r  Still: done.          ")
 
-    def prepare() -> bool:
+    def prepare() -> None:
         print("")
-        print("  Anything to do before the action that is NOT of interest (unlock,")
-        print("  open the app, reach the right screen)? Its lines then go to the baseline.")
-        if _ask("  Prepare now? [y/N] ").lower() not in ("y", "yes"):
-            return False
-        _ask("  Do it on the device, then press Enter. ")
-        return True
+        print("  Do now what must happen before the action but is NOT of interest")
+        print("  (unlock, open the app, reach the right screen): its lines go to the baseline.")
+        _ask("  Press Enter when done, or right away if there is nothing to do. ")
 
     def describe_action() -> str:
         if args.action is not None:
@@ -267,6 +264,14 @@ def _run_identify(args: argparse.Namespace) -> int:
     def status(line: str) -> None:
         line_out.end_line()
         print(f"  {line}")
+
+    # A log record must not land on the end of an unfinished progress line
+    # (seen: "extract-action 87.3% merging timeline 09:05:16 INFO — …"): end it
+    # first. A filter runs before its handler emits, on every console handler.
+    end_line_filter = _EndLineFilter(line_out)
+    console_handlers = list(logging.getLogger().handlers)
+    for handler in console_handlers:
+        handler.addFilter(end_line_filter)
 
     # Knowledge base: an explicit --kb is a hard requirement (load failure is an
     # error, exit 1); the shipped default is best-effort (unloadable → warn and
@@ -322,6 +327,9 @@ def _run_identify(args: argparse.Namespace) -> int:
         capture_exception({"entrypoint": "cli", "op": "identify"})
         log.exception(f"error: identify workflow failed — {exc}")
         return 1
+    finally:
+        for handler in console_handlers:
+            handler.removeFilter(end_line_filter)
 
     print("")
     if res.action_description:
@@ -336,6 +344,13 @@ def _run_identify(args: argparse.Namespace) -> int:
 
         print("")
         print(format_ranking(res.ranking, ranked_templates(res.ranking.path)))
+    print("")
+    print("  Results (intermediate files in the intermediate/ subfolder):")
+    print(f"    Database : {res.identified_db}")
+    if res.csv_path is not None:
+        print(f"    Lines    : {res.csv_path}")
+    if res.ranking is not None and res.ranking.csv_path is not None:
+        print(f"    Ranking  : {res.ranking.csv_path}")
     return 0
 
 
@@ -343,6 +358,18 @@ def _run_identify(args: argparse.Namespace) -> int:
 # phases (still, wait) have their own countdown and prompt, so nothing is drawn
 # over them. Consumed by: _progress_line.
 _DRAWN_PHASES = ("baseline", "action", "extract-baseline", "extract-action", "annotate", "diff")
+
+
+class _EndLineFilter(logging.Filter):
+    """Ends the progress line before a log record is printed (never drops one)."""
+
+    def __init__(self, line: "_ProgressLine") -> None:
+        super().__init__()
+        self._line = line
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        self._line.end_line()
+        return True
 
 
 class _ProgressLine:

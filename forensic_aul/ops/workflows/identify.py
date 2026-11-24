@@ -61,8 +61,8 @@ from forensic_aul.device_info import DeviceInfo
 from forensic_aul.ops.acquisition.device import close_lockdown, connect_device
 from forensic_aul.ops.acquisition.report import write_acquisition_report
 from forensic_aul.case_info import CaseInfo
-from forensic_aul.ops.identify.diff import run_diff
-from forensic_aul.ops.identify.repeat import rank_repeated
+from forensic_aul.ops.identify.diff import run_diff, write_identified_csv
+from forensic_aul.ops.identify.repeat import merge_repetitions, rank_repeated
 from forensic_aul.ops.identify.run_info import ACTION_DESCRIPTION_KEY, write_run_info
 from forensic_aul.ops.workflows.identify_options import IdentifyOptions
 from forensic_aul.errors import ExtractFailedError
@@ -95,6 +95,10 @@ def _identify_phases(repeat: int) -> list[tuple[str, float]]:
     return [(name, weight if name == "connect" else weight / n)
             for name, weight in _IDENTIFY_PHASES]
 
+# Subfolder of the run folder for everything but the results (archives,
+# extracts, each repetition's diff). Consumed by: _run_identify_async.
+INTERMEDIATE_DIR_NAME = "intermediate"
+
 # Seconds between "still collecting" progress updates during a capture.
 _COLLECT_TICK_S = 1.0
 
@@ -107,7 +111,7 @@ def run_identify_workflow(
     kb: "KnowledgeBase | None" = None,
     confirm: Callable[[DeviceInfo], bool] | None = None,
     wait_still: Callable[[int], None] | None = None,
-    prepare: Callable[[], bool] | None = None,
+    prepare: Callable[[], None] | None = None,
     wait_for_action: Callable[[], None] | None = None,
     describe_action: Callable[[], str] | None = None,
     status: Callable[[str], None] | None = None,
@@ -139,12 +143,13 @@ def run_identify_workflow(
       through a ``CancelToken``), or return early to skip the remaining wait (the
       callback owns the timing, not this function). Only invoked when *wait_still*
       is given AND *still_seconds* > 0.
-    - *prepare()* — the operator does what must happen but is not of interest
-      (unlock, open the app, reach the right screen) and returns True, or
-      returns False when there is nothing to prepare. Those lines then land in
-      the baseline instead of the result. After True, *wait_still* is asked
-      again for ``opts.settle_seconds`` so the work the preparation set off ends
-      before the baseline is collected. Raise ``OperationCancelled`` to abort.
+    - *prepare()* — returns once the operator has done what must happen but is
+      not of interest (unlock, open the app, reach the right screen), or at once
+      when there is nothing to do; either way the baseline is handled the same.
+      Those lines then land in the baseline instead of the result. *wait_still*
+      is then asked for ``opts.settle_seconds``, so the work a preparation set
+      off ends before the baseline is collected. Raise ``OperationCancelled`` to
+      abort.
     - *wait_for_action()* — blocks until the operator has performed the action;
       raise :class:`~forensic_aul.errors.OperationCancelled` to abort. ``None``
       proceeds immediately (useful only in tests — a real run needs the pause).
@@ -217,7 +222,7 @@ async def _run_identify_async(
     kb: "KnowledgeBase | None",
     confirm: Callable[[DeviceInfo], bool] | None,
     wait_still: Callable[[int], None] | None,
-    prepare: Callable[[], bool] | None,
+    prepare: Callable[[], None] | None,
     wait_for_action: Callable[[], None] | None,
     describe_action: Callable[[], str] | None,
     status: Callable[[str], None] | None,
@@ -268,7 +273,13 @@ async def _run_identify_async(
         session_dir = output_dir / prefix
         session_dir.mkdir(parents=True, exist_ok=True)
 
-        cycles = _cycle_paths(session_dir, prefix, opts.repeat)
+        # The run folder holds the results only — the identified database and
+        # its CSV(s); everything they were made from (archives, extracts, each
+        # repetition's diff) goes to intermediate/, for whoever needs it.
+        result_db = session_dir / f"{prefix}-identified.db"
+        (session_dir / INTERMEDIATE_DIR_NAME).mkdir(exist_ok=True)
+        cycles = _cycle_paths(session_dir / INTERMEDIATE_DIR_NAME, prefix, opts.repeat,
+                              result_db)
 
         # Defence in depth: ensure resolved paths still live under output_dir.
         out_resolved = output_dir.resolve()
@@ -334,22 +345,23 @@ async def _run_identify_async(
                 log.warning(f"Could not annotate action database: {exc}")
 
         reporter.phase("diff")
-        csv_out = cycle.identified_db.with_suffix(".csv") if write_csv else None
         say(f"Diffing → {cycle.identified_db}")
-        diff = run_diff(cycle.baseline_db, cycle.action_db, csv_out, cycle.identified_db)
-        write_run_info(cycle.identified_db, {ACTION_DESCRIPTION_KEY: description})
-        diffs.append(diff)
+        # No CSV here: the run's one CSV is written from the result database.
+        diffs.append(run_diff(cycle.baseline_db, cycle.action_db, None, cycle.identified_db))
 
-    # ── Repeated runs: rank the templates every repetition produced ─────────────
+    # ── Repeated runs: one result database, ranked ──────────────────────────────
     ranking = None
     if len(cycles) > 1:
-        ranking_db = session_dir / f"{prefix}-repeat.db"
-        say(f"Ranking templates across {len(cycles)} repetitions → {ranking_db}")
+        say(f"Merging {len(cycles)} repetitions → {result_db}")
+        merge_repetitions([c.identified_db for c in cycles], result_db)
         # Always with its CSV, whatever write_csv says: the CSV is how the
         # ranking is read (no viewer for it), in any spreadsheet or script.
-        ranking = rank_repeated([c.identified_db for c in cycles], ranking_db,
-                                ranking_db.with_suffix(".csv"))
-        write_run_info(ranking_db, {ACTION_DESCRIPTION_KEY: description})
+        ranking = rank_repeated(result_db, session_dir / f"{prefix}-repeat.csv")
+    write_run_info(result_db, {ACTION_DESCRIPTION_KEY: description})
+    csv_path = None
+    if write_csv:
+        csv_path = session_dir / f"{prefix}-identified.csv"
+        write_identified_csv(result_db, csv_path)
     reporter.finish("complete")
 
     first = cycles[0]
@@ -365,6 +377,8 @@ async def _run_identify_async(
             for c, d in zip(cycles, diffs)
         ),
         ranking=ranking,
+        identified_db=result_db,
+        csv_path=csv_path,
     )
 
 
@@ -379,16 +393,20 @@ class _CyclePaths:
     identified_db: Path
 
 
-def _cycle_paths(session_dir: Path, prefix: str, repeat: int) -> list[_CyclePaths]:
-    """One set of paths per repetition: ``<prefix>-…`` for a single run (the
-    historical names), ``<prefix>-<n>-…`` when repeated."""
+def _cycle_paths(
+    intermediate_dir: Path, prefix: str, repeat: int, result_db: Path,
+) -> list[_CyclePaths]:
+    """One set of paths per repetition, in *intermediate_dir*: ``<prefix>-…``
+    for a single run, ``<prefix>-<n>-…`` when repeated. A single run diffs
+    straight into *result_db*; repetitions diff into their own databases, merged
+    into it afterwards."""
     paths = []
     for number in range(1, max(1, repeat) + 1):
-        stem = session_dir / (prefix if repeat <= 1 else f"{prefix}-{number}")
+        stem = intermediate_dir / (prefix if repeat <= 1 else f"{prefix}-{number}")
         paths.append(_CyclePaths(
             Path(f"{stem}-baseline.logarchive"), Path(f"{stem}-action.logarchive"),
             Path(f"{stem}-baseline.db"), Path(f"{stem}-action.db"),
-            Path(f"{stem}-identified.db"),
+            result_db if repeat <= 1 else Path(f"{stem}-identified.db"),
         ))
     return paths
 
@@ -397,7 +415,7 @@ async def _capture_cycle(
     lockdown: object, cycle: _CyclePaths, opts: IdentifyOptions,
     reporter: ProgressReporter, say: Callable[[str], None], label: str, *,
     wait_still: Callable[[int], None] | None,
-    prepare: Callable[[], bool] | None,
+    prepare: Callable[[], None] | None,
     wait_for_action: Callable[[], None] | None,
 ) -> None:
     """One repetition's captures: still → prepare/settle → baseline → action."""
@@ -422,8 +440,10 @@ async def _capture_cycle(
     # become baseline keys, so the result keeps the action of interest only.
     if prepare is not None:
         reporter.phase("prepare")
-        prepared = await asyncio.to_thread(prepare)
-        if prepared and wait_still is not None and opts.settle_seconds > 0:
+        await asyncio.to_thread(prepare)
+        # Always, not only "if something was done": the run cannot tell, and a
+        # few idle seconds cost nothing.
+        if wait_still is not None and opts.settle_seconds > 0:
             # Its own phase: re-entering "still" would add that weight twice
             # and push the bar to 100 % before the run ends.
             reporter.phase("settle")

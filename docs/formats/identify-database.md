@@ -66,6 +66,7 @@ Rows are read ordered by `(timestamp_unix_ns ASC, id ASC)`.
 | `tier` | TEXT | `new_template` / `new_values` / `repeat` / `unresolved` (see above); NULL in a database diffed before tiers existed |
 | `excluded` | INTEGER NOT NULL | `0` retained, `1` baseline noise (`tier = repeat`) |
 | `note` | TEXT | Currently only the unresolved-timestamp note |
+| `repetition` | INTEGER NOT NULL DEFAULT 1 | The capture cycle the row came from: 1 for a single run, 1…N after `--repeat N` |
 
 Indexes: `idx_identified_logs_excluded(excluded)`,
 `idx_identified_logs_ts(timestamp_unix_ns)`, `idx_identified_logs_tier(tier)`.
@@ -125,11 +126,12 @@ from a database made by `run_diff` alone or `identify --diff`). Source:
 
 `read_run_info(db)` returns the table as a dict (`{}` when absent).
 
-## `repeat_ranking` (`<prefix>-repeat.db` and `<prefix>-repeat.csv`)
+## `repeat_ranking` (in `<prefix>-identified.db`, and `<prefix>-repeat.csv`)
 
 Written by `run_identify_workflow` when `IdentifyOptions.repeat > 1`
-(`rank_repeated`, `forensic_aul/ops/identify/repeat.py`): the retained rows of
-every repetition's `identified_logs`, grouped by template. The template is the
+(`merge_repetitions` then `rank_repeated`, `forensic_aul/ops/identify/repeat.py`):
+each repetition's diff is merged into the run's `identified_logs` (column
+`repetition` = 1…N), and its retained rows are grouped by template. The template is the
 format string, or the message when the format string is missing or generic (no
 literal text once its `%` specifiers are removed).
 
@@ -142,8 +144,7 @@ literal text once its `%` specifiers are removed).
 | `rows` | retained rows across all repetitions |
 | `example_message` | one composed message of the group |
 
-`ranked_templates(path, limit)` reads the top of the table. The database also
-holds an `identify_run` table with the action description.
+`ranked_templates(path, limit)` reads the top of the table.
 
 The same table is written as `<prefix>-repeat.csv` (UTF-8 with BOM, in rank
 order) with the columns `rank, new_template_cycles, cycles, rows, process,
@@ -186,24 +187,32 @@ identical-lines key anyway. `hidden_keys()` lists the current pairs.
 
 ## The CSV of retained lines
 
-`run_diff` writes a CSV alongside the SQLite output unless `csv_out` is `None`
-(`identify --no-csv` / `write_csv=False`). It contains the **retained rows only**
+The run's CSV (`<prefix>-identified.csv`, written by `write_identified_csv` from
+the result database; `identify --no-csv` / `write_csv=False` skips it) and the
+one `run_diff` writes when given `csv_out` hold the **retained rows only**
 (`excluded = 0`) — the excluded ones remain re-inspectable in the SQLite file.
 Encoding is UTF-8 with BOM so Excel auto-detects it.
 
-Header, in order:
+Header, in order — the `export` CSV's columns, then two flags:
 
 ```
 timestamp, timestamp_unix_ns, event_order, source_order, source_file,
 process, pid, tid,
 log_level, event_type, subsystem, category, message,
-matched_signatures, tier, format_string, note
+matched_signatures, new_template, new_message[, repetition]
 ```
 
-That is every `identified_logs` column except `id` and `excluded` (the flag is
-implied — all rows in this file are retained).
+| Flag | 1 when | 0 when |
+|---|---|---|
+| `new_template` | the template is new for this process (`tier = new_template`) | the baseline had the template (`new_values`) |
+| `new_message` | the exact message is new for this process (`new_template` or `new_values`) | it was in the baseline (`repeat` — only seen in an export with noise included) |
 
-`IdentifyResults.export_csv()` reuses the exact same header and column order, so a
+Both are empty for a row that was not compared (`unresolved`). `repetition`
+(1…N) is added when the run was repeated. WHY flags beside the format string:
+where the template is uninformative (`%{public}s`, `<private>`), whether the
+message itself is new is the useful question.
+
+`IdentifyResults.export_csv()` writes the same columns (without `repetition`), so a
 re-filtered export drops into the same downstream tooling. Its defaults differ
 slightly: `include_noise=False`, `include_kb_known=True`, and `include_hidden` is
 deliberately not exposed — an export reflects the analyst's current pruning.
@@ -217,16 +226,25 @@ whether or not a CSV was written.
 `run_identify_workflow` writes every artefact of a run into a single **session
 directory**, `<output_dir>/<prefix>/`, where the prefix is
 `<case>-<imei|udid>-<UTC>` (or `identify-<UTC>` when no case number is given).
-Each file inside repeats that prefix, so it stays self-identifying if copied out:
+Each file repeats that prefix, so it stays self-identifying if copied out. Only
+the results sit at the top; what they were made from is in `intermediate/`:
 
-| File | Content |
-|---|---|
-| `<prefix>-baseline.logarchive` | Acquisition covering the pre-action window |
-| `<prefix>-action.logarchive` | Acquisition covering the post-action window |
-| `<prefix>-baseline.db` | Extracted baseline analysis database |
-| `<prefix>-action.db` | Extracted action analysis database (optionally annotated) |
-| `<prefix>-identified.db` | **This** diff database |
-| `<prefix>-identified.csv` | Retained lines (omitted with `write_csv=False`) |
+```
+<output-dir>/
+└── <prefix>/
+    ├── <prefix>-identified.db      the result: every line after the baseline, flagged
+    ├── <prefix>-identified.csv     the retained lines (omitted with --no-csv)
+    ├── <prefix>-repeat.csv         --repeat only: the ranking of the templates
+    └── intermediate/               what the results were made from
+        ├── <prefix>[-<n>]-baseline.logarchive
+        ├── <prefix>[-<n>]-action.logarchive
+        ├── <prefix>[-<n>]-baseline.db
+        ├── <prefix>[-<n>]-action.db
+        └── <prefix>-<n>-identified.db   --repeat only: each repetition's diff
+```
+
+`IdentifyResult.identified_db` and `.csv_path` point at the results; its other
+paths (and `cycles`) point into `intermediate/`.
 
 Only the **action** database is annotated when a knowledge base is supplied — the
 baseline is diffed away and never needs annotations, and an annotation failure is

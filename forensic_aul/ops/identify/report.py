@@ -9,7 +9,7 @@ def format_diff_result(res: DiffResult) -> str:
     """Summary of a completed identify/diff (retained vs excluded line counts)."""
     return "\n".join([
         "  Identify complete.",
-        f"    Retained : {res.retained}  →  {res.csv_path}",
+        f"    Retained : {res.retained}" + (f"  →  {res.csv_path}" if res.csv_path else ""),
         f"      new template : {res.new_templates}  (read these first)",
         f"      new values   : {res.new_values}",
         *([f"      unresolved   : {res.unresolved}  (timestamp unknown, not compared)"]
@@ -24,7 +24,6 @@ def format_ranking(ranking: RankingResult, top: list[tuple]) -> str:
     lines = [
         f"  Repeated {ranking.cycles}×: {ranking.templates} templates retained, "
         f"{ranking.in_every_cycle} new in every repetition",
-        f"    Ranking  →  {ranking.csv_path or ranking.path}",
     ]
     for rank, new_cycles, cycles, rows, process, message in top:
         text = (message or "").replace("\n", " ")

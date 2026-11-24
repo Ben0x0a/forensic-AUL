@@ -316,7 +316,8 @@ def test_unresolved_action_row_reaches_the_csv(tmp_path):
     hit = [r for r in rows if r["message"] == "UNRESOLVED"]
     assert len(hit) == 1
     assert hit[0]["timestamp"] == ""
-    assert "unresolved" in hit[0]["note"].lower()
+    # Not compared: both flags empty rather than a misleading 0 or 1.
+    assert (hit[0]["new_template"], hit[0]["new_message"]) == ("", "")
 
 
 def test_unresolved_rows_are_counted_and_warned_about(tmp_path, caplog):
@@ -411,3 +412,12 @@ def test_an_unresolved_row_is_kept_in_its_own_tier(tmp_path):
         "SELECT message, tier FROM identified_logs"))
     assert tiers == {"idle tick": "unresolved", "camera opened": "new_template"}
     assert res.retained == res.new_templates + res.new_values + res.unresolved == 2
+
+
+def test_csv_columns_are_the_export_columns_plus_the_flags():
+    """The identify CSV is the export CSV's layout, so one tool reads both."""
+    from forensic_aul.ops.export.exporter import _BASE_FIELDS
+    from forensic_aul.ops.identify.diff import _CSV_HEADER, EXPORT_COLUMNS
+
+    assert list(EXPORT_COLUMNS) == list(_BASE_FIELDS)
+    assert _CSV_HEADER == [*EXPORT_COLUMNS, "new_template", "new_message"]

@@ -76,7 +76,6 @@ class IdentifyController:
         self._skip_event = threading.Event()
         self._continue_event = threading.Event()
         self._prepare_event = threading.Event()
-        self._prepared = False
         self._cancel = CancelToken()
         # Set when the knowledge base failed to load for the current run, so the
         # DONE state can tell the analyst the results are unannotated.
@@ -143,7 +142,6 @@ class IdentifyController:
         self._skip_event = threading.Event()
         self._continue_event = threading.Event()
         self._prepare_event = threading.Event()
-        self._prepared = False
         self._cancel = CancelToken()
 
         try:
@@ -202,13 +200,12 @@ class IdentifyController:
         # Skip from an earlier cycle must not skip this one.
         self._skip_event.clear()
 
-    def prepare(self) -> bool:
-        """Block until the operator has prepared, or said there is nothing to
-        prepare (worker thread); True when they prepared."""
+    def prepare(self) -> None:
+        """Block until the operator continues from the preparation pause
+        (worker thread)."""
         self._prepare_event.wait()
         self._cancel.check()
         self._prepare_event.clear()     # re-armed for the next repetition
-        return self._prepared
 
     def wait_for_action(self) -> None:
         """Block until the operator signals the action is done (worker thread)."""
@@ -218,9 +215,8 @@ class IdentifyController:
 
     # ── GUI-thread control buttons ───────────────────────────────────────────────
 
-    def prepared(self, did_prepare: bool) -> None:
-        """The operator answered the preparation pause (GUI thread)."""
-        self._prepared = did_prepare
+    def prepared(self) -> None:
+        """The operator continued from the preparation pause (GUI thread)."""
         self._prepare_event.set()
 
     def set_description(self, text: str) -> None:
@@ -246,10 +242,9 @@ class IdentifyController:
     # ── Completion / failure (GUI thread) ────────────────────────────────────────
 
     def on_done(self, result: Any) -> None:
-        self._recents.add(
-            "identify", str(result.diff.sqlite_path), f"{result.diff.retained} retained"
-        )
-        self._view.set_state(self._view.DONE, result, _result_counts(result.diff.sqlite_path))
+        results_db = result.identified_db or result.diff.sqlite_path
+        self._recents.add("identify", str(results_db), f"{result.diff.retained} retained")
+        self._view.set_state(self._view.DONE, result, _result_counts(results_db))
         if self._kb_warning:
             # After set_state: DONE clears the result host, so the warning must
             # land afterwards to stay visible next to the summary.

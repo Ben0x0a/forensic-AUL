@@ -138,7 +138,7 @@ def _install_fake_workflow(monkeypatch, screen, *, drives="still", result=None):
     """
     runner = _ThreadRunner()
     screen.run_task = runner.run_task  # type: ignore[method-assign]
-    seen_prepared: list[bool] = []
+    seen_prepared: list[str] = []
     runner.seen_prepared = seen_prepared
 
     def _fake(*_args, **kwargs):
@@ -155,7 +155,8 @@ def _install_fake_workflow(monkeypatch, screen, *, drives="still", result=None):
             kwargs["wait_for_action"]()
         elif drives == "prepare":
             progress(_Ev(0.1, "prepare"))  # switches the view to PREPARE
-            seen_prepared.append(kwargs["prepare"]())
+            kwargs["prepare"]()
+            seen_prepared.append("continued")
         return result if result is not None else _fake_result()
 
     monkeypatch.setattr(identify_ctrl, "run_identify_workflow", _fake)
@@ -418,16 +419,16 @@ def test_description_reaches_the_workflow(qapp, monkeypatch):
     assert screen._describe_panel.isHidden(), "the field is gone once the run is done"
 
 
-def test_prepare_pause_shows_its_panel_and_returns_the_answer(qapp, monkeypatch):
+def test_prepare_pause_shows_its_panel_and_continues(qapp, monkeypatch):
     screen = _make_screen()
     runner = _install_fake_workflow(monkeypatch, screen, drives="prepare")
     _select_device(screen)
     screen._out.set_path("/tmp/out")
     screen._ctrl.start()
     _wait_for(lambda: screen._prepare_panel.isVisibleTo(screen), qapp=qapp)
-    screen._ctrl.prepared(True)            # "Done preparing"
+    screen._ctrl.prepared()                # "Continue"
     runner.join_and_dispatch()
-    assert runner.seen_prepared == [True]
+    assert runner.seen_prepared == ["continued"]
 
 
 def test_pauses_are_rearmed_for_the_next_repetition(qapp):
@@ -438,8 +439,8 @@ def test_pauses_are_rearmed_for_the_next_repetition(qapp):
     ctrl.continue_action()
     ctrl.wait_for_action()                     # cycle 1: answered, returns
     assert not ctrl._continue_event.is_set()
-    ctrl.prepared(False)
-    assert ctrl.prepare() is False
+    ctrl.prepared()
+    ctrl.prepare()                             # answered, returns
     assert not ctrl._prepare_event.is_set()
 
 

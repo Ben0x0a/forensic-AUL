@@ -216,6 +216,11 @@ class IdentifyResult:
     cycles: tuple[IdentifyCycle, ...] = ()
     # The cross-repetition ranking; None for a single run.
     ranking: RankingResult | None = None
+    # The run's results, in the run folder: one database (every repetition) and
+    # its CSV (None when write_csv is off). The fields above point into
+    # intermediate/, except ``diff.sqlite_path`` for a single run.
+    identified_db: Path | None = None
+    csv_path: Path | None = None
 
 
 @dataclass(frozen=True)

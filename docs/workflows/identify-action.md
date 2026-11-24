@@ -66,7 +66,11 @@ the run's own session directory `<output-dir>/<prefix>/` (see
 | Output | Content |
 |---|---|
 | `<prefix>-identified.db` | **every** post-cutoff row, with an `excluded` flag, a `matched_signatures` column when the action database was annotated, plus a reversible `hidden_keys` prune layer and a `v_identified_visible` view |
-| `<prefix>-identified.csv` | the retained rows only |
+| `<prefix>-identified.csv` | the retained rows only: the `export` columns plus `new_template` / `new_message` (1/0) |
+| `<prefix>-repeat.csv` | with `--repeat`: the templates ranked across repetitions |
+
+The archives and extracts they were made from are in the run's `intermediate/`
+subfolder.
 
 The SQLite output keeps the excluded rows deliberately: "the device already said
 this" is a claim you must be able to re-inspect.

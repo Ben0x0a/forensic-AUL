@@ -40,8 +40,8 @@ class IdentifyOptions:
     # Seconds the operator keeps the device still while the baseline captures a
     # quiet device (0 = no pause; the baseline is still taken).
     still_seconds: int = 60
-    # Seconds of stillness after the operator's preparation (see the
-    # ``prepare`` callback), so the background work it set off ends inside the
+    # Seconds of stillness after the preparation pause (see the ``prepare``
+    # callback), so the background work a preparation set off ends inside the
     # baseline rather than leaking into the action capture.
     settle_seconds: int = 10
     write_csv: bool = True          # also write <prefix>-identified.csv

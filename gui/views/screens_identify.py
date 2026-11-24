@@ -242,20 +242,19 @@ class IdentifyScreen(OperationScreen):
 
     def _build_prepare(self) -> None:
         self._prepare_panel = Panel(elev=True)
-        self._prepare_panel.add(h2("Anything to do first that is not of interest?"))
+        self._prepare_panel.add(h2("Do now what must happen first but is not of interest."))
         self._prepare_panel.add(help_label(
             "Unlock, open the app, reach the right screen… Its log lines then go to "
-            "the baseline, not to the result. A short still pause follows."
+            "the baseline, not to the result. Continue right away if there is "
+            "nothing to do. A short still pause follows."
         ))
         row = QHBoxLayout()
         row.addStretch(1)
-        done = primary_button("Done preparing", "check")
-        done.clicked.connect(lambda: self._ctrl.prepared(True))
-        nothing = ghost_button("Nothing to prepare")
-        nothing.clicked.connect(lambda: self._ctrl.prepared(False))
+        done = primary_button("Continue", "right")
+        done.clicked.connect(self._ctrl.prepared)
         abort = ghost_button("Abort")
         abort.clicked.connect(self._ctrl.abort)
-        for btn in (done, nothing, abort):
+        for btn in (done, abort):
             row.addWidget(btn)
         self._prepare_panel.body.addLayout(row)
         self.content.addWidget(self._prepare_panel)
@@ -354,6 +353,9 @@ class IdentifyScreen(OperationScreen):
     def _show_done(self, result: Any, counts: Any) -> None:
         clear_layout(self._done_host)
         diff = result.diff
+        # The run's result database (every repetition); a result built without
+        # it (older callers, tests) falls back to the diff's own database.
+        results_db = result.identified_db or diff.sqlite_path
         if counts is not None:
             summary = (
                 f"{counts.retained} retained · {counts.noise} background noise · "
@@ -366,20 +368,20 @@ class IdentifyScreen(OperationScreen):
         ranking = result.ranking
         if ranking is not None:
             action += (f"<br>Repeated {ranking.cycles}×: {ranking.in_every_cycle} of "
-                       f"{ranking.templates} templates new in every repetition "
-                       f"→ {html.escape((ranking.csv_path or ranking.path).name)}")
+                       f"{ranking.templates} templates new in every repetition")
+        files = [results_db, result.csv_path, ranking.csv_path if ranking else None]
         panel = result_panel(
             True,
             f"Identify complete — {summary}{action}"
-            f"<br><span style='color:#545a68'>{diff.sqlite_path}"
-            + (f"<br>{diff.csv_path}" if diff.csv_path else "") + "</span>",
+            "<br><span style='color:#545a68'>"
+            + "<br>".join(html.escape(str(f)) for f in files if f) + "</span>",
         )
         self._done_host.addWidget(panel)
 
         row = QHBoxLayout()
         row.addStretch(1)
         view_btn = primary_button("View results", "right")
-        view_btn.clicked.connect(lambda: self._open_results(diff.sqlite_path))
+        view_btn.clicked.connect(lambda: self._open_results(results_db))
         reveal_btn = ghost_button("Reveal in folder", "folder")
         reveal_btn.clicked.connect(self._reveal_output)
         new_btn = ghost_button("New run", "plus")

@@ -27,6 +27,8 @@ from pathlib import Path
 from forensic_aul.errors import InvalidDatabaseError
 from forensic_aul.ops.identify.diff import (
     _CSV_HEADER,
+    EXPORT_COLUMNS,
+    csv_flags,
     create_hidden_keys_objects,
     ensure_source_columns,
 )
@@ -45,7 +47,7 @@ _ROWS_COLUMNS = (
     "id, timestamp, timestamp_unix_ns, event_order, source_order, source_file, "
     "process, pid, tid, "
     "log_level, event_type, subsystem, category, message, format_string, "
-    "matched_signatures, tier, excluded, note"
+    "matched_signatures, tier, excluded, note, repetition"
 )
 
 
@@ -250,14 +252,7 @@ class IdentifyResults:
             writer = csv.writer(fp)
             writer.writerow(_EXPORT_HEADER)
             for row in rows:
-                writer.writerow([
-                    row["timestamp"], row["timestamp_unix_ns"], row["event_order"],
-                    row["source_order"], row["source_file"],
-                    row["process"], row["pid"], row["tid"], row["log_level"],
-                    row["event_type"], row["subsystem"], row["category"],
-                    row["message"], row["matched_signatures"], row["tier"],
-                    row["format_string"], row["note"],
-                ])
+                writer.writerow([*(row[c] for c in EXPORT_COLUMNS), *csv_flags(row["tier"])])
         return len(rows)
 
     def _build_where(

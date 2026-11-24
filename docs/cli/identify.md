@@ -39,12 +39,13 @@ baseline, having you perform the action, acquiring again, and diffing:
 3. Keep the device **untouched for `--still` seconds** so idle and connection
    noise lands in the *baseline* rather than in the result. Meanwhile you are
    asked to describe the action you will perform; a countdown follows.
-4. **Prepare** (optional): do what must happen before the action but is not of
-   interest — unlock, open the app, reach the right screen — then press Enter.
-   Those lines land in the baseline, so the result keeps the action itself. A
-   **settle** pause (`--settle`, default 10 s) follows, so the background work
-   the preparation set off ends inside the baseline. Answering *N* skips both.
-   Don't prepare any part of the action you study: it would be removed as noise.
+4. **Prepare**: do what must happen before the action but is not of interest —
+   unlock, open the app, reach the right screen — then press Enter (right away
+   if there is nothing to do). Those lines land in the baseline, so the result
+   keeps the action itself. A **settle** pause (`--settle`, default 10 s)
+   follows, so the background work a preparation set off ends inside the
+   baseline. Don't prepare any part of the action you study: it would be
+   removed as noise.
 5. Acquire the **baseline** logarchive. Its window starts before the still
    pause, so the pause and the preparation are both in it.
 6. Prompt: *"Perform the action on the device now. Press Enter when complete."*
@@ -57,10 +58,12 @@ The description is stored in the identified database (table `identify_run`).
 
 **Repeating the action** (`--repeat N`) is the way to cut the result down. A
 line that belongs to the action appears in every repetition; background noise
-that slipped past one baseline rarely does it N times. Each repetition gets its
-own files (`<prefix>-<n>-baseline.logarchive`, … `<prefix>-<n>-identified.db`),
-and the ranking of the retained templates — by how many repetitions had them as
-*new template* — is written to `<prefix>-repeat.csv` (and `<prefix>-repeat.db`).
+that slipped past one baseline rarely does it N times. Each repetition is
+diffed against its own baseline (files `<prefix>-<n>-…` in `intermediate/`);
+their lines are merged into the one `<prefix>-identified.db` and its CSV, with
+a `repetition` column, and the ranking of the retained templates — by how many
+repetitions had them as *new template* — is written to `<prefix>-repeat.csv`
+(and the `repeat_ranking` table of the database).
 `N/N` means present in every action window and absent from every baseline: read
 those first. The CSV is the way to work with the ranking (a spreadsheet, a
 script); the GUI names it in its summary and has no viewer for it. The top lines
@@ -92,8 +95,8 @@ no root). The diff itself is pure SQLite and cross-platform.
 |---|---|---|
 | `--still SECONDS` | `60` (or the `[identify]` settings) | Seconds to keep the device untouched before the baseline acquisition. `0` skips the pause. |
 | `-o, --output-dir DIR` | `.` (current directory) | Directory for the archives, databases and diff outputs. |
-| `--repeat N` | `1` | Run the whole cycle (still, preparation, baseline, action) N times, each diffed against its own baseline, then rank the templates across repetitions into `<prefix>-repeat.db` (see below). |
-| `--settle SECONDS` | `10` (or the `[identify]` settings) | Seconds to keep the device untouched after a preparation. Not used when nothing was prepared. |
+| `--repeat N` | `1` | Run the whole cycle (still, preparation, baseline, action) N times, each diffed against its own baseline, then rank the templates across repetitions into `<prefix>-repeat.csv` (see below). |
+| `--settle SECONDS` | `10` (or the `[identify]` settings) | Seconds to keep the device untouched after the preparation pause. |
 | `-y, --yes` | off | Skip the device confirmation prompt before the baseline acquire. |
 | `--action TEXT` | asked | Description of the action; skips both description prompts. |
 | `--show-identifiers` | off | Show the device identifiers in full in the summary. |
@@ -127,33 +130,32 @@ The two cases behave differently on failure:
 Every run writes into its own **session directory** under `--output-dir`, named
 with the run prefix `<case>-<imei|udid>-<UTC>` (or `identify-<UTC>` when no case
 number is given) — so one run is one self-contained folder to archive or hand
-over, never six files mixed in with other runs:
+over. Only the results sit at its top; everything they were made from is in its
+`intermediate/` subfolder, for whoever needs it:
 
 ```
 <output-dir>/
 └── <prefix>/
-    ├── <prefix>-baseline.logarchive
-    ├── <prefix>-action.logarchive
-    ├── <prefix>-baseline.db
-    ├── <prefix>-action.db
-    ├── <prefix>-identified.csv
-    └── <prefix>-identified.db
+    ├── <prefix>-identified.db      the result: every line after the baseline, flagged
+    ├── <prefix>-identified.csv     the retained lines (omitted with --no-csv)
+    ├── <prefix>-repeat.csv         --repeat only: the ranking of the templates
+    └── intermediate/               what the results were made from
+        ├── <prefix>[-<n>]-baseline.logarchive
+        ├── <prefix>[-<n>]-action.logarchive
+        ├── <prefix>[-<n>]-baseline.db
+        ├── <prefix>[-<n>]-action.db
+        └── <prefix>-<n>-identified.db   --repeat only: each repetition's diff
 ```
 
 The prefix is repeated on each file so a file stays self-identifying if it is
 copied out of the folder.
 
-| File | Contents |
-|---|---|
-| `<prefix>-baseline.logarchive` | the baseline capture |
-| `<prefix>-action.logarchive` | the post-action capture |
-| `<prefix>-baseline.db` | extracted baseline |
-| `<prefix>-action.db` | extracted post-action capture |
-| `<prefix>-identified.csv` | **retained lines only** (omitted with `--no-csv`) |
-| `<prefix>-identified.db` | **every** post-baseline line, each carrying an `excluded` flag |
-
 The `.db` is the forensically complete artefact: nothing is thrown away, the
-excluded lines are simply marked. The CSV is the working view.
+excluded lines are simply marked. The CSVs are the working view: the lines CSV
+has the `export` CSV's columns plus `new_template` and `new_message` (1/0) — and
+`repetition` when repeated — so it can be filtered on whether a line's message
+is new even where its format string says nothing (`%{public}s`, `<private>`);
+see [the identify database](../formats/identify-database.md#the-csv-of-retained-lines).
 
 ### Exit codes
 
